@@ -1,5 +1,7 @@
+import sys
 from array import array
 from datetime import datetime
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -76,29 +78,28 @@ def test_normalize_json_shared_column_preserves_non_json_container():
     assert result is column
 
 
-def test_bfloat16_converter_widens_fixed_binary_words(monkeypatch):
+def _scalar_buffer_batch(kind, data, length, validity=None, null_count=0, byteorder="little"):
+    column = SimpleNamespace(kind=kind, values=data, length=length, byteorder=byteorder, validity=validity, null_count=null_count)
+    return SimpleNamespace(column_buffers=lambda _index: [column])
+
+
+def test_bfloat16_converter_widens_fixed_binary_words():
     np = pytest.importorskip("numpy")
-    pa = pytest.importorskip("pyarrow")
-    wire = pa.array([b"\x8c\x3f", b"\x8c\xbf", b"\x50\x41"], type=pa.binary(2))
-    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
-
+    batch = _scalar_buffer_batch("bfloat16", b"\x8c\x3f\x8c\xbf\x50\x41", 3)
     converter = rustnumpy._build_converter(get_from_name("BFloat16"), QueryContext(use_numpy=True))
-    result = converter(None, None, 0)
+    result = converter(None, batch, 0)
 
-    assert converter.needs_arrow is True
+    assert converter.needs_arrow is False
     assert result.dtype == np.dtype("float32")
     np.testing.assert_array_equal(result, np.array([1.09375, -1.09375, 13.0], dtype="float32"))
 
 
-def test_bfloat16_converter_honors_arrow_offset_and_nulls(monkeypatch):
+def test_bfloat16_converter_honors_buffer_view_and_nulls():
     np = pytest.importorskip("numpy")
-    pa = pytest.importorskip("pyarrow")
-    source = pa.array([b"\x00\x00", b"\x8c\x3f", None, b"\x8c\xbf"], type=pa.binary(2))
-    wire = source.slice(1, 3)
-    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
-
+    source = b"\x00\x00\x8c\x3f\x00\x00\x8c\xbf"
+    batch = _scalar_buffer_batch("bfloat16", memoryview(source)[2:], 3, b"\x05", 1)
     converter = rustnumpy._build_converter(get_from_name("Nullable(BFloat16)"), QueryContext(use_numpy=True))
-    result = converter(None, None, 0)
+    result = converter(None, batch, 0)
 
     assert result.dtype == np.dtype("float32")
     assert result[0] == np.float32(1.09375)
@@ -106,103 +107,74 @@ def test_bfloat16_converter_honors_arrow_offset_and_nulls(monkeypatch):
     assert result[2] == np.float32(-1.09375)
 
 
-def test_simple_agg_bfloat16_routes_to_fast_converter(monkeypatch):
+def test_simple_agg_bfloat16_routes_to_fast_converter():
     np = pytest.importorskip("numpy")
-    pa = pytest.importorskip("pyarrow")
-    wire = pa.array([b"\x8c\x3f", b"\x50\x41"], type=pa.binary(2))
-    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
-
+    batch = _scalar_buffer_batch("bfloat16", b"\x8c\x3f\x50\x41", 2)
     converter = rustnumpy._build_converter(get_from_name("SimpleAggregateFunction(anyLast, BFloat16)"), QueryContext(use_numpy=True))
-    result = converter(None, None, 0)
+    result = converter(None, batch, 0)
 
-    assert converter.needs_arrow is True
+    assert converter.needs_arrow is False
     assert result.dtype == np.dtype("float32")
     np.testing.assert_array_equal(result, np.array([1.09375, 13.0], dtype="float32"))
 
 
-def test_bfloat16_converter_empty_and_all_null(monkeypatch):
+def test_bfloat16_converter_empty_and_all_null():
     np = pytest.importorskip("numpy")
     pd = pytest.importorskip("pandas")
-    pa = pytest.importorskip("pyarrow")
-    wire = pa.array([], type=pa.binary(2))
-    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
-
+    batch = _scalar_buffer_batch("bfloat16", b"", 0)
     converter = rustnumpy._build_converter(get_from_name("Nullable(BFloat16)"), QueryContext(use_numpy=True))
-    result = converter(None, None, 0)
+    result = converter(None, batch, 0)
     assert result.dtype == np.dtype("float32")
     assert len(result) == 0
 
-    wire = pa.array([None, None], type=pa.binary(2))
-    result = converter(None, None, 0)
+    batch = _scalar_buffer_batch("bfloat16", b"\x00" * 4, 2, b"\x00", 2)
+    result = converter(None, batch, 0)
     assert result.dtype == np.dtype("float32")
     assert np.isnan(result).all()
 
     extended_context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
     converter = rustnumpy._build_converter(get_from_name("Nullable(BFloat16)"), extended_context)
-    result = converter(None, None, 0)
+    result = converter(None, batch, 0)
     assert str(result.dtype) == "Float32"
     assert list(result) == [pd.NA, pd.NA]
 
 
-def test_nullable_bfloat16_extended_converter_returns_pandas_float32(monkeypatch):
+def test_nullable_bfloat16_extended_converter_returns_pandas_float32():
     pd = pytest.importorskip("pandas")
-    pa = pytest.importorskip("pyarrow")
-    wire = pa.array([b"\x8c\x3f", None, b"\x8c\xbf"], type=pa.binary(2))
-    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
+    batch = _scalar_buffer_batch("bfloat16", b"\x8c\x3f\x00\x00\x8c\xbf", 3, b"\x05", 1)
     context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
-
     converter = rustnumpy._build_converter(get_from_name("Nullable(BFloat16)"), context)
-    result = converter(None, None, 0)
+    result = converter(None, batch, 0)
 
     assert str(result.dtype) == "Float32"
     assert list(result) == [pd.Float32Dtype().type(1.09375), pd.NA, pd.Float32Dtype().type(-1.09375)]
 
 
 @pytest.mark.parametrize(
-    ("type_name", "duration_unit"),
-    [
-        ("IntervalYear", None),
-        ("IntervalSecond", "s"),
-        ("IntervalMillisecond", "ms"),
-        ("IntervalMicrosecond", "us"),
-        ("IntervalNanosecond", "ns"),
-    ],
+    "type_name", ["IntervalYear", "IntervalSecond", "IntervalMillisecond", "IntervalMicrosecond", "IntervalNanosecond"]
 )
-def test_interval_converter_returns_raw_int64_counts(monkeypatch, type_name, duration_unit):
+def test_interval_converter_returns_raw_int64_counts(type_name):
     np = pytest.importorskip("numpy")
-    pa = pytest.importorskip("pyarrow")
-    values = [-13, 0, 79]
-    arrow_type = pa.duration(duration_unit) if duration_unit else pa.int64()
-    wire = pa.array(values, type=arrow_type)
-    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
-
+    values = np.array([-13, 0, 79], dtype="int64")
+    batch = _scalar_buffer_batch("int64", values.tobytes(), 3, byteorder=sys.byteorder)
     converter = rustnumpy._build_converter(get_from_name(type_name), QueryContext(use_numpy=True))
-    result = converter(None, None, 0)
+    result = converter(None, batch, 0)
 
+    assert converter.needs_arrow is False
     assert result.dtype == np.dtype("int64")
-    np.testing.assert_array_equal(result, np.array(values, dtype="int64"))
+    np.testing.assert_array_equal(result, values)
 
 
-@pytest.mark.parametrize(
-    ("type_name", "duration_unit"),
-    [
-        ("IntervalYear", None),
-        ("IntervalDay", None),
-        ("IntervalSecond", "s"),
-        ("IntervalNanosecond", "ns"),
-    ],
-)
-def test_nullable_interval_extended_dtype_returns_pandas_int64(monkeypatch, type_name, duration_unit):
+@pytest.mark.parametrize("type_name", ["IntervalYear", "IntervalDay", "IntervalSecond", "IntervalNanosecond"])
+def test_nullable_interval_extended_dtype_returns_pandas_int64(type_name):
+    np = pytest.importorskip("numpy")
     pd = pytest.importorskip("pandas")
-    pa = pytest.importorskip("pyarrow")
-    arrow_type = pa.duration(duration_unit) if duration_unit else pa.int64()
-    wire = pa.array([-13, None, 79], type=arrow_type)
-    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
+    batch = _scalar_buffer_batch("int64", np.array([-13, 0, 79], dtype="int64").tobytes(), 3, b"\x05", 1, byteorder=sys.byteorder)
     context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
-
     converter = rustnumpy._build_converter(get_from_name(f"Nullable({type_name})"), context)
-    result = converter(None, None, 0)
+    result = converter(None, batch, 0)
 
+    assert converter.needs_arrow is False
     assert str(result.dtype) == "Int64"
     assert list(result) == [-13, pd.NA, 79]
 

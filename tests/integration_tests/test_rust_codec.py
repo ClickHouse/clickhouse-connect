@@ -1640,6 +1640,64 @@ def test_rust_codec_buffer_nullable_numeric_results(client_factory, call, consum
         block[0, 0] = 79
 
 
+@pytest.mark.parametrize("family", ["bfloat16", "interval"])
+@pytest.mark.parametrize("extended", [False, True])
+def test_rust_codec_buffer_bfloat16_interval_results(client_factory, call, consume_stream, family, extended):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    if family == "bfloat16":
+        if not python_client.min_version("24.11"):
+            pytest.skip("BFloat16 requires ClickHouse 24.11+")
+        projection = (
+            "CAST(multiIf(number = 0, -0.0, number = 1, nan, number / 4) AS BFloat16) AS bf, "
+            "CAST(multiIf(number % 3 = 0, NULL, number = 1, nan, number / 4) AS Nullable(BFloat16)) AS nbf"
+        )
+    else:
+        units = ["Nanosecond", "Microsecond", "Millisecond", "Second", "Minute", "Hour", "Day", "Week", "Month", "Quarter", "Year"]
+        projection = ", ".join(
+            f"toInterval{unit}(toInt64(number) - 39) AS i{index}, "
+            f"toInterval{unit}(if(number % 3 = 0, NULL, toInt64(number) - 39)) AS n{index}"
+            for index, unit in enumerate(units)
+        )
+    query = f"SELECT {projection} FROM numbers(79)"
+    settings = {"max_block_size": 7}
+    rust_np = call(rust_client.query_np, query, settings=settings)
+    python_np = call(python_client.query_np, query, settings=settings)
+    assert rust_np.dtype == python_np.dtype
+    np.testing.assert_array_equal(rust_np, python_np)
+    arrays = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), arrays.append)
+    assert len(arrays) > 1
+    np.testing.assert_array_equal(np.concatenate(arrays), python_np)
+    for output in [rust_np, *arrays]:
+        assert output.flags.writeable
+        if output.dtype.names:
+            output[output.dtype.names[0]][0] = 13
+        else:
+            output[0, 0] = 13
+
+    rust_df = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    python_df = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    pd.testing.assert_frame_equal(rust_df, python_df)
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=extended), frames.append)
+    assert len(frames) > 1
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), python_df)
+    if family == "bfloat16":
+        assert rust_df["bf"].dtype == np.dtype("float32")
+        assert rust_df["nbf"].dtype == (pd.Float32Dtype() if extended else np.dtype("float32"))
+        assert pd.isna(rust_df["nbf"].iloc[0]) and pd.isna(rust_df["nbf"].iloc[1])
+    else:
+        assert all(rust_df[f"i{index}"].dtype == np.dtype("int64") for index in range(11))
+        if extended:
+            assert all(rust_df[f"n{index}"].dtype == pd.Int64Dtype() for index in range(11))
+    for frame in [rust_df, *frames]:
+        frame.iloc[0, 0] = 13
+        frame.iloc[0, 1] = 79
+
+
 def test_rust_codec_buffer_nullable_alias_results(client_factory, call):
     np = pytest.importorskip("numpy")
     pytest.importorskip("pandas")

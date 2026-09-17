@@ -2,6 +2,7 @@
 
 import gc
 import sys
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -407,3 +408,282 @@ def test_nullable_numeric_dataframe_boundary(core, monkeypatch, block_count, str
     frame.iloc[1, 2] = True
     for piece in pieces:
         piece.iloc[0, 0] = 79
+
+
+_BFLOAT16_WORDS = [0, 0x8000, 1, 0x007F, 0x0080, 0x3F8C, 0xBF8C, 0x7F7F, 0xFF7F, 0x7F80, 0xFF80, 0x7F81, 0x7FC1, 0xFFFF]
+_INTERVAL_UNITS = ["Nanosecond", "Microsecond", "Millisecond", "Second", "Minute", "Hour", "Day", "Week", "Month", "Quarter", "Year"]
+
+
+def _bfloat16_wire(core, declared, words, nulls):
+    np = pytest.importorskip("numpy")
+    values = [None if missing else 0.0 for missing in nulls]
+    wire = core.encode_native_block(["c0"], [declared], [values], len(words), None)
+    return wire[: -2 * len(words)] + np.array(words, dtype="<u2").tobytes() if words else wire
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "{}",
+        "Nullable({})",
+        "SimpleAggregateFunction(anyLast, {})",
+        "SimpleAggregateFunction(anyLast, Nullable({}))",
+        "Nullable(SimpleAggregateFunction(anyLast, {}))",
+    ],
+)
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("nulls", ["none", "some", "all"])
+def test_bfloat16_buffers_exact_words(core, monkeypatch, wrapper, as_pandas, extended, nulls):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    declared = wrapper.format("BFloat16")
+    missing = ["Nullable" in declared and (nulls == "all" or nulls == "some" and index % 3 == 2) for index in range(len(_BFLOAT16_WORDS))]
+    batch = core.ColBatch.decode_native(_bfloat16_wire(core, declared, _BFLOAT16_WORDS, missing))
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended)
+    )
+    assert converter.needs_arrow is False
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    expected = (np.array(_BFLOAT16_WORDS, dtype="uint32") << np.uint32(16)).view("float32")
+    expected[missing] = np.nan
+    extension = extended and wrapper in ("Nullable({})", "SimpleAggregateFunction(anyLast, Nullable({}))")
+    if extension:
+        pd.testing.assert_extension_array_equal(result, pd.array(expected, dtype="Float32"))
+        np.testing.assert_array_equal(result.isna(), np.isnan(expected))
+    else:
+        assert result.dtype == np.dtype("float32") and result.dtype.byteorder == "="
+        np.testing.assert_array_equal(result.view("uint32"), expected.view("uint32"))
+    del batch
+    gc.collect()
+    if extension:
+        pd.testing.assert_extension_array_equal(result, pd.array(expected, dtype="Float32"))
+    else:
+        np.testing.assert_array_equal(result.view("uint32"), expected.view("uint32"))
+
+
+@pytest.mark.parametrize("distinguish_nan", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_bfloat16_extended_preserves_pandas_nan_option(core, distinguish_nan, streaming):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    has_option = hasattr(getattr(pd.options, "future", None), "distinguish_nan_and_na")
+    if distinguish_nan and not has_option:
+        pytest.skip("pandas doesn't expose distinguish_nan_and_na")
+    declared = "Nullable(BFloat16)"
+    ch_type = get_from_name(declared)
+    batch = core.ColBatch.decode_native(_bfloat16_wire(core, declared, [0x4150, 0x7FC1, 0, 0x8000], [False, False, True, False]))
+    converter = rustnumpy._build_converter(ch_type, QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True))
+    option_context = pd.option_context("future.distinguish_nan_and_na", distinguish_nan) if has_option else nullcontext()
+    with option_context:
+        values = converter(None, batch, 0)
+        expected_mask = [False, not distinguish_nan, not distinguish_nan, False]
+        assert values.dtype == pd.Float32Dtype()
+        np.testing.assert_array_equal(values.isna(), expected_mask)
+
+        def blocks():
+            yield [converter(None, batch, 0)]
+
+        result = NumpyResult(blocks(), ("c0",), (ch_type,), ("float32",))
+        if streaming:
+            with result.df_stream as stream:
+                (frame,) = list(stream)
+        else:
+            frame = result.df_result
+        assert frame["c0"].dtype == pd.Float32Dtype()
+        assert frame["c0"].count() == (4 if distinguish_nan else 2)
+        np.testing.assert_array_equal(frame["c0"].isna(), expected_mask)
+        assert frame["c0"].iloc[0] == np.float32(13)
+        assert np.signbit(frame["c0"].iloc[3])
+
+
+@pytest.mark.parametrize("word,signaling", [(0x7F81, True), (0xFF81, True), (0x7FC1, False), (0xFFC1, False)])
+@pytest.mark.parametrize("distinguish_nan", [False, True])
+def test_bfloat16_extended_nan_ufunc_behavior(core, word, signaling, distinguish_nan):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    has_option = hasattr(getattr(pd.options, "future", None), "distinguish_nan_and_na")
+    if distinguish_nan and not has_option:
+        pytest.skip("pandas doesn't expose distinguish_nan_and_na")
+    declared = "Nullable(BFloat16)"
+    ch_type = get_from_name(declared)
+    batch = core.ColBatch.decode_native(_bfloat16_wire(core, declared, [0x4150, word, 0], [False, False, True]))
+    converter = rustnumpy._build_converter(ch_type, QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True))
+    option_context = pd.option_context("future.distinguish_nan_and_na", distinguish_nan) if has_option else nullcontext()
+    with option_context:
+
+        def blocks():
+            yield [converter(None, batch, 0)]
+
+        frame = NumpyResult(blocks(), ("c0",), (ch_type,), ("float32",)).df_result
+        with np.errstate(invalid="raise"):
+            if distinguish_nan and signaling:
+                with pytest.raises(FloatingPointError, match="invalid value encountered in sqrt"):
+                    np.sqrt(frame["c0"])
+            else:
+                result = np.sqrt(frame["c0"])
+                assert result.dtype == pd.Float32Dtype()
+                np.testing.assert_array_equal(result.isna(), [False, not distinguish_nan, not distinguish_nan])
+
+
+@pytest.mark.parametrize("unit", _INTERVAL_UNITS)
+@pytest.mark.parametrize(
+    "wrapper", ["{}", "Nullable({})", "SimpleAggregateFunction(anyLast, {})", "SimpleAggregateFunction(anyLast, Nullable({}))"]
+)
+def test_interval_buffers_signed_counts(core, monkeypatch, unit, wrapper):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    declared = wrapper.format(f"Interval{unit}")
+    nullable = "Nullable" in declared
+    values = [-(2**63), None if nullable else -13, 0, 2**63 - 1]
+    batch = _batch(core, [declared], [values])
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True))
+    assert converter.needs_arrow is False
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    if nullable:
+        pd.testing.assert_extension_array_equal(result, pd.array(values, dtype="Int64"))
+    else:
+        assert result.dtype == np.dtype("int64") and result.dtype.byteorder == "="
+        np.testing.assert_array_equal(result, values)
+        (descriptor,) = batch.column_buffers(0)
+        assert np.shares_memory(result, np.frombuffer(descriptor.values, dtype="int64"))
+        assert not result.flags.writeable
+        del descriptor
+    del batch
+    gc.collect()
+    assert list(result)[-1] == 2**63 - 1
+
+
+@pytest.mark.parametrize(
+    "declared,dtype",
+    [("BFloat16", "float32"), ("Nullable(BFloat16)", "Float32"), ("IntervalYear", "int64"), ("Nullable(IntervalSecond)", "Int64")],
+)
+def test_bfloat16_interval_buffers_empty_and_chunks(core, monkeypatch, declared, dtype):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True))
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    expected_dtype = pd.api.types.pandas_dtype(dtype)
+    decoder = core.StreamDecoder()
+    batches = []
+    chunks = [[], [13], [], [None if "Nullable" in declared else 0, 79], []]
+    for chunk in chunks:
+        wire = core.encode_native_block(["c0"], [declared], [chunk], len(chunk), None)
+        batches.extend(decoder.feed(wire))
+    for batch in [_batch(core, [declared], [[]]), batches[0], batches[2], batches[4]]:
+        output = converter(None, batch, 0)
+        assert len(output) == 0 and output.dtype == expected_dtype
+    output = converter(None, core.ColBatch.from_batches(batches), 0)
+    values = chunks[1] + chunks[3]
+    if "Nullable" in declared:
+        pd.testing.assert_extension_array_equal(output, pd.array(values, dtype=dtype))
+    else:
+        np.testing.assert_array_equal(output, np.array(values, dtype=dtype))
+    assert output.dtype == expected_dtype
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("multiple", [False, True])
+def test_bfloat16_nested_alias_keeps_binary_output(core, monkeypatch, nullable, multiple):
+    np = pytest.importorskip("numpy")
+    leaf = "Nullable(BFloat16)" if nullable else "BFloat16"
+    declared = f"SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, {leaf}))"
+    nulls = [nullable and index % 3 == 2 for index in range(len(_BFLOAT16_WORDS))]
+    rows = [slice(0, 1), slice(1, None)] if multiple else [slice(None)]
+    batches = [core.ColBatch.decode_native(_bfloat16_wire(core, declared, _BFLOAT16_WORDS[row], nulls[row])) for row in rows]
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+    assert converter.needs_arrow is False
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(core.ColBatch.from_batches(batches), [converter])
+    assert result.dtype == np.dtype(object)
+    assert list(result) == [None if missing else word.to_bytes(2, "little") for word, missing in zip(_BFLOAT16_WORDS, nulls)]
+
+
+@pytest.mark.parametrize("words,missing", [([0x3131, 0x3937], [False, False]), ([0, 0], [True, True]), ([0x4150], [False])])
+def test_bfloat16_nested_nullable_alias_preserves_float_cast(core, monkeypatch, words, missing):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    declared = "SimpleAggregateFunction(anyLast, Nullable(SimpleAggregateFunction(anyLast, BFloat16)))"
+    batch = core.ColBatch.decode_native(_bfloat16_wire(core, declared, words, missing))
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True))
+    assert converter.needs_arrow is False
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    if words == [0x4150]:
+        with pytest.raises(ValueError, match="could not convert string to float"):
+            rustnumpy._convert_block(batch, [converter])
+    else:
+        (result,) = rustnumpy._convert_block(batch, [converter])
+        expected = np.array([None if null else word.to_bytes(2, "little") for word, null in zip(words, missing)], dtype="float64")
+        np.testing.assert_array_equal(result, expected)
+        assert result.dtype == np.dtype("float64")
+
+
+@pytest.mark.parametrize("unit", _INTERVAL_UNITS)
+@pytest.mark.parametrize("nullable", [False, True])
+def test_interval_nested_alias_keeps_arrow_units(core, monkeypatch, unit, nullable):
+    np = pytest.importorskip("numpy")
+    leaf = f"Interval{unit}"
+    if nullable:
+        leaf = f"Nullable({leaf})"
+    declared = f"SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, {leaf}))"
+    values = [-(2**63), None if nullable else 0, 2**63 - 1]
+    batch = core.ColBatch.from_batches([_batch(core, [declared], [[values[0]]]), _batch(core, [declared], [values[1:]])])
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+    assert converter.needs_arrow is False
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    duration_unit = {"Nanosecond": "ns", "Microsecond": "us", "Millisecond": "ms", "Second": "s"}.get(unit)
+    dtype = f"timedelta64[{duration_unit}]" if duration_unit else "float64" if nullable else "int64"
+    expected = np.array(values, dtype=dtype)
+    np.testing.assert_array_equal(result, expected)
+    assert result.dtype == np.dtype(dtype) and result.dtype.byteorder == "="
+
+
+@pytest.mark.parametrize("block_count", [1, 2])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+def test_bfloat16_interval_result_boundary(core, monkeypatch, block_count, streaming, as_pandas, extended):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    names = ["BFloat16", "Nullable(BFloat16)", "IntervalNanosecond", "Nullable(IntervalYear)"]
+    types = [get_from_name(name) for name in names]
+    columns = [[-0.0, 1.5, 79.0], [None, -0.0, float("nan")], [-(2**63), 0, 2**63 - 1], [None, -13, 79]]
+    context = QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended)
+    converters = rustnumpy._build_converters(types, context)
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+
+    def blocks():
+        for rows in [slice(None)] if block_count == 1 else [slice(0, 1), slice(1, None)]:
+            yield rustnumpy._convert_block(_batch(core, names, [column[rows] for column in columns]), converters)
+
+    result = NumpyResult(blocks(), ("bf", "nbf", "iv", "niv"), tuple(types), ["float32", "float32", "int64", object])
+    pieces = []
+    if streaming:
+        with result.df_stream if as_pandas else result.np_stream as stream:
+            pieces = list(stream)
+        output = pd.concat(pieces, ignore_index=True) if as_pandas else np.concatenate(pieces)
+    else:
+        output = result.df_result if as_pandas else result.np_result
+    if as_pandas:
+        assert output["bf"].dtype == np.dtype("float32")
+        assert output["iv"].dtype == np.dtype("int64")
+        assert np.signbit(output["bf"].iloc[0])
+        assert output["iv"].tolist() == columns[2]
+        if extended:
+            pd.testing.assert_extension_array_equal(output["nbf"].array, pd.array(columns[1], dtype="Float32"))
+            pd.testing.assert_extension_array_equal(output["niv"].array, pd.array(columns[3], dtype="Int64"))
+        else:
+            assert output["nbf"].dtype == np.dtype("float32")
+            np.testing.assert_array_equal(output["nbf"].to_numpy(), np.array(columns[1], dtype="float32"))
+        for frame in [output, *pieces]:
+            frame.iloc[0, 0] = 13.5
+            frame.iloc[0, 2] = 79
+    else:
+        assert output.dtype == np.dtype([("bf", "float32"), ("nbf", "float32"), ("iv", "int64"), ("niv", object)])
+        assert list(output["iv"]) == columns[2]
+        assert list(output["niv"]) == columns[3]
+        np.testing.assert_array_equal(output["nbf"].astype("float32"), np.array(columns[1], dtype="float32"))
+        for block in [output, *pieces]:
+            assert block.flags.writeable
+            block["iv"][0] = 79

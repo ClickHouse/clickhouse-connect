@@ -4,9 +4,10 @@ The rust Arrow export is raw: Date is uint16 days, DateTime is uint32 seconds wi
 Enum is raw ints. A naive to_pandas() therefore yields wrong dtypes. These converters are resolved once
 per query from the driver's own ClickHouseType (np_type, tzinfo, nullability) so the produced columns match
 the Python codec by construction. Primitive numerics and Booleans use typed buffers, including nullable
-integer and float columns in extended pandas output.
-Temporal columns take the Arrow exit. Time and Time64 keep their declared duration units through NumPy and
-extended pandas output. Extended pandas output builds String columns from the Arrow buffers. Other strings,
+integer and float columns in extended pandas output. BFloat16 widens its buffer words to float32, and
+Intervals expose signed counts through buffers. Temporal columns take the Arrow exit. Time and Time64 keep
+their declared duration units through NumPy and extended pandas output. Extended pandas output builds String
+columns from the Arrow buffers. Other strings,
 enums, and remaining nullable columns take the rust python-object exit and are finalized through the driver's own _finalize_column.
 """
 
@@ -32,6 +33,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 BlockConverter = Callable[[Any, Any, int], Any]
 
 _TIME64_UNITS = {0: "s", 3: "ms", 6: "us", 9: "ns"}
+_INTERVAL_ARROW_UNITS = {"IntervalSecond": "s", "IntervalMillisecond": "ms", "IntervalMicrosecond": "us", "IntervalNanosecond": "ns"}
 _NUMERIC_BUFFER_TYPES = frozenset({"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Float32", "Float64"})
 _NUMERIC_BUFFER_KINDS = frozenset(name.lower() for name in _NUMERIC_BUFFER_TYPES)
 _COMPOUND_JSON_BINARY_TYPE_INDEXES = frozenset({0x1E, 0x1F, 0x20, 0x23, 0x26, 0x27, 0x2B, 0x30})
@@ -156,9 +158,12 @@ def _buffer_values(column: Any) -> Any:
     if column.kind == "bool_bitmap":
         packed = options.np.frombuffer(column.values, dtype="uint8")
         return options.np.unpackbits(packed, count=column.length, bitorder="little").view(options.np.bool_)
-    if column.kind not in _NUMERIC_BUFFER_KINDS:
+    if column.kind in _NUMERIC_BUFFER_KINDS:
+        dtype = options.np.dtype(column.kind)
+    elif column.kind == "bfloat16":
+        dtype = options.np.dtype("uint16")
+    else:
         raise NotImplementedError(f"Unsupported column buffer kind {column.kind!r}")
-    dtype = options.np.dtype(column.kind)
     if column.byteorder != sys.byteorder:
         dtype = dtype.newbyteorder()
     return options.np.frombuffer(column.values, dtype=dtype, count=column.length)
@@ -172,6 +177,12 @@ def _buffer_null_mask(column: Any) -> Any:
     mask = options.np.unpackbits(packed, count=column.length, bitorder="little").view(options.np.bool_)
     options.np.logical_not(mask, out=mask)
     return mask
+
+
+def _join_chunks(chunks: list[Any], dtype: Any) -> Any:
+    if not chunks:
+        return options.np.empty(0, dtype=dtype)
+    return chunks[0] if len(chunks) == 1 else options.np.concatenate(chunks)
 
 
 def _make_numeric_buffer_convert(ch_type: ClickHouseType, nullable_alias: bool = False) -> BlockConverter:
@@ -192,38 +203,73 @@ def _make_numeric_buffer_convert(ch_type: ClickHouseType, nullable_alias: bool =
                 else:
                     values = options.np.where(null_mask, options.np.nan, values)
             chunks.append(values)
-        if not chunks:
-            return options.np.empty(0, dtype=dtype)
-        if len(chunks) == 1:
-            return chunks[0]
-        return options.np.concatenate(chunks)
+        return _join_chunks(chunks, dtype)
 
     return convert
 
 
 def _make_bfloat16_convert(as_extended_pandas: bool) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        column = _arrow_column(arrow_table, index)
-        data = column.buffers()[1]
-        if data is None:
-            values = options.np.zeros(len(column), dtype=options.np.float32)
-        else:
-            words = options.np.frombuffer(data, dtype="<u2", count=len(column), offset=column.offset * 2)
-            values = words.astype(options.np.uint32)
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError("Unsupported column buffers for BFloat16")
+        chunks = []
+        for column in columns:
+            values = _buffer_values(column).astype(options.np.uint32)
             values <<= options.np.uint32(16)
             values = values.view(options.np.float32)
-        if column.null_count:
-            values[column.is_null().to_numpy(zero_copy_only=False)] = options.np.nan
+            if column.null_count:
+                values = options.np.where(_buffer_null_mask(column), options.np.nan, values)
+            chunks.append(values)
+        values = _join_chunks(chunks, "float32")
         if as_extended_pandas:
-            return options.pd.array(values, dtype="Float32")
+            distinguish_nan = getattr(getattr(options.pd.options, "future", None), "distinguish_nan_and_na", False)
+            mask = options.np.zeros(len(values), dtype="bool") if distinguish_nan else options.np.isnan(values)
+            if not distinguish_nan and mask.any():
+                values = options.np.where(mask, options.np.nan, values)
+            return options.pd.arrays.FloatingArray(values, mask, copy=False)
         return values
 
     return convert
 
 
-def _interval_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-    column = _arrow_column(arrow_table, index)
-    return column.cast(options.arrow.int64()).to_numpy(zero_copy_only=False)
+def _make_bfloat16_alias_convert(as_float: bool = False) -> BlockConverter:
+    """Preserve the raw fixed-binary output of nested BFloat16 aliases."""
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError("Unsupported column buffers for BFloat16")
+        chunks = []
+        for column in columns:
+            values = options.np.frombuffer(column.values, dtype="V2", count=column.length).astype(object)
+            if column.null_count:
+                values[_buffer_null_mask(column)] = None
+            chunks.append(values)
+        values = _join_chunks(chunks, object)
+        return values.astype("float64") if as_float else values
+
+    return convert
+
+
+def _make_interval_alias_convert(unit: str) -> BlockConverter:
+    """Preserve duration output for nested aliases of sub-minute Intervals."""
+    dtype = options.np.dtype(f"timedelta64[{unit}]")
+    nat = options.np.timedelta64("NaT", unit)
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError("Unsupported column buffers for Interval")
+        chunks = []
+        for column in columns:
+            values = _buffer_values(column).astype("int64", copy=False).view(dtype)
+            if column.null_count:
+                values = options.np.where(_buffer_null_mask(column), nat, values)
+            chunks.append(values)
+        return _join_chunks(chunks, dtype)
+
+    return convert
 
 
 def _make_date_convert(as_pandas: bool) -> BlockConverter:
@@ -724,14 +770,6 @@ def _make_nullable_int_convert(pd_dtype: Any) -> BlockConverter:
     return convert
 
 
-def _make_nullable_interval_convert(pd_dtype: Any) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        column = _arrow_column(arrow_table, index).cast(options.arrow.int64())
-        return pd_dtype.__from_arrow__(column)
-
-    return convert
-
-
 def _nullable_float_buffer_convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
     # The Python codec renders nullable Float32/Float64 as a plain float64 array with NaN in null positions.
     columns = col_batch.column_buffers(index)
@@ -743,9 +781,7 @@ def _nullable_float_buffer_convert(_arrow_table: Any, col_batch: Any, index: int
         if column.null_count:
             values = options.np.where(_buffer_null_mask(column), options.np.nan, values)
         chunks.append(values.astype("float64", copy=False))
-    if not chunks:
-        return options.np.empty(0, dtype="float64")
-    return chunks[0] if len(chunks) == 1 else options.np.concatenate(chunks)
+    return _join_chunks(chunks, "float64")
 
 
 def _nullable_float_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
@@ -762,7 +798,9 @@ def _np_kind(ch_type: ClickHouseType) -> str | None:
 def _numeric_buffer_type(ch_type: ClickHouseType) -> ClickHouseType | None:
     while isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
         ch_type = ch_type.element_type
-    if not ch_type.low_card and (ch_type.base_type in _NUMERIC_BUFFER_TYPES or ch_type.base_type in ("Bool", "Boolean")):
+    if not ch_type.low_card and (
+        ch_type.base_type in _NUMERIC_BUFFER_TYPES or ch_type.base_type in ("Bool", "Boolean") or isinstance(ch_type, (BFloat16, Interval))
+    ):
         return ch_type
     return None
 
@@ -776,7 +814,7 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     _validate_time64_units(ch_type)
     if isinstance(ch_type, BFloat16) and not ch_type.low_card:
         extended = ch_type.nullable and context.as_pandas and context.use_extended_dtypes
-        return _Converter(True, _make_bfloat16_convert(extended))
+        return _Converter(False, _make_bfloat16_convert(extended))
     # LowCardinality(T) routes through the object exit regardless of inner type. Its values are correct there,
     # and the Python codec's own LowCardinality numpy handling is inconsistent per inner type (and truncates
     # LowCardinality(numeric)), so there is no clean parity target for an Arrow dictionary fast path.
@@ -786,9 +824,10 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
         return _Converter(True, _make_low_card_time_convert(ch_type, context.as_pandas))
     if isinstance(ch_type, Interval) and not ch_type.low_card:
         if not ch_type.nullable:
-            return _Converter(True, _interval_convert)
+            # Nullable(SimpleAggregateFunction(anyLast, Interval)) unwraps to a plain Interval whose column carries nulls.
+            return _Converter(False, _make_numeric_buffer_convert(ch_type, nullable_alias=True))
         if context.as_pandas and context.use_extended_dtypes:
-            return _Converter(True, _make_nullable_interval_convert(options.pd.Int64Dtype()))
+            return _Converter(False, _make_nullable_int_convert(options.pd.Int64Dtype()))
     array_time = _array_time_leaf(ch_type)
     if array_time is not None:
         depth, leaf = array_time
@@ -815,6 +854,10 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
             return _Converter(False, _make_numeric_buffer_convert(ch_type))
         if _np_kind(ch_type) in ("i", "u", "f", "b"):
             physical_type = _numeric_buffer_type(ch_type)
+            if isinstance(physical_type, BFloat16):
+                return _Converter(False, _make_bfloat16_alias_convert())
+            if isinstance(physical_type, Interval) and physical_type.base_type in _INTERVAL_ARROW_UNITS:
+                return _Converter(False, _make_interval_alias_convert(_INTERVAL_ARROW_UNITS[physical_type.base_type]))
             if physical_type is not None:
                 return _Converter(False, _make_numeric_buffer_convert(physical_type, nullable_alias=True))
             return _Converter(True, _numeric_convert)
@@ -824,7 +867,10 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
         if kind in ("i", "u"):
             return _Converter(False, _make_nullable_int_convert(options.pd.api.types.pandas_dtype(ch_type.base_type)))
         if kind == "f":
-            if _numeric_buffer_type(ch_type) is not None:
+            physical_type = _numeric_buffer_type(ch_type)
+            if isinstance(physical_type, BFloat16):
+                return _Converter(False, _make_bfloat16_alias_convert(as_float=True))
+            if physical_type is not None:
                 return _Converter(False, _nullable_float_buffer_convert)
             return _Converter(True, _nullable_float_convert)
     return _Converter(False, _make_object_convert(ch_type, context))

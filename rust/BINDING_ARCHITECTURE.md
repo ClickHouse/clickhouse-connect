@@ -101,8 +101,14 @@ both versions before it selects either Rust codec mode. Non-nullable
 Extended Pandas output uses the public `IntegerArray` values/mask constructor
 for nullable integers and float64 arrays with NaN for nullable Float32/64.
 Primitive numeric SimpleAggregateFunction aliases retain their existing null-promotion
-rules. Other converters keep their Arrow or Python-object exits, and the driver
-still requires PyArrow for NumPy/Pandas queries during this migration.
+rules. BFloat16 converters widen the little-endian words to float32 in bulk.
+Nullable extended Pandas BFloat16 output uses the public `FloatingArray`
+values/mask constructor and preserves the active Pandas NaN policy.
+Interval converters view signed Int64 counts and reuse the
+nullable integer adapter for extended Pandas output. Existing nested alias
+representations and errors are preserved. Other converters keep their Arrow or
+Python-object exits, and the driver still requires PyArrow for NumPy/Pandas
+queries during this migration.
 
 The integer adapter can retain a read-only Rust values buffer and an owned
 Boolean null mask. The existing result assembly preserves writable public
