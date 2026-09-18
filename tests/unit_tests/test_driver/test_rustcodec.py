@@ -291,11 +291,10 @@ def test_rust_query_eligible(builder):
     assert _rust_query_ineligible_reason(builder()) is None
 
 
-def test_rust_query_ineligible_pyarrow_missing(monkeypatch):
-    monkeypatch.setattr(rustcodec.options, "arrow", None, raising=False)
-    assert _rust_query_ineligible_reason(eligible_ctx(use_numpy=True)) == "pyarrow not installed"
-    # Non-numpy queries never touch the Arrow exit, so a missing pyarrow is irrelevant.
-    assert _rust_query_ineligible_reason(eligible_ctx()) is None
+@pytest.mark.parametrize("as_pandas", [False, True])
+def test_rust_query_eligible_without_pyarrow(monkeypatch, as_pandas):
+    monkeypatch.setattr("clickhouse_connect.driver.options.arrow", None)
+    assert _rust_query_ineligible_reason(eligible_ctx(use_numpy=True, as_pandas=as_pandas)) is None
 
 
 def test_rust_query_ineligible_global_read_format(clean_formats):
@@ -328,20 +327,14 @@ def test_strict_global_read_format_raises_and_closes_source(clean_formats):
 def test_non_strict_ineligible_delegates_to_python_and_logs_reason(monkeypatch, caplog):
     sentinel = object()
     monkeypatch.setattr(NativeTransform, "parse_response", staticmethod(lambda source, context: sentinel))
-    monkeypatch.setattr(rustcodec.options, "arrow", None, raising=False)
-    pyarrow_src = FakeSource([])
     option_src = FakeSource([])
     with caplog.at_level(logging.INFO, logger="clickhouse_connect"):
-        pyarrow_result = _RustNativeTransform(strict=False).parse_response(pyarrow_src, eligible_ctx(use_numpy=True))
         option_result = _RustNativeTransform(strict=False).parse_response(option_src, eligible_ctx(use_none=False))
 
-    assert pyarrow_result is sentinel
     assert option_result is sentinel
-    assert pyarrow_src.closed is False
     assert option_src.closed is False
     fallback_records = [record for record in caplog.records if "fallback to Python for query" in record.getMessage()]
     assert [(record.getMessage(), record.levelno) for record in fallback_records] == [
-        ("Native codec fallback to Python for query: pyarrow not installed", logging.WARNING),
         ("Native codec fallback to Python for query: use_none=False", logging.INFO),
     ]
 

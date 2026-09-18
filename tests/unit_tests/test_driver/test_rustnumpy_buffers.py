@@ -1,6 +1,7 @@
 """Driver adapters over the binding's private column buffers."""
 
 import gc
+import importlib.util
 import sys
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -1291,3 +1292,122 @@ def test_array_time_buffers_all_null_leaves(core, monkeypatch, as_pandas, extend
     monkeypatch.setattr(rustnumpy.options, "arrow", None)
     (result,) = rustnumpy._convert_block(batch, [converter])
     _assert_duration_tree(result, rows, "ns", as_pandas and extended)
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("empty", [False, True])
+def test_python_string_storage_without_arrow(core, monkeypatch, nullable, empty):
+    pd = pytest.importorskip("pandas")
+    declared = "Nullable(String)" if nullable else "String"
+    values = [] if empty else ["", "user_1", "\u00e9", "ff", None if nullable else "user_2"]
+    batch = _batch(core, [declared], [values])
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    with pd.option_context("mode.string_storage", "python"):
+        converter = rustnumpy._build_converter(
+            get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+        )
+        assert not converter.needs_arrow
+        (result,) = rustnumpy._convert_block(batch, [converter])
+        pd.testing.assert_extension_array_equal(result, pd.array(values, dtype=pd.StringDtype(storage="python")))
+
+
+def test_explicit_arrow_string_storage_requires_arrow():
+    pd = pytest.importorskip("pandas")
+    if importlib.util.find_spec("pyarrow") is not None:
+        pytest.skip("PyArrow is installed")
+    with pd.option_context("mode.string_storage", "pyarrow"), pytest.raises(ImportError, match="[Pp]y[Aa]rrow"):
+        rustnumpy._build_converter(get_from_name("String"), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True))
+
+
+@pytest.mark.filterwarnings("ignore:.*pyarrow_numpy.*:FutureWarning")
+@pytest.mark.parametrize("nullable", [False, True])
+def test_legacy_arrow_numpy_string_storage(core, nullable):
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+    if tuple(map(int, pd.__version__.split(".")[:2])) != (2, 2):
+        pytest.skip("This legacy storage option is tested on pandas 2.2")
+    declared = "Nullable(String)" if nullable else "String"
+    values = ["", "user_1", None if nullable else "\u00e9"]
+    batch = _batch(core, [declared], [values])
+    with pd.option_context("mode.string_storage", "pyarrow_numpy"):
+        context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+        converter = rustnumpy._build_converter(get_from_name(declared), context)
+        assert converter.needs_arrow
+        (result,) = rustnumpy._convert_block(batch, [converter])
+        pd.testing.assert_extension_array_equal(result, pd.array(values, dtype=pd.StringDtype()))
+
+
+_DICTIONARY_ALIAS_CASES = [(name, dtype, values[:2]) for name, dtype, values in _NUMERIC_CASES] + [
+    ("BFloat16", "object", [1.25, -79.5]),
+    ("IntervalSecond", "timedelta64[s]", [13, -79]),
+    ("IntervalDay", "int64", [13, -79]),
+]
+
+
+@pytest.mark.parametrize("type_name,dtype,values", _DICTIONARY_ALIAS_CASES)
+@pytest.mark.parametrize("nulls", ["none", "some", "all"])
+def test_nested_dictionary_numeric_aliases_without_arrow(core, monkeypatch, type_name, dtype, values, nulls):
+    np = pytest.importorskip("numpy")
+    leaf = type_name if nulls == "none" else f"Nullable({type_name})"
+    declared = f"SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, LowCardinality({leaf})))"
+    values = values if nulls == "none" else [values[0], None] if nulls == "some" else [None, None]
+    batch = _batch(core, [declared], [values])
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+    assert not converter.needs_arrow
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    expected_dtype = np.dtype(dtype)
+    if nulls != "none":
+        if expected_dtype.kind in ("i", "u"):
+            expected_dtype = np.dtype("float64")
+        elif expected_dtype.kind == "b":
+            expected_dtype = np.dtype(object)
+    if type_name == "BFloat16":
+        words = (np.array(values, dtype="float32").view("uint32") >> 16).astype("<u2").view("V2").astype(object)
+        expected = np.array([None if value is None else word for value, word in zip(values, words)], dtype=object)
+    else:
+        expected_values = [np.nan if value is None and expected_dtype.kind == "f" else value for value in values]
+        expected = np.array(expected_values, dtype=expected_dtype)
+    assert result.dtype == expected.dtype
+    assert result.dtype.byteorder == expected.dtype.byteorder
+    assert result.flags.writeable is (nulls != "none" or expected.dtype.kind in ("b", "O"))
+    np.testing.assert_array_equal(result, expected)
+    del batch
+    gc.collect()
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("type_name", ["Int64", "Float32", "Bool", "BFloat16", "IntervalSecond"])
+def test_nested_dictionary_alias_chunks_and_empty(core, monkeypatch, type_name):
+    np = pytest.importorskip("numpy")
+    declared = f"SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, LowCardinality(Nullable({type_name}))))"
+    first = [True, False] if type_name == "Bool" else [13, 79]
+    last = [None, first[0], None]
+    batch = core.ColBatch.from_batches([_batch(core, [declared], [first]), _batch(core, [declared], [last])])
+    single = _batch(core, [declared], [first + last])
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    result = rustnumpy._convert_block(batch, [converter])[0]
+    expected = rustnumpy._convert_block(single, [converter])[0]
+    assert result.dtype == expected.dtype
+    np.testing.assert_array_equal(result, expected)
+    empty = rustnumpy._convert_block(_batch(core, [declared], [[]]), [converter])[0]
+    assert empty.shape == (0,)
+
+
+@pytest.mark.parametrize(
+    "type_name,marker,word,expected",
+    [
+        ("Float32", b"\x00\x00\xa0\x3f", b"\x01\x00\x80\x7f", b"\x01\x00\x80\x7f"),
+        ("BFloat16", b"\xa0\x3f", b"\x81\x7f", b"\x81\x7f"),
+    ],
+)
+def test_nested_dictionary_alias_preserves_signaling_nan_bits(core, monkeypatch, type_name, marker, word, expected):
+    declared = f"SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, LowCardinality({type_name})))"
+    wire = core.encode_native_block(["c0"], [declared], [[1.25, 79.5]], 2, None)
+    offset = wire.index(marker)
+    batch = core.ColBatch.decode_native(wire[:offset] + word + wire[offset + len(marker) :])
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    assert (result[0] if type_name == "BFloat16" else result[:1].tobytes()) == expected

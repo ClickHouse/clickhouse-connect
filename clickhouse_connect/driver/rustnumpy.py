@@ -7,7 +7,7 @@ the Python codec by construction. Primitive numerics and Booleans use typed buff
 integer and float columns in extended pandas output. BFloat16 widens its buffer words to float32, and
 Intervals expose signed counts through buffers. Scalar temporal columns, arrays of Time/Time64, and LowCardinality(Time)
 also use typed buffers. Time and Time64 keep their declared duration units through NumPy and extended pandas output.
-Extended pandas output builds String columns from the Arrow buffers. Other strings,
+Extended pandas output uses Arrow buffers for String storage when PyArrow is available. Other strings,
 enums, and remaining nullable columns take the rust python-object exit and are finalized through the driver's own _finalize_column.
 """
 
@@ -145,14 +145,6 @@ class _Converter:
         return self._convert(arrow_table, col_batch, index)
 
 
-def _arrow_column(arrow_table: Any, index: int) -> Any:
-    return arrow_table.column(index).combine_chunks()
-
-
-def _numeric_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-    return _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False)
-
-
 def _buffer_values(column: Any) -> Any:
     """View a primitive descriptor, or unpack its Boolean bits."""
     if column.kind == "bool_bitmap":
@@ -204,6 +196,49 @@ def _make_numeric_buffer_convert(ch_type: ClickHouseType, nullable_alias: bool =
                     values = options.np.where(null_mask, options.np.nan, values)
             chunks.append(values)
         return _join_chunks(chunks, dtype)
+
+    return convert
+
+
+def _make_numeric_dictionary_convert(ch_type: ClickHouseType) -> BlockConverter:
+    """Preserve NumPy output for numeric aliases that hide dictionary storage."""
+    while isinstance(ch_type, SimpleAggregateFunction):
+        ch_type = ch_type.element_type
+    binary = isinstance(ch_type, BFloat16)
+    unit = _INTERVAL_ARROW_UNITS.get(ch_type.base_type or "") if isinstance(ch_type, Interval) else None
+    dtype = options.np.dtype(object if binary else f"timedelta64[{unit}]" if unit else ch_type.np_type).newbyteorder("=")
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for {ch_type.name}")
+        chunks = []
+        null_count = 0
+        for column in columns:
+            index_dtype = options.np.dtype("int32")
+            if column.byteorder != sys.byteorder:
+                index_dtype = index_dtype.newbyteorder()
+            indices = options.np.frombuffer(column.values, dtype=index_dtype, count=column.length).astype(options.np.intp, copy=False)
+            if binary:
+                dictionary = options.np.frombuffer(column.child.values, dtype="V2", count=column.child.length).astype(object)
+            else:
+                dictionary = _buffer_values(column.child).astype("int64" if unit else dtype, copy=False)
+                if unit:
+                    dictionary = dictionary.view(dtype)
+            if column.null_count:
+                null_count += column.null_count
+                if dtype.kind in ("i", "u"):
+                    dictionary = dictionary.astype("float64")
+                elif dtype.kind == "b":
+                    dictionary = dictionary.astype(object)
+                else:
+                    dictionary = dictionary.copy()
+                dictionary[0] = None if dtype.kind in ("b", "O") else options.np.timedelta64("NaT", unit) if unit else options.np.nan
+            chunks.append(dictionary[indices])
+        values = _join_chunks(chunks, dtype)
+        if not null_count and dtype.kind not in ("b", "O"):
+            values.flags.writeable = False
+        return values
 
     return convert
 
@@ -810,10 +845,9 @@ def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> Bloc
     return convert
 
 
-def _make_string_convert(ch_type: ClickHouseType, context: QueryContext) -> BlockConverter:
+def _make_string_convert(ch_type: ClickHouseType, context: QueryContext, pd_dtype: Any) -> BlockConverter:
     # Extended pandas String output built from the Arrow buffers instead of a Python str list. The rust export
     # does not validate UTF-8, so a block with invalid bytes takes the object exit and renders them as hex.
-    pd_dtype = options.pd.StringDtype()
     object_convert = _make_object_convert(ch_type, context)
 
     def convert(arrow_table: Any, col_batch: Any, index: int) -> Any:
@@ -855,10 +889,6 @@ def _nullable_float_buffer_convert(_arrow_table: Any, col_batch: Any, index: int
             values = options.np.where(_buffer_null_mask(column), options.np.nan, values)
         chunks.append(values.astype("float64", copy=False))
     return _join_chunks(chunks, "float64")
-
-
-def _nullable_float_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-    return _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False).astype("float64")
 
 
 def _np_kind(ch_type: ClickHouseType) -> str | None:
@@ -936,7 +966,10 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
         and context.use_extended_dtypes
         and ch_type.read_format(context) == "native"
     ):
-        return _Converter(True, _make_string_convert(ch_type, context))
+        # StringDtype() validates the dependency for Arrow storage.
+        pd_dtype = options.pd.StringDtype()
+        if options.arrow is not None:
+            return _Converter(True, _make_string_convert(ch_type, context, pd_dtype))
     if not ch_type.nullable and not ch_type.low_card:
         if isinstance(ch_type, DateTimeBase):
             # np_type raises ProgrammingError for DateTime64 precisions outside {0,3,6,9}, matching the Python codec
@@ -953,7 +986,7 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
                 return _Converter(False, _make_interval_alias_convert(_INTERVAL_ARROW_UNITS[physical_type.base_type]))
             if physical_type is not None:
                 return _Converter(False, _make_numeric_buffer_convert(physical_type, nullable_alias=True))
-            return _Converter(True, _numeric_convert)
+            return _Converter(False, _make_numeric_dictionary_convert(ch_type))
     elif ch_type.nullable and not ch_type.low_card and context.as_pandas and context.use_extended_dtypes:
         # Extended pandas output keeps integer masks and widens nullable floats to float64 with NaN.
         kind = _np_kind(ch_type)
@@ -965,7 +998,6 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
                 return _Converter(False, _make_bfloat16_alias_convert(as_float=True))
             if physical_type is not None:
                 return _Converter(False, _nullable_float_buffer_convert)
-            return _Converter(True, _nullable_float_convert)
     return _Converter(False, _make_object_convert(ch_type, context))
 
 

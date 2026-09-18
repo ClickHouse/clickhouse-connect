@@ -324,7 +324,6 @@ def test_numeric_aliases(type_name, values, validity):
         ("Tuple(Time)", [(13,)]),
         ("Array(Tuple(Time))", [[(13,)]]),
         ("LowCardinality(String)", ["user_1"]),
-        ("LowCardinality(Int32)", [13]),
         ("Nullable(String)", [None]),
     ],
 )
@@ -334,8 +333,15 @@ def test_unsupported_storage_is_distinct_from_empty(type_name, values, empty):
     assert batch.column_buffers(0) is None
 
 
-@pytest.mark.parametrize("type_name,value", [("Bool", True), ("BFloat16", 1.25), ("Date", 13), ("DateTime", 13), ("IntervalSecond", 13)])
-@pytest.mark.parametrize("wrapper", ["Array({})", "Tuple({})", "Array(Tuple({}))", "LowCardinality({})"])
+@pytest.mark.parametrize(
+    "type_name,value,wrapper",
+    [
+        (type_name, value, wrapper)
+        for type_name, value in [("Bool", True), ("BFloat16", 1.25), ("Date", 13), ("DateTime", 13), ("IntervalSecond", 13)]
+        for wrapper in ["Array({})", "Tuple({})", "Array(Tuple({}))", "LowCardinality({})"]
+        if wrapper != "LowCardinality({})" or type_name in ("Date", "DateTime")
+    ],
+)
 @pytest.mark.parametrize("empty", [False, True])
 def test_nested_scalar_storage_is_unsupported(type_name, value, wrapper, empty):
     if wrapper == "Array(Tuple({}))":
@@ -352,3 +358,130 @@ def test_invalid_column_index(index, error):
     batch = _ch_core.ColBatch.decode_native(build_native_block([("v", "Int64", [13])]))
     with pytest.raises(error):
         batch.column_buffers(index)
+
+
+DICTIONARY_CASES = [(name, name.lower(), fmt, values) for name, fmt, values in NUMERIC_CASES] + [
+    (name, kind, fmt, values) for name, kind, fmt, values in SCALAR_CASES if name in ("Bool", "BFloat16", *_INTERVAL_TYPES)
+]
+DICTIONARY_WRAPPERS = [
+    "LowCardinality({})",
+    "LowCardinality(Nullable({}))",
+    "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, LowCardinality({})))",
+    "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, LowCardinality(Nullable({}))))",
+    "LowCardinality(SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({}))))",
+    "LowCardinality(Nullable(SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, {}))))",
+]
+
+
+@pytest.mark.parametrize("type_name,kind,format_code,source", DICTIONARY_CASES)
+@pytest.mark.parametrize("wrapper", DICTIONARY_WRAPPERS)
+@pytest.mark.parametrize("empty", [False, True])
+def test_numeric_dictionary_buffers(type_name, kind, format_code, source, wrapper, empty):
+    nullable = "Nullable" in wrapper
+    rows = [] if empty else [*source, source[0], *([None, source[1], None] if nullable else [])]
+    data = build_native_block([("k", "Int64", [79] * len(rows)), ("v", wrapper.format(type_name), rows)])
+    if empty:
+        assert _ch_core.ColBatch.decode_native(data).column_buffers(1) == []
+    (batch,) = _ch_core.StreamDecoder().feed(data)
+    (column,) = batch.column_buffers(1)
+    dictionary = [0] if nullable and rows else []
+    slots = {}
+    indices = []
+    for value in rows:
+        if value is None:
+            indices.append(0)
+        else:
+            if value not in slots:
+                slots[value] = len(dictionary)
+                dictionary.append(value)
+            indices.append(slots[value])
+    assert column.kind == "dictionary" and column.itemsize == 4 and column.byteorder == sys.byteorder
+    assert column.length == len(rows) and column.null_count == rows.count(None) and column.offsets is None
+    assert memoryview(column.values).readonly
+    assert bytes(column.values) == struct.pack(f"={len(rows)}i", *indices)
+    if nullable:
+        assert memoryview(column.validity).readonly
+        assert len(memoryview(column.validity)) == (len(rows) + 7) // 8
+        bits = sum((index != 0) << row for row, index in enumerate(indices))
+        assert int.from_bytes(column.validity, "little") & ((1 << len(rows)) - 1) == bits
+    else:
+        assert column.validity is None
+    child = column.child
+    assert child.kind == kind and child.length == len(dictionary) and child.null_count == 0
+    assert child.validity is None and child.offsets is None and child.child is None
+    assert memoryview(child.values).readonly
+    if kind == "bool_bitmap":
+        assert child.itemsize == 0 and child.byteorder == "not-applicable"
+        assert len(memoryview(child.values)) == (len(dictionary) + 7) // 8
+        assert int.from_bytes(child.values, "little") == sum(bool(value) << index for index, value in enumerate(dictionary))
+    elif kind == "bfloat16":
+        assert child.itemsize == 2 and child.byteorder == "little"
+        assert bytes(child.values) == b"".join(_bfloat16_bytes(value) for value in dictionary)
+    else:
+        assert child.itemsize == struct.calcsize(f"={format_code}") and child.byteorder == sys.byteorder
+        assert bytes(child.values) == struct.pack(f"={len(dictionary)}{format_code}", *dictionary)
+
+
+@pytest.mark.parametrize(
+    "type_name,word_format,words",
+    [
+        ("Float32", "I", [0, 0x80000000, 0x7F800001, 0x7FC00013, 0x7F800000, 1]),
+        ("Float64", "Q", [0, 0x8000000000000000, 0x7FF0000000000001, 0x7FF8000000000013, 0x7FF0000000000000, 1]),
+        ("BFloat16", "H", [0, 0x8000, 0x7F81, 0x7FC1, 0x7F80, 1]),
+        ("Bool", "B", [0, 1, 0, 1, 1, 0, 0, 1, 1]),
+    ],
+)
+@pytest.mark.parametrize("nullable", [False, True])
+def test_numeric_dictionary_raw_storage(type_name, word_format, words, nullable):
+    indices = [0, *range(len(words) - 1, -1, -1), 0]
+    body = struct.pack("<QQQ", 1, 0x600, len(words))
+    body += struct.pack(f"<{len(words)}{word_format}", *words)
+    body += struct.pack("<Q", len(indices)) + bytes(indices)
+    declared = f"LowCardinality(Nullable({type_name}))" if nullable else f"LowCardinality({type_name})"
+    batch = _ch_core.ColBatch.decode_native(build_native_block_from_bodies([("v", declared, body)], len(indices)))
+    (column,) = batch.column_buffers(0)
+    child = column.child
+    assert column.null_count == (indices.count(0) if nullable else 0)
+    assert child.length == len(words) and child.validity is None
+    if type_name == "Bool":
+        expected = sum(bool(word) << index for index, word in enumerate(words)).to_bytes((len(words) + 7) // 8, "little")
+    else:
+        order = "<" if type_name == "BFloat16" else "="
+        expected = struct.pack(f"{order}{len(words)}{word_format}", *words)
+    assert bytes(child.values) == expected
+    assert bytes(column.values) == struct.pack(f"={len(indices)}i", *indices)
+
+
+@pytest.mark.parametrize("type_name", ["Float32", "BFloat16", "Bool", "IntervalSecond"])
+@pytest.mark.parametrize("path", ["values", "validity", "child.values"])
+@pytest.mark.parametrize("intake", ["decode_native", "StreamDecoder", "BlockDecoder", "from_batches"])
+def test_numeric_dictionary_chunk_ownership(type_name, path, intake):
+    declared = f"LowCardinality(Nullable({type_name}))"
+    rows = [[None, 1, 0, 1], [0, None, 1]]
+    blocks = [build_native_block([("v", declared, values)]) for values in rows]
+    if intake == "decode_native":
+        batches = [_ch_core.ColBatch.decode_native(b"".join(blocks))]
+    elif intake == "StreamDecoder":
+        batches = _ch_core.StreamDecoder().feed(b"".join(blocks))
+    elif intake == "BlockDecoder":
+        batches = list(_ch_core.BlockDecoder(b"".join(blocks)))
+    else:
+        batches = [_ch_core.ColBatch.from_batches([_ch_core.ColBatch.decode_native(block) for block in blocks])]
+    columns = [column for batch in batches for column in batch.column_buffers(0)]
+    assert len(columns) == 2
+    assert bytes(columns[0].values) == struct.pack("=4i", 0, 1, 2, 1)
+    assert bytes(columns[1].values) == struct.pack("=3i", 1, 0, 2)
+    owners = [column for column in columns]
+    for attr in path.split("."):
+        owners = [getattr(owner, attr) for owner in owners]
+    first, second = map(weakref.ref, owners)
+    view = memoryview(owners[0])[::2]
+    expected = view.tobytes()
+    assert view.readonly
+    del batches, columns, owners
+    gc.collect()
+    assert first() is not None and second() is None
+    assert view.tobytes() == expected
+    del view
+    gc.collect()
+    assert first() is None

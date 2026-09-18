@@ -10,7 +10,6 @@ from clickhouse_connect.datatypes.network import IPv4
 from clickhouse_connect.datatypes.special import UUID, SimpleAggregateFunction
 from clickhouse_connect.datatypes.string import FixedString, String
 from clickhouse_connect.datatypes.temporal import Date, DateTimeBase
-from clickhouse_connect.driver import options
 from clickhouse_connect.driver.compression import get_compressor
 from clickhouse_connect.driver.exceptions import DataError, Error, NotSupportedError, ProgrammingError, StreamFailureError
 from clickhouse_connect.driver.insert import InsertContext
@@ -118,9 +117,6 @@ def _rust_query_ineligible_reason(context: QueryContext) -> str | None:
     settings/transport_settings/external_data are honored and not listed here. The columns-only LIMIT 0 branch is
     answered from FORMAT JSON metadata in both clients before any transform runs.
     """
-    if context.use_numpy and options.arrow is None:
-        # numpy and pandas output route through the zero-copy Arrow exit, which needs pyarrow.
-        return "pyarrow not installed"
     if context.query_formats:
         return "query_formats"
     if context.column_formats:
@@ -286,10 +282,7 @@ class _RustNativeTransform:
             if self.strict:
                 source.close()
                 raise NotSupportedError(f'native_codec="rust_strict" does not support {reason}; use native_codec="python" or "rust"')
-            if reason == "pyarrow not installed":
-                logger.warning("Native codec fallback to Python for query: %s", reason)
-            else:
-                logger.info("Native codec fallback to Python for query: %s", reason)
+            logger.info("Native codec fallback to Python for query: %s", reason)
             return NativeTransform.parse_response(source, context)
 
         core = _ch_core_module()

@@ -42,7 +42,7 @@ Three ideas carry the design:
    object exit allocates one object per cell and dominates decode itself.
    The driver uses the private column buffer exit for primitive numeric
    NumPy/Pandas conversion. It exposes decoded memory without an Arrow
-   Python package. Converters that haven't migrated still use the Arrow exit.
+   Python package. Pandas strings use the Arrow exit when PyArrow is installed.
    Use these exits for buffer-compatible dataframe columns. Never round-trip
    those columns through Python objects to reach a dataframe.
 
@@ -127,9 +127,15 @@ chunk's dictionary indices and mark dictionary slot 0 as NaT when the chunk
 contains NULLs. Both read descriptors once
 per column per batch and reconstruct each chunk before joining row outputs.
 They preserve existing duration units, null representations, and nesting.
-Other converters keep their Arrow or
-Python-object exits, and the driver still requires PyArrow for NumPy/Pandas
-queries during this migration.
+Aliases that hide LowCardinality numeric storage gather dictionary buffers
+with the existing dtype and null rules. Raw Float32 and BFloat16 buffers
+preserve signaling-NaN bits that Python float conversion would quiet.
+Other ordinary converters use the Python-object exit. NumPy/Pandas queries don't require an
+Arrow Python package. Extended Pandas strings use the Arrow exit when
+PyArrow is available, with the selected StringDtype storage. That path validates
+all UTF-8 and falls back to object conversion for invalid bytes. Without
+PyArrow, strings use object conversion. Explicit Arrow storage still requires
+PyArrow.
 
 The integer adapter can retain a read-only Rust values buffer and an owned
 Boolean null mask. The existing result assembly preserves writable public
@@ -143,9 +149,11 @@ Int8/16/32/64, UInt8/16/32/64, Float32/64, Bool, BFloat16, Date, Date32,
 DateTime, DateTime64, Time, Time64, and all Interval types, including their
 nullable forms and SimpleAggregateFunction aliases. Array chains ending in
 Time or Time64 are also supported, with optional nullable leaves and
-SimpleAggregateFunction aliases at any level. LowCardinality(Time) supports
-an optional nullable inner type and SimpleAggregateFunction aliases around
-the column, inner type, or nullable leaf. Other types return `None`.
+SimpleAggregateFunction aliases at any level. LowCardinality supports
+Int8/16/32/64, UInt8/16/32/64, Float32/64, Bool, BFloat16, Interval types,
+and Time dictionary values, with an optional nullable inner type and
+SimpleAggregateFunction aliases around the column, inner type, or nullable
+leaf. Other types return `None`.
 Consumers must treat an unrecognized `kind` as unsupported. Invalid indices
 and malformed supported storage raise instead of selecting an object fallback.
 
@@ -196,8 +204,8 @@ each chunk's rows before concatenating results.
 
 Dictionary descriptors report `kind="dictionary"`, `itemsize=4`, and host
 byte order. Their `values` buffer contains signed Int32 indices, their
-`validity` describes rows, and their `child` is an Int32 descriptor of raw
-Time dictionary values. `offsets` is `None`. The dictionary child has no
+`validity` describes rows, and their `child` describes the raw dictionary
+values with the scalar layouts above. `offsets` is `None`. The dictionary child has no
 validity, offsets, or further child. Indices and dictionary values keep
 their original chunk-local order. Consumers must gather values separately
 for each chunk before concatenating results.
@@ -205,7 +213,7 @@ for each chunk before concatenating results.
 For a nullable dictionary, index zero denotes null and the corresponding
 row-validity bit is zero. The sentinel dictionary entry remains in the
 child, and its stored value doesn't determine nullness. A valid zero-valued
-Time has its own nonzero index. For a nonnullable dictionary, index zero is
+value has its own nonzero index. For a nonnullable dictionary, index zero is
 an ordinary valid index. A preserved empty chunk has empty indices and an
 empty typed dictionary, with an empty validity bitmap if nullable.
 
@@ -233,8 +241,7 @@ the index, validity, or dictionary value selection without repeating the
 scan. Adapters should call `column_buffers` once per column per batch and
 reuse the descriptors for both array and dictionary conversion.
 
-This capability doesn't change the driver converters, dependency requirements,
-or public output writeability. Later adapters must copy where the public
+The private buffers are read-only. Driver adapters copy where the public
 output contract requires writable arrays.
 
 ### Arrow

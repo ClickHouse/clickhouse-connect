@@ -180,7 +180,6 @@ def test_dictionary_views_keep_only_their_owner(path, dtype, intake):
 @pytest.mark.parametrize(
     "type_name,rows",
     [
-        ("LowCardinality(Int32)", [13]),
         ("LowCardinality(String)", ["user_1"]),
         ("LowCardinality(Nullable(Date))", [None, 13]),
         ("LowCardinality(SimpleAggregateFunction(anyLast, DateTime))", [13]),

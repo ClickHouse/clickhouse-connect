@@ -165,31 +165,43 @@ def test_nullable_interval_extended_dtype_returns_pandas_int64(type_name):
     assert list(result) == [-13, pd.NA, 79]
 
 
-@pytest.mark.parametrize(
-    ("type_name", "dtype", "ticks"),
-    [
-        ("Time", "timedelta64[s]", [-5, 0, 90_000]),
-        ("Time64(0)", "timedelta64[s]", [-5, 0, 3_723]),
-        ("Time64(3)", "timedelta64[ms]", [-5_500, 0, 3_723_123]),
-        ("Time64(6)", "timedelta64[us]", [-5_500_000, 1, 3_723_123_456]),
-        ("Time64(9)", "timedelta64[ns]", [-5_500_000_000, 1, 3_723_123_456_789]),
-    ],
-)
-def test_time_converter_uses_native_timedelta_dtype(type_name, dtype, ticks):
-    np = pytest.importorskip("numpy")
-    ch_type = get_from_name(type_name)
+_NATIVE_TIME_CASES = [
+    ("Time", "timedelta64[s]", [-5, 0, 90_000]),
+    ("Time64(0)", "timedelta64[s]", [-5, 0, 3_723]),
+    ("Time64(3)", "timedelta64[ms]", [-5_500, 0, 3_723_123]),
+    ("Time64(6)", "timedelta64[us]", [-5_500_000, 1, 3_723_123_456]),
+    ("Time64(9)", "timedelta64[ns]", [-5_500_000_000, 1, 3_723_123_456_789]),
+]
+
+
+def _native_time_batch(np, type_name, ticks):
     wire_dtype = "int32" if type_name == "Time" else "int64"
     wire_values = np.array(ticks, dtype=wire_dtype)
-    batch = _scalar_buffer_batch(wire_dtype, memoryview(wire_values), len(ticks), byteorder=sys.byteorder)
+    return wire_values, _scalar_buffer_batch(wire_dtype, memoryview(wire_values), len(ticks), byteorder=sys.byteorder)
 
-    result = rustnumpy._make_time_convert(ch_type)(None, batch, 0)
-    pandas_result = rustnumpy._make_time_convert(ch_type, as_pandas=True)(None, batch, 0)
 
-    # The Python codec keeps the wire unit for non-nullable Time columns in every pandas
-    # version, so the pandas exit must not coerce.
+@pytest.mark.parametrize(("type_name", "dtype", "ticks"), _NATIVE_TIME_CASES)
+def test_time_converter_uses_native_timedelta_dtype(type_name, dtype, ticks):
+    np = pytest.importorskip("numpy")
+    wire_values, batch = _native_time_batch(np, type_name, ticks)
+
+    result = rustnumpy._make_time_convert(get_from_name(type_name))(None, batch, 0)
+
     assert result.dtype == np.dtype(dtype)
     np.testing.assert_array_equal(result, np.array(ticks, dtype=dtype))
     assert np.shares_memory(result, wire_values) is (type_name != "Time")
+
+
+@pytest.mark.parametrize(("type_name", "dtype", "ticks"), _NATIVE_TIME_CASES)
+def test_time_converter_pandas_exit_keeps_native_timedelta_dtype(type_name, dtype, ticks):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    _, batch = _native_time_batch(np, type_name, ticks)
+
+    pandas_result = rustnumpy._make_time_convert(get_from_name(type_name), as_pandas=True)(None, batch, 0)
+
+    # The Python codec keeps the wire unit for non-nullable Time columns in every pandas
+    # version, so the pandas exit must not coerce.
     assert pandas_result.dtype == np.dtype(dtype)
     np.testing.assert_array_equal(pandas_result, np.array(ticks, dtype=dtype))
 
@@ -526,35 +538,61 @@ def _extended_pandas_context():
     return QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
 
 
-def test_string_converter_extended_pandas_builds_from_arrow():
+@pytest.mark.parametrize("storage", ["python", "pyarrow"])
+def test_string_converter_extended_pandas_uses_selected_storage(storage):
     pa = pytest.importorskip("pyarrow")
     pd = pytest.importorskip("pandas")
-    converter = rustnumpy._build_converter(get_from_name("String"), _extended_pandas_context())
-    assert converter.needs_arrow is True
     values = ["a", "", "\u00e9", "b" * 40]
-    result = converter(pa.table({"c": pa.array(values)}), _ColBatch([values]), 0)
-    pd.testing.assert_extension_array_equal(result, pd.array(values, dtype=pd.StringDtype()))
+    with pd.option_context("mode.string_storage", storage):
+        converter = rustnumpy._build_converter(get_from_name("String"), _extended_pandas_context())
+        assert converter.needs_arrow is True
+        result = converter(pa.table({"c": pa.array(values)}), _ColBatch([values]), 0)
+        pd.testing.assert_extension_array_equal(result, pd.array(values, dtype=pd.StringDtype()))
+
+
+@pytest.mark.parametrize("storage", ["python", "pyarrow"])
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("invalid_utf8", [False, True])
+def test_string_converter_storage_option_changes(storage, nullable, invalid_utf8):
+    pa = pytest.importorskip("pyarrow")
+    pd = pytest.importorskip("pandas")
+    values = ["ff" if invalid_utf8 else "user_1", "", None if nullable else "user_2"]
+    if invalid_utf8:
+        binary = pa.array([b"\xff", b"", None if nullable else b"user_2"], type=pa.binary())
+        column = pa.Array.from_buffers(pa.string(), len(binary), binary.buffers(), null_count=binary.null_count)
+    else:
+        column = pa.array(values, type=pa.string())
+    with pd.option_context("mode.string_storage", storage):
+        converter = rustnumpy._build_converter(get_from_name("Nullable(String)" if nullable else "String"), _extended_pandas_context())
+    later_storage = "pyarrow" if storage == "python" else "python"
+    with pd.option_context("mode.string_storage", later_storage):
+        result = converter(pa.table({"c": column}), _ColBatch([values]), 0)
+        # The existing invalid-UTF8 fallback finalizes objects with the current option.
+        expected_storage = later_storage if invalid_utf8 else storage
+        pd.testing.assert_extension_array_equal(result, pd.array(values, dtype=pd.StringDtype(storage=expected_storage)))
 
 
 def test_nullable_string_converter_extended_pandas_uses_na():
     pa = pytest.importorskip("pyarrow")
     pd = pytest.importorskip("pandas")
-    converter = rustnumpy._build_converter(get_from_name("Nullable(String)"), _extended_pandas_context())
-    assert converter.needs_arrow is True
     values = ["a", None, "", "b"]
-    result = converter(pa.table({"c": pa.array(values)}), _ColBatch([values]), 0)
-    pd.testing.assert_extension_array_equal(result, pd.array(values, dtype=pd.StringDtype()))
+    with pd.option_context("mode.string_storage", "pyarrow"):
+        converter = rustnumpy._build_converter(get_from_name("Nullable(String)"), _extended_pandas_context())
+        assert converter.needs_arrow is True
+        result = converter(pa.table({"c": pa.array(values)}), _ColBatch([values]), 0)
+        pd.testing.assert_extension_array_equal(result, pd.array(values, dtype=pd.StringDtype()))
 
 
 def test_string_converter_invalid_utf8_falls_back_to_object_exit():
     pa = pytest.importorskip("pyarrow")
     pd = pytest.importorskip("pandas")
-    converter = rustnumpy._build_converter(get_from_name("String"), _extended_pandas_context())
     binary = pa.array([b"\xff", b"ok"], type=pa.binary())
     forged = pa.Array.from_buffers(pa.string(), len(binary), binary.buffers(), null_count=0)
     # The binding renders invalid UTF-8 as hex, so the object exit sees these values.
-    result = converter(pa.table({"c": forged}), _ColBatch([["ff", "ok"]]), 0)
-    pd.testing.assert_extension_array_equal(result, pd.array(["ff", "ok"], dtype=pd.StringDtype()))
+    with pd.option_context("mode.string_storage", "pyarrow"):
+        converter = rustnumpy._build_converter(get_from_name("String"), _extended_pandas_context())
+        result = converter(pa.table({"c": forged}), _ColBatch([["ff", "ok"]]), 0)
+        pd.testing.assert_extension_array_equal(result, pd.array(["ff", "ok"], dtype=pd.StringDtype()))
 
 
 @pytest.mark.parametrize(

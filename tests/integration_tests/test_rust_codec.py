@@ -2728,10 +2728,7 @@ def test_rust_codec_buffer_container_time_results(
     projection = ", ".join(["toInt32(number) AS i", *expressions, "CAST('raw' AS FixedString(3)) AS s"])
     query = f"SELECT {projection} FROM numbers(79)"
 
-    def reject_arrow(*_args):
-        pytest.fail("Container duration conversion used Arrow")
-
-    monkeypatch.setattr(rustnumpy, "_arrow_column", reject_arrow)
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
     rust_np = call(rust_client.query_np, query, settings=settings)
     python_np = call(python_client.query_np, query, settings=settings)
     assert rust_np.shape == python_np.shape == (79,)
@@ -2766,3 +2763,58 @@ def test_rust_codec_buffer_container_time_results(
         call(rust_client.query_df, empty_query, settings=settings, use_extended_dtypes=extended),
         call(python_client.query_df, empty_query, settings=settings, use_extended_dtypes=extended),
     )
+
+
+@pytest.mark.parametrize("block_size", [1, 79])
+def test_rust_codec_numpy_without_arrow(client_factory, call, consume_stream, monkeypatch, block_size):
+    np = pytest.importorskip("numpy")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    query = (
+        "SELECT number AS n, toFloat32(number / 2) AS f, "
+        "if(number % 3 = 0, unhex('ff'), toString(number)) AS s, "
+        "tuple(toInt32(number), toString(number)) AS t FROM numbers(13)"
+    )
+    settings = {"max_block_size": block_size}
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    monkeypatch.setattr(rustnumpy.options, "pd", None)
+    expected = call(python_client.query_np, query, settings=settings)
+    result = call(rust_client.query_np, query, settings=settings)
+    assert result.dtype == expected.dtype
+    np.testing.assert_array_equal(result, expected)
+    context_result = call(rust_client.query, query, use_numpy=True, settings=settings)
+    np.testing.assert_array_equal(context_result.np_result, expected)
+    chunks = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), chunks.append)
+    np.testing.assert_array_equal(np.concatenate(chunks), expected)
+    assert len(chunks) > 1 if block_size == 1 else len(chunks) == 1
+
+
+@pytest.mark.parametrize("storage", ["python", "pyarrow"])
+@pytest.mark.parametrize("block_size", [1, 79])
+def test_rust_codec_pandas_selected_string_storage(client_factory, call, consume_stream, monkeypatch, storage, block_size):
+    pd = pytest.importorskip("pandas")
+    if storage == "pyarrow":
+        pytest.importorskip("pyarrow")
+    else:
+        monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    query = (
+        "SELECT number AS n, if(number % 3 = 0, unhex('ff'), if(number % 3 = 1, '', '\u00e9')) AS s, "
+        "CAST(if(number % 3 = 0, NULL, toString(number)) AS Nullable(String)) AS nullable, "
+        "[toInt32(number), toInt32(number) + 1] AS items FROM numbers(13)"
+    )
+    settings = {"max_block_size": block_size}
+    with pd.option_context("mode.string_storage", storage):
+        expected = call(python_client.query_df, query, settings=settings, use_extended_dtypes=True)
+        result = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=True)
+        pd.testing.assert_frame_equal(result, expected)
+        assert result["s"].dtype.storage == storage
+        assert result["nullable"].dtype.storage == storage
+        chunks = []
+        consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=True), chunks.append)
+        pd.testing.assert_frame_equal(pd.concat(chunks, ignore_index=True), expected)
+        assert len(chunks) > 1 if block_size == 1 else len(chunks) == 1
+        empty = call(rust_client.query_df, query.replace("numbers(13)", "numbers(0)"), use_extended_dtypes=True)
+        assert empty.empty
