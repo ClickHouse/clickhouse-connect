@@ -5,9 +5,9 @@ Enum is raw ints. A naive to_pandas() therefore yields wrong dtypes. These conve
 per query from the driver's own ClickHouseType (np_type, tzinfo, nullability) so the produced columns match
 the Python codec by construction. Primitive numerics and Booleans use typed buffers, including nullable
 integer and float columns in extended pandas output. BFloat16 widens its buffer words to float32, and
-Intervals expose signed counts through buffers. Scalar temporal columns also use typed buffers. Time and Time64 keep
-their declared duration units through NumPy and extended pandas output. Extended pandas output builds String
-columns from the Arrow buffers. Other strings,
+Intervals expose signed counts through buffers. Scalar temporal columns, arrays of Time/Time64, and LowCardinality(Time)
+also use typed buffers. Time and Time64 keep their declared duration units through NumPy and extended pandas output.
+Extended pandas output builds String columns from the Arrow buffers. Other strings,
 enums, and remaining nullable columns take the rust python-object exit and are finalized through the driver's own _finalize_column.
 """
 
@@ -551,48 +551,75 @@ def _array_time_leaf(ch_type: ClickHouseType) -> tuple[int, Time | Time64] | Non
 
 
 def _make_array_time_convert(leaf: Time | Time64, depth: int, context: QueryContext) -> BlockConverter:
-    unit = "s" if isinstance(leaf, Time) else _time64_unit(leaf)
+    dtype = options.np.dtype(leaf.np_type)
+    nat = options.np.timedelta64("NaT", options.np.datetime_data(dtype)[0])
     extended_time_null = context.as_pandas and context.use_extended_dtypes
 
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        column = _arrow_column(arrow_table, index)
-        offset_levels = []
-        for _ in range(depth):
-            offset_levels.append(column.offsets.to_numpy().tolist())
-            column = column.values
-        if leaf.nullable:
-            null_count = column.null_count
-            if isinstance(leaf, Time):
-                column = column.cast(options.arrow.int64())
-            values = column.cast(options.arrow.duration(unit)).to_numpy(zero_copy_only=False)
-            # list() of a timedelta64 array yields numpy scalars, NaT included,
-            # which is the extended-dtypes null representation already.
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for Array({leaf.name})")
+        chunks = []
+        # Preserve the combined-column policy: any SQL NULL makes every NaT become None outside extended output.
+        null_count = 0
+        for column in columns:
+            offset_levels = []
+            for _ in range(depth):
+                offset_levels.append(options.np.frombuffer(column.offsets, dtype="int64").tolist())
+                column = column.child
+            null_count += column.null_count
+            chunks.append((offset_levels, column))
+        result = []
+        for offset_levels, column in chunks:
+            values = _buffer_values(column).astype("int64", copy=False).view(dtype)
+            if column.null_count:
+                values = options.np.where(_buffer_null_mask(column), nat, values)
             cells = list(values)
-            if null_count and not extended_time_null:
+            if leaf.nullable and null_count and not extended_time_null:
                 for null_index in options.np.flatnonzero(options.np.isnat(values)):
                     cells[null_index] = None
-        else:
-            values = column.to_numpy(zero_copy_only=False)
-            values = values.view(leaf.np_type) if isinstance(leaf, Time64) else values.astype(leaf.np_type, copy=False)
-            cells = list(values)
-        for offsets in reversed(offset_levels):
-            cells = [cells[start:stop] for start, stop in zip(offsets, offsets[1:])]
-        return cells
+            for offsets in reversed(offset_levels):
+                cells = [cells[start:stop] for start, stop in zip(offsets, offsets[1:])]
+            result.extend(cells)
+        return result
 
     return convert
 
 
 def _make_low_card_time_convert(ch_type: Time, as_pandas: bool) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        # The core exports LowCardinality(Time) as dictionary<int32, int32> with
-        # nulls in the indices. Decoding then casting stays fully vectorized.
-        column = _arrow_column(arrow_table, index).dictionary_decode()
-        values = column.cast(options.arrow.int64()).cast(options.arrow.duration("s")).to_numpy(zero_copy_only=False)
+    dtype = options.np.dtype("timedelta64[s]")
+    nat = options.np.timedelta64("NaT", "s")
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for {ch_type.name}")
+        chunks = []
+        null_count = 0
+        for column in columns:
+            index_dtype = options.np.dtype("int32")
+            if column.byteorder != sys.byteorder:
+                index_dtype = index_dtype.newbyteorder()
+            # Native intp indices take NumPy's direct gather path.
+            indices = options.np.frombuffer(column.values, dtype=index_dtype, count=column.length).astype(options.np.intp, copy=False)
+            dictionary = _buffer_values(column.child).astype("int64").view(dtype)
+            if column.null_count:
+                # Null rows carry dictionary index 0, which the binding checks against the validity bitmap.
+                dictionary[0] = nat
+                null_count += column.null_count
+            chunks.append(dictionary[indices])
+        values = _join_chunks(chunks, dtype)
         if as_pandas or not ch_type.nullable:
             return values
+        if null_count * 3 > len(values):
+            # Above one third NULL, scatter scalars only at valid positions.
+            objects = options.np.empty(len(values), dtype=object)
+            valid = options.np.logical_not(options.np.isnat(values))
+            objects[valid] = list(values[valid])
+            return objects.tolist()
         result = list(values)
-        if column.null_count:
-            for null_index in options.np.flatnonzero(options.np.isnat(values)):
+        if null_count:
+            for null_index in options.np.flatnonzero(options.np.isnat(values)).tolist():
                 result[null_index] = None
         return result
 
@@ -889,7 +916,7 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     if isinstance(ch_type, (Time, Time64)) and not ch_type.low_card:
         return _Converter(False, _make_time_convert(ch_type, context.as_pandas, context.use_extended_dtypes))
     if isinstance(ch_type, Time) and ch_type.low_card:
-        return _Converter(True, _make_low_card_time_convert(ch_type, context.as_pandas))
+        return _Converter(False, _make_low_card_time_convert(ch_type, context.as_pandas))
     if isinstance(ch_type, Interval) and not ch_type.low_card:
         if not ch_type.nullable:
             # Nullable(SimpleAggregateFunction(anyLast, Interval)) unwraps to a plain Interval whose column carries nulls.
@@ -899,7 +926,7 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     array_time = _array_time_leaf(ch_type)
     if array_time is not None:
         depth, leaf = array_time
-        return _Converter(True, _make_array_time_convert(leaf, depth, context))
+        return _Converter(False, _make_array_time_convert(leaf, depth, context))
     if _contains_nested_time(ch_type):
         return _Converter(False, _make_nested_time_convert(ch_type, context))
     if (

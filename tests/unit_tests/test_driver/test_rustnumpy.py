@@ -248,19 +248,14 @@ def test_nullable_time64_query_np_preserves_nanosecond_scalars():
         ("Array(Array(Time))", [[[13], []], [[-5, 79]]], "s"),
     ],
 )
-def test_array_time_converter_slices_flat_values(monkeypatch, type_name, rows, unit):
+def test_array_time_converter_slices_flat_values(type_name, rows, unit):
     np = pytest.importorskip("numpy")
-    pa = pytest.importorskip("pyarrow")
     ch_type = get_from_name(type_name)
     depth, leaf = rustnumpy._array_time_leaf(ch_type)
-    arrow_type = pa.int64() if isinstance(leaf, Time64) else pa.int32()
-    for _ in range(depth):
-        arrow_type = pa.large_list(arrow_type)
-    wire = pa.array(rows, type=arrow_type)
-    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
-    context = type("Context", (), {"as_pandas": False, "use_extended_dtypes": False})()
+    batch = _array_buffer_batch(rows, depth, "int64" if isinstance(leaf, Time64) else "int32")
+    context = QueryContext(use_numpy=True)
 
-    result = rustnumpy._make_array_time_convert(leaf, depth, context)(None, None, 0)
+    result = rustnumpy._make_array_time_convert(leaf, depth, context)(None, batch, 0)
 
     def expect(node):
         if isinstance(node, int):
@@ -271,20 +266,35 @@ def test_array_time_converter_slices_flat_values(monkeypatch, type_name, rows, u
     assert all(isinstance(row, list) for row in result)
 
 
-def test_array_nullable_time_converter_null_policy(monkeypatch):
+def _array_buffer_batch(rows, depth, kind):
     np = pytest.importorskip("numpy")
-    pa = pytest.importorskip("pyarrow")
+
+    def descriptor(values, level):
+        if level:
+            offsets = np.array([0, *np.cumsum([len(row) for row in values])], dtype="int64")
+            return SimpleNamespace(offsets=memoryview(offsets), child=descriptor([value for row in values for value in row], level - 1))
+        data = np.array([0 if value is None else value for value in values], dtype=kind)
+        valid = np.array([value is not None for value in values], dtype="uint8")
+        return _scalar_buffer_batch(
+            kind, memoryview(data), len(values), np.packbits(valid, bitorder="little"), len(values) - int(valid.sum()), sys.byteorder
+        ).column_buffers(0)[0]
+
+    column = descriptor(rows, depth)
+    return SimpleNamespace(column_buffers=lambda _index: [column])
+
+
+def test_array_nullable_time_converter_null_policy():
+    np = pytest.importorskip("numpy")
     ch_type = get_from_name("Array(Nullable(Time64(9)))")
     depth, leaf = rustnumpy._array_time_leaf(ch_type)
-    wire = pa.array([[None, 1], [-1]], type=pa.large_list(pa.int64()))
-    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
+    batch = _array_buffer_batch([[None, 1], [-1]], depth, "int64")
 
-    np_context = type("Context", (), {"as_pandas": False, "use_extended_dtypes": False})()
-    result = rustnumpy._make_array_time_convert(leaf, depth, np_context)(None, None, 0)
+    np_context = QueryContext(use_numpy=True)
+    result = rustnumpy._make_array_time_convert(leaf, depth, np_context)(None, batch, 0)
     assert result == [[None, np.timedelta64(1, "ns")], [np.timedelta64(-1, "ns")]]
 
-    ext_context = type("Context", (), {"as_pandas": True, "use_extended_dtypes": True})()
-    result = rustnumpy._make_array_time_convert(leaf, depth, ext_context)(None, None, 0)
+    ext_context = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True)
+    result = rustnumpy._make_array_time_convert(leaf, depth, ext_context)(None, batch, 0)
     assert np.isnat(result[0][0])
     assert result[0][0].dtype == np.dtype("timedelta64[ns]")
     assert result[0][1] == np.timedelta64(1, "ns")
@@ -311,17 +321,20 @@ def test_time64_unsupported_numpy_scale_raises_programming_error(type_name, as_p
         rustnumpy._build_converter(get_from_name(type_name), context)
 
 
-def test_low_card_time_converter_decodes_dictionary(monkeypatch):
+@pytest.mark.parametrize("byteorder,prefix", [("little", "<"), ("big", ">")])
+def test_low_card_time_converter_decodes_dictionary(byteorder, prefix):
     np = pytest.importorskip("numpy")
-    pa = pytest.importorskip("pyarrow")
     ch_type = get_from_name("LowCardinality(Nullable(Time))")
-    wire = pa.DictionaryArray.from_arrays(pa.array([1, None, 0], type=pa.int32()), pa.array([13, -5], type=pa.int32()))
-    monkeypatch.setattr(rustnumpy, "_arrow_column", lambda _table, _index: wire)
+    indices = np.array([2, 0, 1], dtype=f"{prefix}i4")
+    dictionary = np.array([0, 13, -5], dtype=f"{prefix}i4")
+    child = _scalar_buffer_batch("int32", memoryview(dictionary), 3, byteorder=byteorder).column_buffers(0)[0]
+    column = SimpleNamespace(values=memoryview(indices), byteorder=byteorder, length=3, child=child, validity=b"\x05", null_count=1)
+    batch = SimpleNamespace(column_buffers=lambda _index: [column])
 
-    result = rustnumpy._make_low_card_time_convert(ch_type, as_pandas=False)(None, None, 0)
+    result = rustnumpy._make_low_card_time_convert(ch_type, as_pandas=False)(None, batch, 0)
     assert result == [np.timedelta64(-5, "s"), None, np.timedelta64(13, "s")]
 
-    values = rustnumpy._make_low_card_time_convert(ch_type, as_pandas=True)(None, None, 0)
+    values = rustnumpy._make_low_card_time_convert(ch_type, as_pandas=True)(None, batch, 0)
     assert values.dtype == np.dtype("timedelta64[s]")
     np.testing.assert_array_equal(values, np.array([-5, "NaT", 13], dtype="timedelta64[s]"))
 
@@ -592,8 +605,8 @@ def test_nullable_and_alias_datetime64_reject_unsupported_precision(scale, wrapp
         ("Date", False),
         ("DateTime64(9)", False),
         ("Time64(9)", False),
-        ("Array(Time64(9))", True),
-        ("LowCardinality(Time)", True),
+        ("Array(Time64(9))", False),
+        ("LowCardinality(Time)", False),
         ("LowCardinality(DateTime)", False),
         ("Tuple(DateTime64(9))", False),
         ("Array(Tuple(Time64(9)))", False),
@@ -680,3 +693,33 @@ def test_nullable_datetime64_numpy_buffer_byteorder(monkeypatch, byteorder, pref
     result = converter(None, batch, 0)
     assert result == [np.datetime64(-123456789, "ns"), None, np.datetime64(1714979289123456789, "ns")]
     assert result[0].dtype.byteorder == "="
+
+
+@pytest.mark.parametrize("scale", [1, 2, 4, 5, 7, 8])
+@pytest.mark.parametrize("wrapper", ["Array({})", "Array(Array(Nullable({})))", "SimpleAggregateFunction(anyLast, Array({}))"])
+def test_array_time_buffers_reject_unsupported_precision(scale, wrapper):
+    declared = wrapper.format(f"Time64({scale})")
+    with pytest.raises(ProgrammingError, match="Cannot use .* as a numpy or Pandas datatype"):
+        rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "Array(SimpleAggregateFunction(anyLast, Time64(9)))",
+        "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Array(Time)))",
+        "Array(LowCardinality(Time))",
+        "Tuple(Time64(9))",
+        "Map(String, Time)",
+        "Nested(v Time64(9))",
+        "LowCardinality(Time64(9))",
+        "LowCardinality(DateTime)",
+    ],
+)
+def test_container_time_buffer_scope_keeps_object_routes(monkeypatch, declared):
+    marker = object()
+    monkeypatch.setattr(rustnumpy, "_make_object_convert", lambda *_args: lambda *_args: marker)
+    monkeypatch.setattr(rustnumpy, "_make_nested_time_convert", lambda *_args: lambda *_args: marker)
+    converter = rustnumpy._build_converter(get_from_name(declared), QueryContext(use_numpy=True))
+    assert not converter.needs_arrow
+    assert converter(None, None, 0) is marker

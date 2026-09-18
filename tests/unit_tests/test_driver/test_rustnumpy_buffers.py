@@ -1083,3 +1083,211 @@ def test_nullable_datetime64_nanosecond_numpy_empty_chunks(core, monkeypatch):
         assert converter(None, batch, 0) == []
     result = converter(None, core.ColBatch.from_batches(batches), 0)
     assert result == [np.datetime64(-1, "ns"), None, np.datetime64(13, "ns")]
+
+
+def _assert_duration_tree(actual, expected, unit, extended=False):
+    np = pytest.importorskip("numpy")
+    if isinstance(expected, list):
+        assert isinstance(actual, list) and len(actual) == len(expected)
+        for result, ticks in zip(actual, expected):
+            _assert_duration_tree(result, ticks, unit, extended)
+    elif expected is None and not extended:
+        assert actual is None
+    else:
+        assert isinstance(actual, np.timedelta64) and actual.dtype == np.dtype(f"timedelta64[{unit}]")
+        if expected is None or expected == -(2**63):
+            assert np.isnat(actual)
+        else:
+            assert actual == np.timedelta64(expected, unit)
+
+
+@pytest.mark.parametrize(
+    "type_name,unit", [("Time", "s"), ("Time64(0)", "s"), ("Time64(3)", "ms"), ("Time64(6)", "us"), ("Time64(9)", "ns")]
+)
+@pytest.mark.parametrize("depth", [1, 2, 3])
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("wrapper", ["{}", "SimpleAggregateFunction(anyLast, {})"])
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+def test_array_time_buffers_chunks_without_arrow(core, monkeypatch, type_name, unit, depth, nullable, wrapper, as_pandas, extended):
+    if as_pandas:
+        pytest.importorskip("pandas")
+    rows = [[], [-79, None if nullable else 0, 13], [], [0, 79]]
+    declared = f"Nullable({type_name})" if nullable else type_name
+    for level in range(depth):
+        declared = f"Array({declared})"
+        if level:
+            rows = [[row, []] for row in rows]
+    declared = wrapper.format(declared)
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended)
+    )
+    assert not converter.needs_arrow
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    assert converter(None, _batch(core, [declared], [[]]), 0) == []
+    decoder = core.StreamDecoder()
+    batches = []
+    for chunk in ([], rows[:1], [], rows[1:], []):
+        batches.extend(decoder.feed(core.encode_native_block(["c0"], [declared], [chunk], len(chunk), None)))
+    result = converter(None, core.ColBatch.from_batches(batches), 0)
+    _assert_duration_tree(result, rows, unit, as_pandas and extended)
+    # from_batches drops empty chunks. Keep them here to pin reconstruction at every boundary.
+    descriptors = [column for batch in batches for column in batch.column_buffers(0)]
+    calls = []
+
+    def column_buffers(index, descriptors=descriptors):
+        calls.append(index)
+        return descriptors
+
+    result = converter(None, SimpleNamespace(column_buffers=column_buffers), 0)
+    assert calls == [0]
+    del batches, descriptors, decoder, column_buffers
+    gc.collect()
+    _assert_duration_tree(result, rows, unit, as_pandas and extended)
+
+
+@pytest.mark.parametrize("nulls", ["plain", "none", "some", "all"])
+@pytest.mark.parametrize("wrapper", ["{}", "SimpleAggregateFunction(anyLast, {})"])
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+def test_dictionary_time_buffers_chunks_without_arrow(core, monkeypatch, nulls, wrapper, as_pandas, extended):
+    np = pytest.importorskip("numpy")
+    if as_pandas:
+        pytest.importorskip("pandas")
+    nullable = nulls != "plain"
+    declared = wrapper.format("LowCardinality(Nullable(Time))" if nullable else "LowCardinality(Time)")
+    rows = [-79, 13, -79, 13, 0, -79, 13]
+    if nulls == "all":
+        rows = [None] * len(rows)
+    elif nulls == "some":
+        rows[1] = rows[-1] = None
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended)
+    )
+    assert not converter.needs_arrow
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    assert len(converter(None, _batch(core, [declared], [[]]), 0)) == 0
+    decoder = core.StreamDecoder()
+    batches = []
+    for chunk in ([], rows[:3], [], rows[3:], []):
+        batches.extend(decoder.feed(core.encode_native_block(["c0"], [declared], [chunk], len(chunk), None)))
+    descriptors = [column for batch in batches for column in batch.column_buffers(0)]
+    if nulls in ("plain", "none"):
+        first = np.frombuffer(descriptors[1].child.values, dtype="int32")
+        second = np.frombuffer(descriptors[3].child.values, dtype="int32")
+        assert first.tolist() != second.tolist()
+        del first, second
+    calls = []
+
+    def column_buffers(index, descriptors=descriptors):
+        calls.append(index)
+        return descriptors
+
+    results = [
+        converter(None, core.ColBatch.from_batches(batches), 0),
+        converter(None, SimpleNamespace(column_buffers=column_buffers), 0),
+    ]
+    assert calls == [0]
+    del batches, descriptors, decoder, column_buffers
+    gc.collect()
+    for result in results:
+        if nullable and not as_pandas:
+            _assert_duration_tree(result, rows, "s")
+        else:
+            assert result.dtype == np.dtype("timedelta64[s]") and result.dtype.byteorder == "="
+            np.testing.assert_array_equal(result, np.array(rows, dtype="timedelta64[s]"))
+
+
+@pytest.mark.parametrize("has_null", [False, True])
+@pytest.mark.parametrize("extended", [False, True])
+def test_array_time_buffers_valid_nat_across_chunks(core, monkeypatch, has_null, extended):
+    np = pytest.importorskip("numpy")
+    declared = "Array(Nullable(Time64(9)))"
+    wire = core.encode_native_block(["c0"], [declared], [[[0]]], 1, None)
+    first = core.ColBatch.decode_native(wire[:-8] + np.array([-(2**63)], dtype="<i8").tobytes())
+    second = _batch(core, [declared], [[[None if has_null else 13]]])
+    batch = core.ColBatch.from_batches([first, second])
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=extended, use_extended_dtypes=extended)
+    )
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    expected = [[None if has_null and not extended else -(2**63)], [None if has_null else 13]]
+    _assert_duration_tree(result, expected, "ns", extended)
+
+
+@pytest.mark.parametrize("type_name", ["Array(Time64(9))", "LowCardinality(Time)"])
+def test_container_time_buffers_reject_missing_descriptors(type_name):
+    pytest.importorskip("numpy")
+    converter = rustnumpy._build_converter(get_from_name(type_name), QueryContext(use_numpy=True))
+    batch = SimpleNamespace(column_buffers=lambda _index: None)
+    with pytest.raises(NotImplementedError, match="Unsupported column buffers"):
+        converter(None, batch, 0)
+
+
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("block_count", [1, 2])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_container_time_buffer_result_boundary(core, monkeypatch, as_pandas, extended, block_count, streaming):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas") if as_pandas else None
+    type_names = ["Int32", "Array(Array(Nullable(Time64(9))))", "LowCardinality(Nullable(Time))", "FixedString(3)"]
+    columns = [[13, 79, -13], [[[], [-1, None, 1]], [], [[13], []]], [13, None, -79], [b"one", b"two", b"six"]]
+    types = [get_from_name(name) for name in type_names]
+    context = QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended)
+    converters = rustnumpy._build_converters(types, context)
+    assert not any(converter.needs_arrow for converter in converters)
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    calls = []
+
+    def blocks():
+        for rows in [slice(None)] if block_count == 1 else [slice(0, 1), slice(1, None)]:
+            batch = _batch(core, type_names, [column[rows] for column in columns])
+
+            def column_buffers(index, batch=batch):
+                calls.append(index)
+                return batch.column_buffers(index)
+
+            yield rustnumpy._convert_block(SimpleNamespace(column_buffers=column_buffers, column_data=batch.column_data), converters)
+
+    result = NumpyResult(blocks(), ("i", "a", "d", "s"), tuple(types), ["int32", "object", "object", "object"])
+    pieces = []
+    if streaming:
+        with result.df_stream if as_pandas else result.np_stream as stream:
+            pieces = list(stream)
+        output = pd.concat(pieces, ignore_index=True) if as_pandas else np.concatenate(pieces)
+    else:
+        output = result.df_result if as_pandas else result.np_result
+    result.close()
+    gc.collect()
+    assert calls == [0, 1, 2] * block_count
+    assert output.shape == ((3, 4) if as_pandas else (3,))
+    assert output["a"].dtype == np.dtype("object")
+    _assert_duration_tree(output["a"].tolist(), columns[1], "ns", as_pandas and extended)
+    if as_pandas:
+        assert output["d"].dtype == np.dtype("timedelta64[s]")
+        np.testing.assert_array_equal(output["d"].to_numpy(), np.array(columns[2], dtype="timedelta64[s]"))
+    else:
+        assert output.dtype == np.dtype([("i", "int32"), ("a", "object"), ("d", "object"), ("s", "object")])
+        _assert_duration_tree(output["d"].tolist(), columns[2], "s")
+    assert output["s"].tolist() == columns[3]
+    for piece in [output, *pieces]:
+        if as_pandas:
+            piece.iat[0, 0] = 79
+            piece.iat[0, 1] = [[np.timedelta64(79, "ns")]]
+            piece.iat[0, 2] = pd.Timedelta(79, "s")
+            piece.iat[0, 3] = "new"
+        else:
+            assert piece.flags.writeable
+            piece[0] = (79, [[np.timedelta64(79, "ns")]], np.timedelta64(79, "s"), "new")
+
+
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+def test_array_time_buffers_all_null_leaves(core, monkeypatch, as_pandas, extended):
+    declared = "Array(Nullable(Time64(9)))"
+    rows = [[], [None], [None, None], []]
+    batch = core.ColBatch.from_batches([_batch(core, [declared], [rows[:1]]), _batch(core, [declared], [rows[1:]])])
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended)
+    )
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    (result,) = rustnumpy._convert_block(batch, [converter])
+    _assert_duration_tree(result, rows, "ns", as_pandas and extended)

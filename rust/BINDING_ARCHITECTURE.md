@@ -121,6 +121,12 @@ Timezone-local values outside the nanosecond range keep the original object
 conversion, including its Pandas-version-dependent range errors.
 Other nullable dates and timestamps keep their Python-object conversion paths.
 Scalar DateTime64 precision validation also covers nullable and alias forms.
+Array(Time/Time64) adapters rebuild nested lists from offsets and duration
+leaves. LowCardinality(Time) adapters gather duration values through each
+chunk's dictionary indices and mark dictionary slot 0 as NaT when the chunk
+contains NULLs. Both read descriptors once
+per column per batch and reconstruct each chunk before joining row outputs.
+They preserve existing duration units, null representations, and nesting.
 Other converters keep their Arrow or
 Python-object exits, and the driver still requires PyArrow for NumPy/Pandas
 queries during this migration.

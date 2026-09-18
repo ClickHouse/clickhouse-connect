@@ -12,6 +12,7 @@ import pytest
 
 from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver import rustnumpy
 from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     DataError,
@@ -2692,3 +2693,76 @@ def test_rust_codec_sqlalchemy_dialect_metadata(test_config, codec):
                 conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("family", ["array", "dictionary"])
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("block_size", [7, 79])
+def test_rust_codec_buffer_container_time_results(
+    client_factory, call, consume_stream, test_config, monkeypatch, family, extended, block_size
+):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    if test_config.cloud:
+        pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
+    python_client = client_factory(native_codec="python")
+    if not python_client.min_version("25.6"):
+        pytest.skip("Time and Time64 require ClickHouse 25.6+")
+    rust_client = client_factory(native_codec="rust_strict")
+    settings = {"enable_time_time64_type": 1, "max_block_size": block_size}
+    if family == "array":
+        expressions = ["arrayMap(x -> CAST(toInt32(x) - 13 AS Time), range(number % 4)) AS t"]
+        expressions.extend(
+            f"arrayMap(x -> CAST(toInt64(x) - 13 AS Time64({scale})), range(number % 4)) AS t{scale}" for scale in (0, 3, 6, 9)
+        )
+        expressions.append(
+            "[CAST([], 'Array(Nullable(Time64(9)))'), "
+            "arrayMap(x -> CAST(if(x % 2 = 0, NULL, toInt64(x) - 13) AS Nullable(Time64(9))), range(number % 4))] AS nested"
+        )
+    else:
+        settings["allow_suspicious_low_cardinality_types"] = 1
+        expressions = [
+            "CAST(toInt32(number % 3) - 1 AS LowCardinality(Time)) AS t",
+            "CAST(if(number % 3 = 0, NULL, toInt32(number % 5) - 2) AS LowCardinality(Nullable(Time))) AS nullable",
+        ]
+    projection = ", ".join(["toInt32(number) AS i", *expressions, "CAST('raw' AS FixedString(3)) AS s"])
+    query = f"SELECT {projection} FROM numbers(79)"
+
+    def reject_arrow(*_args):
+        pytest.fail("Container duration conversion used Arrow")
+
+    monkeypatch.setattr(rustnumpy, "_arrow_column", reject_arrow)
+    rust_np = call(rust_client.query_np, query, settings=settings)
+    python_np = call(python_client.query_np, query, settings=settings)
+    assert rust_np.shape == python_np.shape == (79,)
+    assert rust_np.dtype == python_np.dtype
+    np.testing.assert_array_equal(rust_np, python_np)
+    arrays = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), arrays.append)
+    assert len(arrays) > 1 if block_size == 7 else len(arrays) == 1
+    np.testing.assert_array_equal(np.concatenate(arrays), python_np)
+    rust_df = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    python_df = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    if family == "dictionary" and not extended and int(pd.__version__.split(".", 1)[0]) < 3:
+        # Rust keeps timedelta64[s] here while the Python codec's object list infers ns on pandas < 3.
+        python_df["nullable"] = python_df["nullable"].astype("timedelta64[s]")
+    pd.testing.assert_frame_equal(rust_df, python_df)
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=extended), frames.append)
+    assert len(frames) > 1 if block_size == 7 else len(frames) == 1
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), python_df)
+    gc.collect()
+    for output in [rust_np, *arrays]:
+        assert output.flags.writeable
+        output[0] = output[-1]
+    for frame in [rust_df, *frames]:
+        for index in range(len(frame.columns)):
+            frame.iat[0, index] = frame.iat[-1, index]
+    empty_query = f"SELECT {projection} FROM numbers(0)"
+    np.testing.assert_array_equal(
+        call(rust_client.query_np, empty_query, settings=settings), call(python_client.query_np, empty_query, settings=settings)
+    )
+    pd.testing.assert_frame_equal(
+        call(rust_client.query_df, empty_query, settings=settings, use_extended_dtypes=extended),
+        call(python_client.query_df, empty_query, settings=settings, use_extended_dtypes=extended),
+    )
