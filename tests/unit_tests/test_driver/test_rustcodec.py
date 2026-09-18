@@ -917,3 +917,65 @@ def test_decode_unsupported_type_raises_not_supported(ch_core):
     block = b"\x01\x01" + _varint_str("v") + _varint_str("AggregateFunction(avg, UInt64)") + b"\x00" * 8
     with pytest.raises(NotSupportedError):
         _RustNativeTransform(strict=True).parse_response(FakeSource([block]), eligible_ctx())
+
+
+@pytest.mark.parametrize(
+    ("chunk_size", "feed_sizes"),
+    [
+        ((1 << 20) - 1, [(1 << 20) - 1, 4]),
+        (1 << 20, [1 << 20, 4]),
+        ((1 << 20) + 1, [1 << 20, 1, 4]),
+        (3 * (1 << 20) + 5, [1 << 20, 1 << 20, 1 << 20, 5, 4]),
+    ],
+)
+def test_decode_feeds_large_chunks_in_bounded_slices(monkeypatch, chunk_size, feed_sizes):
+    seen = []
+    batches = [_FakeBatch(["a"], ["Int32"], columns=[[13]]), _FakeBatch(["a"], ["Int32"], columns=[[79]])]
+
+    class _RecordingDecoder:
+        def __init__(self, has_block_info=False):
+            del has_block_info
+
+        def feed(self, chunk):
+            seen.append(len(chunk))
+            return [batches.pop(0)] if batches else []
+
+        def finish(self):
+            return []
+
+    class _FakeCore:
+        StreamDecoder = _RecordingDecoder
+
+    monkeypatch.setitem(sys.modules, "_ch_core", _FakeCore)
+    src = FakeSource([b"\x00" * chunk_size, b"tail"])
+    result = _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert result.result_rows == [(13,), (79,)]
+    assert seen == feed_sizes
+    assert src.closed is True
+
+
+def test_decode_releases_large_chunk_view_before_next_chunk(monkeypatch):
+    large_chunk = bytearray((1 << 20) + 1)
+
+    class _ResizingDecoder:
+        def __init__(self, has_block_info=False):
+            del has_block_info
+
+        def feed(self, chunk):
+            if chunk == b"tail":
+                large_chunk.clear()
+                return [_FakeBatch(["a"], ["Int32"], columns=[[13]])]
+            return []
+
+        def finish(self):
+            return []
+
+    class _FakeCore:
+        StreamDecoder = _ResizingDecoder
+
+    monkeypatch.setitem(sys.modules, "_ch_core", _FakeCore)
+    src = FakeSource([large_chunk, b"tail"])
+    result = _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert result.result_rows == [(13,)]
+    assert not large_chunk
+    assert src.closed is True

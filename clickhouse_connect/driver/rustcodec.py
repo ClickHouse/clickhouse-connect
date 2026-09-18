@@ -36,6 +36,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 NativeCodec = Literal["python", "rust", "rust_strict"]
 
 _VALID_CODECS = ("python", "rust", "rust_strict")
+_FEED_SLICE_BYTES = 1 << 20
 
 REQUIRED_BINDING_API_VERSION = 3
 REQUIRED_COLUMN_BUFFER_API_VERSION = 1
@@ -317,7 +318,13 @@ class _RustNativeTransform:
                         if hit is not None:
                             read_source.close()
                             raise server_error(hit)
-                    yield from decoder.feed(chunk)
+                    if len(chunk) > _FEED_SLICE_BYTES:
+                        # Bound the decoder's copies and the blocks returned by each feed.
+                        with memoryview(chunk) as view:
+                            for start in range(0, len(view), _FEED_SLICE_BYTES):
+                                yield from decoder.feed(view[start : start + _FEED_SLICE_BYTES])
+                    else:
+                        yield from decoder.feed(chunk)
                 yield from decoder.finish()
             except StreamFailureError:
                 raise
