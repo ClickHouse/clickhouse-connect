@@ -467,9 +467,12 @@ def _read_ahead_producer(
         put(("eof", None))
 
 
-def _read_ahead_consumer(source_queue: queue.Queue[tuple[str, object]]) -> Iterator[bytes]:
-    while True:
-        tag, payload = source_queue.get()
+def _read_ahead_consumer(source_queue: queue.Queue[tuple[str, object]], stop_event: threading.Event) -> Iterator[bytes]:
+    while not stop_event.is_set():
+        try:
+            tag, payload = source_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
         if tag == "data":
             yield cast(bytes, payload)
         elif tag == "error":
@@ -513,7 +516,7 @@ def _read_ahead_stream(
     del owner
     thread.start()
     yield second
-    yield from _read_ahead_consumer(out)
+    yield from _read_ahead_consumer(out, stop_event)
 
 
 def _drain_read_ahead_queue(source_queue: queue.Queue[tuple[str, object]]) -> None:
@@ -565,6 +568,7 @@ class ReadAheadSource(Closable):
         self.exception_tag: str | None = getattr(source, "exception_tag", None)
         self.queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=maxsize)
         self._stop_event = threading.Event()
+        self._release_lock = threading.Lock()
         self._gen_cache: Iterator[bytes] | None = None
         self._thread: threading.Thread | None = None
 
@@ -609,7 +613,8 @@ class ReadAheadSource(Closable):
         _drain_read_ahead_queue(self.queue)
 
     def _release_source(self):
-        source, self.source = self.source, None
+        with self._release_lock:
+            source, self.source = self.source, None
         if source is not None:
             source.close()
 

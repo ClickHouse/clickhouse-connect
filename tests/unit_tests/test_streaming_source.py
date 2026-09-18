@@ -2,6 +2,7 @@ import asyncio
 import gc
 import gzip
 import logging
+import queue
 import threading
 import time
 import weakref
@@ -659,6 +660,51 @@ def test_read_ahead_tagged_exception_chunk_unchanged():
     assert read_source.exception_tag == "T"
     assert list(read_source.gen) == [b"prefix __exception__T\r\nboom\r\n"]
     read_source.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["close", "aclose"])
+async def test_read_ahead_close_releases_pending_consumer(asynchronous):
+    entered_get = threading.Event()
+
+    class TrackedQueue(queue.Queue):
+        def get(self, block=True, timeout=None):
+            if block:
+                entered_get.set()
+            return super().get(block, timeout)
+
+    source = ReadBlockedByteSource()
+    read_source = ReadAheadSource(source, maxsize=2)
+    read_source.queue = TrackedQueue(maxsize=2)
+    consumer = read_source.gen
+    results = []
+    worker = threading.Thread(target=lambda: results.append(next(consumer, None)), daemon=True)
+    try:
+        assert next(consumer) == b"early_1"
+        assert next(consumer) == b"early_2"
+        assert source.read_started.wait(1)
+        worker.start()
+        assert entered_get.wait(1)
+        if asynchronous:
+            await read_source.aclose()
+            await read_source.aclose()
+        else:
+            read_source.close()
+            read_source.close()
+        worker.join(1)
+        read_source._thread.join(1)
+        assert not worker.is_alive()
+        assert not read_source._thread.is_alive()
+        assert source.closed
+        assert results == [None]
+    finally:
+        source.release_read.set()
+        read_source._stop_event.set()
+        read_source._drain()
+        read_source.queue.put_nowait(("eof", None))
+        if worker.ident is not None:
+            worker.join(2)
+        read_source.close()
 
 
 def test_read_ahead_close_during_block_terminates_thread():

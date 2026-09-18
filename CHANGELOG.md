@@ -13,6 +13,7 @@
 
 ### Bug Fixes
 
+- Cancelling a pending Rust codec stream read now releases the waiting decoder worker. Previously, closing the stream could leave a worker blocked and hang async executor shutdown.
 - Rust codec NumPy and Pandas queries now preserve nanoseconds in nullable scalar `DateTime64(9)` columns, including `SimpleAggregateFunction` aliases. They also reject unsupported scalar `DateTime64` precisions consistently for nullable columns and aliases.
 - Rust codec NumPy and Pandas queries now return correct durations and `NaT` for NULL values in `Nullable(SimpleAggregateFunction(..., Time64))` columns. Previously, columns with NULLs returned floating-point bit patterns interpreted as durations.
 - Arrow `insert_arrow` / `insert_df_arrow` now quote table and database identifiers the same way `insert()` does, so hyphenated and other names that need backquotes work on both the sync and async clients. Closes [#1014](https://github.com/ClickHouse/clickhouse-connect/issues/1014).
