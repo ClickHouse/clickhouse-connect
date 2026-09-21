@@ -2,6 +2,19 @@
 
 ## UNRELEASED
 
+### Improvements
+
+- Native Map reads now support the opt-in `pairs` format, which returns a list of key/value tuples and preserves duplicate keys and the sequence returned by the server. The default remains a dictionary. The format also applies to nested Maps and NumPy/Pandas results. Native Map inserts still require dictionaries and raise `DataError` for pair lists. Closes [#949](https://github.com/ClickHouse/clickhouse-connect/issues/949).
+
+### Bug Fixes
+
+- Arrow `insert_arrow` / `insert_df_arrow` now quote table and database identifiers the same way `insert()` does, so hyphenated and other names that need backquotes work on both the sync and async clients. Closes [#1014](https://github.com/ClickHouse/clickhouse-connect/issues/1014).
+- Queries whose text only appears to end in `LIMIT 0` because of `//` comments, quoted identifiers, or escaped string contents no longer take the columns-only metadata path and discard returned rows. Metadata probes now confirm a real trailing `LIMIT 0` against the bound SQL, including chDB, while binary-bound queries use the normal Native path. If a probe still returns rows, as with some `UNION`, `EXCEPT`, or `EXPLAIN` queries, the client raises `InternalError` after one execution without replaying the query. Use `raw_query()` to retrieve results for those queries. This addresses the false metadata-probe cases in [#925](https://github.com/ClickHouse/clickhouse-connect/issues/925).
+
+### Compatibility
+
+- The package now declares its license with the PEP 639 `license_expression` field, and the deprecated `License :: OSI Approved :: Apache Software License` classifier has been removed. Built metadata carries `License-Expression: Apache-2.0` and `License-File: LICENSE`. Building from source now requires `setuptools>=77.0.3`. Closes [#996](https://github.com/ClickHouse/clickhouse-connect/issues/996).
+
 ## 1.9.0rc3, 2026-09-11
 
 ### Bug Fixes

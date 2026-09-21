@@ -526,6 +526,12 @@ result = client.command(
 
 `Client.query` retrieves a tabular dataset in ClickHouse Native format and returns a `QueryResult`. The complete result is materialized when a result property is accessed. Use a streaming method for results that should not be held in memory.
 
+<Note>
+When the client recognizes a trailing `LIMIT 0`, it requests column metadata in JSON format. If the response contains rows, it raises `clickhouse_connect.driver.exceptions.InternalError` and does not replay the query. This can happen with `UNION`, `EXCEPT`, or `EXPLAIN` queries that end in `LIMIT 0`.
+
+Use [`raw_query`](/integrations/language-clients/python/advanced-usage#client-rawquery-method) with an output format such as `fmt="JSON"` for these queries. It returns `bytes` for your application to decode. This behavior applies to synchronous HTTP, asynchronous HTTP, and chDB clients.
+</Note>
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `query` | str | Required | ClickHouse query that returns a tabular result, most often `SELECT` or `DESCRIBE`. May be omitted when supplied by `context`. |

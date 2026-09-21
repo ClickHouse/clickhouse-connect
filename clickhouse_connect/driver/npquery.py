@@ -19,6 +19,8 @@ class NumpyResult(Closable):
         column_types: tuple = (),
         d_types: Sequence = (),
         source: Closable | None = None,
+        *,
+        preserve_object_rows: bool = False,
     ):
         self.column_names = column_names
         self.column_types = column_types
@@ -29,6 +31,7 @@ class NumpyResult(Closable):
         self._block_gen: Generator[Sequence, None, None] | None = block_gen or empty_gen()
         self._numpy_result = None
         self._df_result = None
+        self._preserve_object_rows = preserve_object_rows
 
     def _np_stream(self) -> Generator:
         if self._block_gen is None:
@@ -46,7 +49,13 @@ class NumpyResult(Closable):
 
             def numpy_blocks():
                 for block in block_gen:
-                    yield options.np.array(block, first_type).transpose()
+                    if self._preserve_object_rows:
+                        np_array = options.np.empty((len(block[0]), len(block)), dtype=first_type)
+                        for col_num, data in enumerate(block):
+                            np_array[:, col_num] = data
+                        yield np_array
+                    else:
+                        yield options.np.array(block, first_type).transpose()
         else:
             if any(x == options.np.object_ for x in d_types):
                 self.np_types = [options.np.object_] * len(self.np_types)

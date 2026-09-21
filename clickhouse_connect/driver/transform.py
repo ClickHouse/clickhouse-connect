@@ -3,6 +3,10 @@ from collections.abc import Callable, Generator
 from typing import Protocol
 
 from clickhouse_connect.datatypes import registry
+from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.datatypes.container import Array, Map, Nested, Tuple
+from clickhouse_connect.datatypes.dynamic import JSON, Dynamic, Variant
+from clickhouse_connect.datatypes.special import SimpleAggregateFunction
 from clickhouse_connect.driver.common import ShowClickHouseErrors, write_leb128
 from clickhouse_connect.driver.compression import get_compressor
 from clickhouse_connect.driver.exceptions import (
@@ -46,6 +50,7 @@ class NativeTransform:
         names = []
         col_types = []
         block_num = 0
+        preserve_object_rows = False
         renamer = context.column_renamer
         show_clickhouse_errors = context.show_clickhouse_errors
 
@@ -72,7 +77,7 @@ class NativeTransform:
             return extract_error_message(source.last_message)
 
         def get_block():
-            nonlocal block_num
+            nonlocal block_num, preserve_object_rows
             result_block = []
             try:
                 try:
@@ -95,10 +100,12 @@ class NativeTransform:
                         col_types.append(col_type)
                     else:
                         col_type = col_types[col_num]
+                    context.start_column(orig_name)
+                    if block_num == 0 and context.use_numpy and Map.read_format(context) == "pairs" and _contains_map(col_type):
+                        preserve_object_rows = True
                     if num_rows == 0:
                         result_block.append(tuple())
                     else:
-                        context.start_column(orig_name)
                         column = col_type.read_column(source, num_rows, context)
                         result_block.append(column)
             except Exception as ex:
@@ -140,7 +147,7 @@ class NativeTransform:
 
         if context.use_numpy:
             res_types = [col.dtype if hasattr(col, "dtype") else "O" for col in first_block]
-            return NumpyResult(gen(), tuple(names), tuple(col_types), res_types, source)
+            return NumpyResult(gen(), tuple(names), tuple(col_types), res_types, source, preserve_object_rows=preserve_object_rows)
         return QueryResult(None, gen(), tuple(names), tuple(col_types), context.column_oriented, source)
 
     @staticmethod
@@ -185,6 +192,16 @@ class NativeTransform:
                 yield footer
 
         return chunk_gen()
+
+
+def _contains_map(ch_type: ClickHouseType) -> bool:
+    if isinstance(ch_type, (Map, Dynamic, JSON)):
+        return True
+    if isinstance(ch_type, (Array, SimpleAggregateFunction)):
+        return _contains_map(ch_type.element_type)
+    if isinstance(ch_type, (Tuple, Nested, Variant)):
+        return any(_contains_map(element) for element in ch_type.element_types)
+    return False
 
 
 def extract_exception_with_tag(message: bytes, exception_tag: str) -> str | None:

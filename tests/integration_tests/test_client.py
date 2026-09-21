@@ -9,7 +9,7 @@ from clickhouse_connect import create_client, datatypes
 from clickhouse_connect.datatypes.format import set_default_formats
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.client import Client
-from clickhouse_connect.driver.exceptions import DatabaseError, StreamFailureError
+from clickhouse_connect.driver.exceptions import DatabaseError, InternalError, StreamFailureError
 from clickhouse_connect.driver.summary import QuerySummary
 from tests.integration_tests.conftest import TestConfig
 
@@ -282,6 +282,112 @@ def test_get_columns_only(param_client, call):
 
     call(param_client.query, "CREATE TABLE IF NOT EXISTS test_zero_insert (v Int8) ENGINE MergeTree() ORDER BY tuple()")
     call(param_client.query, "INSERT INTO test_zero_insert SELECT 1 LIMIT 0")
+
+
+@pytest.mark.parametrize(
+    "sql, expected_rows, expected_name, expected_type",
+    [
+        (
+            "SELECT number FROM numbers(9) // LIMIT 0",
+            [(i,) for i in range(9)],
+            "number",
+            "UInt64",
+        ),
+        (
+            "SELECT number AS `LIMIT 0--` FROM numbers(9)",
+            [(i,) for i in range(9)],
+            "LIMIT 0--",
+            "UInt64",
+        ),
+        (
+            "SELECT 'foo\\' LIMIT 0--bar' AS value",
+            [("foo' LIMIT 0--bar",)],
+            "value",
+            "String",
+        ),
+        (
+            "SELECT number FROM numbers(9) LIMIT 0",
+            [],
+            "number",
+            "UInt64",
+        ),
+    ],
+)
+def test_limit_zero_probe_classification(
+    param_client,
+    call,
+    client_mode,
+    monkeypatch,
+    sql,
+    expected_rows,
+    expected_name,
+    expected_type,
+):
+    backend = param_client._backend
+    original_request = backend.request
+    execution_count = 0
+
+    if client_mode == "sync":
+
+        def counted_request(*args, **kwargs):
+            nonlocal execution_count
+            execution_count += 1
+            return original_request(*args, **kwargs)
+
+    else:
+
+        async def counted_request(*args, **kwargs):
+            nonlocal execution_count
+            execution_count += 1
+            return await original_request(*args, **kwargs)
+
+    monkeypatch.setattr(backend, "request", counted_request)
+
+    result = call(param_client.query, sql)
+
+    assert execution_count == 1
+    assert result.result_rows == expected_rows
+    assert result.column_names == (expected_name,)
+    assert result.column_types[0].name == expected_type
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 13 AS v UNION ALL SELECT 79 AS v LIMIT 0",
+        "SELECT 13 AS v UNION DISTINCT SELECT 79 AS v LIMIT 0",
+        "SELECT 13 AS v EXCEPT SELECT 79 AS v LIMIT 0",
+        "EXPLAIN SELECT 13 LIMIT 0",
+        "EXPLAIN SYNTAX SELECT 13 LIMIT 0",
+    ],
+)
+def test_limit_zero_probe_rejects_rows_without_replay(param_client, call, client_mode, monkeypatch, sql):
+    backend = param_client._backend
+    original_request = backend.request
+    execution_count = 0
+
+    if client_mode == "sync":
+
+        def counted_request(*args, **kwargs):
+            nonlocal execution_count
+            execution_count += 1
+            return original_request(*args, **kwargs)
+
+    else:
+
+        async def counted_request(*args, **kwargs):
+            nonlocal execution_count
+            execution_count += 1
+            return await original_request(*args, **kwargs)
+
+    monkeypatch.setattr(backend, "request", counted_request)
+
+    with pytest.raises(InternalError, match=r"metadata probe unexpectedly returned rows\. Use raw_query\(\)"):
+        call(param_client.query, sql)
+
+    assert execution_count == 1
+    assert call(param_client.query, "SELECT 79").result_rows == [(79,)]
+    assert execution_count == 2
 
 
 def test_no_limit(param_client, call):
