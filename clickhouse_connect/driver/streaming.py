@@ -515,7 +515,16 @@ def _read_ahead_producer(
     except BaseException as ex:  # noqa: BLE001 - forwarded to the consumer thread verbatim
         put(("error", ex))
     finally:
-        put(("eof", None))
+        try:
+            # The producer owns this iterator. Free-threaded Python may defer its
+            # finalizer after thread exit, so close it before reporting completion.
+            close = getattr(src_gen, "close", None)
+            if close is not None:
+                close()
+        except BaseException as ex:  # noqa: BLE001 - preserve stream error forwarding
+            put(("error", ex))
+        finally:
+            put(("eof", None))
 
 
 def _read_ahead_consumer(source_queue: queue.Queue[tuple[str, object]]) -> Iterator[bytes]:

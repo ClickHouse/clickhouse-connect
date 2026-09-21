@@ -3,6 +3,8 @@ from collections.abc import Callable
 
 import pytest
 
+from tests.integration_tests.conftest import TestConfig
+
 SESSION_KEY = "session_id"
 
 
@@ -32,8 +34,10 @@ def test_client_custom_session_id(client_factory: Callable):
     assert client.get_client_setting(SESSION_KEY) == session_id
 
 
-def test_explicit_session_id(client_factory: Callable, call):
+def test_explicit_session_id(client_factory: Callable, call, test_config: TestConfig):
     """Test explicit session_id allows sharing state like temp tables."""
+    if test_config.cloud:
+        pytest.skip("Temporary tables are server-local, and ClickHouse Cloud may route requests to different replicas")
     session_id = f"test_session_{uuid.uuid4()}"
     client = client_factory(session_id=session_id)
 

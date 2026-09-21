@@ -1102,6 +1102,36 @@ def test_read_ahead_close_during_block_terminates_thread():
     assert read_source._thread.is_alive() is False
 
 
+@pytest.mark.parametrize("async_close", [False, True])
+@pytest.mark.asyncio
+async def test_read_ahead_close_finalizes_retained_source_iterator(async_close):
+    finalized = threading.Event()
+
+    def chunks():
+        try:
+            yield from (b"first", b"second", b"third", b"fourth")
+        finally:
+            finalized.set()
+
+    # Keep a reference so generator cleanup cannot depend on garbage collection.
+    src = Mock(spec=["gen", "close"], gen=chunks())
+    read_source = ReadAheadSource(src, maxsize=1)
+    try:
+        assert next(read_source.gen) == b"first"
+        assert next(read_source.gen) == b"second"
+        if async_close:
+            await read_source.aclose()
+        else:
+            await asyncio.to_thread(read_source.close)
+
+        assert read_source._thread.is_alive() is False
+        assert finalized.is_set()
+        src.close.assert_called_once_with()
+    finally:
+        read_source.close()
+        src.gen.close()
+
+
 @pytest.mark.parametrize("chunks", [[], [b"a"], [b"a", b"b", b"c"]])
 def test_read_ahead_close_before_consumption_never_starts_thread(chunks):
     src = MockByteSource(chunks)

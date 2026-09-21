@@ -414,6 +414,8 @@ async def test_async_sqlalchemy_dialect_acceptance(test_config: TestConfig) -> N
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_sqlalchemy_connection_preserves_session_state(test_config: TestConfig) -> None:
+    if test_config.cloud:
+        pytest.skip("Named session state is server-local, and ClickHouse Cloud may route requests to different replicas")
     url = _async_url(test_config)
     engine = create_async_engine(url)
     table_name = f"test_async_session_{uuid.uuid4().hex}"
