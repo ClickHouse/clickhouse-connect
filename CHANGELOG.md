@@ -2,8 +2,13 @@
 
 ## UNRELEASED
 
+## 1.9.0, 2026-09-21
+
+This stable release includes all changes from `1.9.0rc1`, `1.9.0rc2`, and `1.9.0rc3`. See those entries below for the full async SQLAlchemy feature set, Rust codec performance improvements, and fixes included in 1.9.0.
+
 ### Improvements
 
+- Added native async SQLAlchemy support for SQLAlchemy 2.0.44 and later. Install `clickhouse-connect[sqlalchemy-async]` and use `clickhousedb+async://` with `create_async_engine()`. It supports buffered Core and ORM execution, DDL and reflection through `run_sync()`, and async Alembic environments. Use the native `AsyncClient` for streaming and bulk inserts. Closes [#576](https://github.com/ClickHouse/clickhouse-connect/issues/576).
 - Native Map reads now support the opt-in `pairs` format, which returns a list of key/value tuples and preserves duplicate keys and the sequence returned by the server. The default remains a dictionary. The format also applies to nested Maps and NumPy/Pandas results. Native Map inserts still require dictionaries and raise `DataError` for pair lists. Closes [#949](https://github.com/ClickHouse/clickhouse-connect/issues/949).
 
 ### Bug Fixes
