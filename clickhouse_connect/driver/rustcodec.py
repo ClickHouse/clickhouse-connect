@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from typing import Any, Literal
 
 from clickhouse_connect import common
@@ -12,7 +12,15 @@ from clickhouse_connect.datatypes.string import FixedString, String
 from clickhouse_connect.datatypes.temporal import Date, DateTimeBase
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.compression import get_compressor
-from clickhouse_connect.driver.exceptions import DataError, Error, NotSupportedError, ProgrammingError, StreamFailureError
+from clickhouse_connect.driver.exceptions import (
+    DataError,
+    Error,
+    NotSupportedError,
+    ProgrammingError,
+    StreamFailureError,
+    _error_code_from_message,
+    error_name_from_body,
+)
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.query import QueryContext, QueryResult
@@ -301,7 +309,12 @@ class _RustNativeTransform:
         def server_error(chunk: bytes) -> StreamFailureError:
             # Tagged text first, as in the Python codec, then the client's show_clickhouse_errors policy.
             message = extract_exception_with_tag(chunk, exception_tag or "") or extract_error_message(chunk)
-            return StreamFailureError(format_stream_error(message, show_clickhouse_errors))
+            name = error_name_from_body(message) if show_clickhouse_errors else None
+            return StreamFailureError(
+                format_stream_error(message, show_clickhouse_errors),
+                code=_error_code_from_message(message),
+                name=name,
+            )
 
         def raw_blocks() -> Generator[Any, None, None]:
             # Decode blocks lazily so streaming queries keep bounded memory. Errors surface here on the
@@ -461,7 +474,11 @@ class _RustNativeTransform:
 
         return QueryResult(None, block_gen(), names, col_types, context.column_oriented, read_source)
 
-    def build_insert(self, context: InsertContext) -> Generator[bytes, None, None]:
+    def build_insert(
+        self,
+        context: InsertContext,
+        error_handler: Callable[[Exception], None] | None = None,
+    ) -> Generator[bytes, None, None]:
         core = _ch_core_module()
         if core is None:
             raise NotSupportedError('The rust native codec is unavailable (_ch_core not importable); use native_codec="python"')
@@ -475,7 +492,7 @@ class _RustNativeTransform:
                     'use native_codec="python" or "rust"'
                 )
             logger.info('Native codec fallback to Python for insert: naive_datetime_insert="server"')
-            return NativeTransform.build_insert(context)
+            return NativeTransform.build_insert(context, error_handler)
 
         if ch_write_formats:
             # The rust encoder does not consult the global write-format registry, so per-value conversions
@@ -485,7 +502,7 @@ class _RustNativeTransform:
                     'native_codec="rust_strict" does not support global write format overrides; use native_codec="python" or "rust"'
                 )
             logger.info("Native codec fallback to Python for insert: global write format override")
-            return NativeTransform.build_insert(context)
+            return NativeTransform.build_insert(context, error_handler)
 
         if context.col_simple_formats or context.col_type_formats or context.type_formats:
             # The rust encoder ignores user column/query formats. Gate on the compiled format dicts, which are
@@ -496,7 +513,7 @@ class _RustNativeTransform:
                     'native_codec="rust_strict" does not support per-column or per-type write formats; use native_codec="python" or "rust"'
                 )
             logger.info("Native codec fallback to Python for insert: column/type write format")
-            return NativeTransform.build_insert(context)
+            return NativeTransform.build_insert(context, error_handler)
 
         column_names = list(context.column_names)
         type_names = [col_type.name for col_type in context.column_types]
@@ -508,7 +525,7 @@ class _RustNativeTransform:
                     f'native_codec="rust_strict" cannot insert unsupported column type: {ex}; use native_codec="python" or "rust"'
                 ) from ex
             logger.info("Native codec fallback to Python for insert: unsupported type (%s)", ex)
-            return NativeTransform.build_insert(context)
+            return NativeTransform.build_insert(context, error_handler)
 
         compression = context.compression if isinstance(context.compression, str) else None
         compressor = get_compressor(compression)
@@ -529,7 +546,10 @@ class _RustNativeTransform:
                         wrapped = DataError(str(ex))
                         wrapped.__cause__ = ex
                         ex = wrapped
-                    context.insert_exception = ex
+                    if error_handler is None:
+                        context.insert_exception = ex
+                    else:
+                        error_handler(ex)
                     yield b"INTERNAL EXCEPTION WHILE SERIALIZING"
                     return
                 yield compressor.compress_block(output)

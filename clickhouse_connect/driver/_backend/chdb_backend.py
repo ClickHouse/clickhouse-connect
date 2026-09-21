@@ -44,6 +44,7 @@ from clickhouse_connect.driver.exceptions import (
     NotSupportedError,
     ProgrammingError,
     StreamFailureError,
+    _error_code_from_message,
     error_name_from_body,
     scrub_error_details,
 )
@@ -95,8 +96,6 @@ _STREAM_OPEN_MESSAGE = (
     "The chdb connection is streaming a query result on this thread. Close or fully consume the stream before another operation."
 )
 
-_ERROR_CODE_RE = re.compile(r"\bCode:\s*(\d+)")
-
 
 def _quote_sql_string(text: str) -> str:
     """Single-quote a string literal (e.g. an INFILE path, which can contain
@@ -136,13 +135,15 @@ def _format_error_message(message: str) -> str:
     return message.strip()
 
 
-def _format_stream_error(message: str, show_clickhouse_errors: ShowClickHouseErrors) -> str:
+def _stream_failure_error(message: str, show_clickhouse_errors: ShowClickHouseErrors) -> StreamFailureError:
     message = _format_error_message(message)
+    code = _error_code_from_message(message)
+    name = error_name_from_body(message) if show_clickhouse_errors else None
     if show_clickhouse_errors is False:
-        return GENERIC_CLICKHOUSE_ERROR
-    if show_clickhouse_errors == "scrub":
-        return scrub_error_details(message)
-    return message
+        message = GENERIC_CLICKHOUSE_ERROR
+    elif show_clickhouse_errors == "scrub":
+        message = scrub_error_details(message)
+    return StreamFailureError(message, code=code, name=name)
 
 
 def _strip_param_prefix(bind_params: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -324,7 +325,7 @@ class _ChdbStreamSource:
                     except StopIteration:
                         return
                     except Exception as ex:
-                        raise StreamFailureError(_format_stream_error(str(ex), self._show_clickhouse_errors)) from ex
+                        raise _stream_failure_error(str(ex), self._show_clickhouse_errors) from ex
                     payload = chunk.bytes() if hasattr(chunk, "bytes") else bytes(chunk)
                     if payload:
                         yield payload
@@ -362,7 +363,7 @@ class _ChdbStreamFile(io.RawIOBase):
                 return b""
             except Exception as ex:
                 self._eof = True
-                raise StreamFailureError(_format_stream_error(str(ex), self._show_clickhouse_errors)) from ex
+                raise _stream_failure_error(str(ex), self._show_clickhouse_errors) from ex
             payload = chunk.bytes() if hasattr(chunk, "bytes") else bytes(chunk)
             if payload:
                 return payload
@@ -418,8 +419,7 @@ class ChdbBackend:
 
     def _wrap_exception(self, ex: Exception) -> DatabaseError:
         message = _format_error_message(str(ex))
-        code_match = _ERROR_CODE_RE.search(message)
-        code = int(code_match.group(1)) if code_match else None
+        code = _error_code_from_message(message)
         if not self.show_clickhouse_errors or not message:
             # The numeric code is always populated, matching the HTTP path
             return DatabaseError(GENERIC_CLICKHOUSE_ERROR, code=code)

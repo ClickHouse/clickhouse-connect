@@ -38,8 +38,13 @@ When creating a Superset Data Source, either use the provided connection dialog,
 ### SQLAlchemy Implementation
 
 ClickHouse Connect includes a lightweight SQLAlchemy dialect implementation focused on compatibility with **Superset**
-and **SQLAlchemy Core**. Both SQLAlchemy 1.4 and 2.x are supported. SQLAlchemy 1.4 compatibility is maintained
-because Apache Superset currently requires `sqlalchemy>=1.4,<2`.
+and **SQLAlchemy Core**. The synchronous dialect supports SQLAlchemy 1.4 and 2.x. SQLAlchemy 1.4 compatibility is
+maintained because Apache Superset currently requires `sqlalchemy>=1.4,<2`.
+
+Async SQLAlchemy usage is available with SQLAlchemy 2.0.44 and later. Install
+`clickhouse-connect[sqlalchemy-async]` and use `clickhousedb+async://` with `create_async_engine()`. Results are
+buffered. Server-side cursors are not supported. Always await the async engine's `dispose()` method during shutdown
+instead of calling `engine.sync_engine.dispose()`.
 
 Supported features include:
 - Basic query execution via SQLAlchemy Core
@@ -73,6 +78,13 @@ To get started, install the Alembic extra:
 ```bash
 pip install clickhouse-connect[alembic]
 ```
+
+For Alembic with the async SQLAlchemy dialect, install `clickhouse-connect[alembic,sqlalchemy-async]`, run
+`alembic init -t async alembic`, and replace the generated `alembic/env.py` with the checked-in
+[async Alembic environment](examples/alembic_async/env.py). Keep the generated
+`script_location = %(here)s/alembic`, or update it if you chose a different migration directory. The example includes
+the ClickHouse Alembic hooks and options, runs online migrations through `AsyncConnection.run_sync()`, and compiles
+offline migrations without creating an engine.
 
 See the [Alembic worked example](clickhouse_connect/cc_sqlalchemy/alembic/WORKED_EXAMPLE.md) for a
 full end-to-end walkthrough covering setup, autogeneration, upgrades, downgrades, and manual
