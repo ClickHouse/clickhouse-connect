@@ -1074,9 +1074,14 @@ class AsyncClient(Client):
         self._add_integration_tag("arrow")
         full_table = _qualified_table(table, database)
         compression = self.write_compression if self.write_compression in ("zstd", "lz4") else None
-        column_names, insert_block = arrow_buffer(arrow_table, compression)
-        if hasattr(insert_block, "to_pybytes"):
-            insert_block = insert_block.to_pybytes()
+
+        def encode_arrow():
+            column_names, insert_block = arrow_buffer(arrow_table, compression)
+            if hasattr(insert_block, "to_pybytes"):
+                insert_block = insert_block.to_pybytes()
+            return column_names, insert_block
+
+        column_names, insert_block = await asyncio.to_thread(encode_arrow)
         return await self.raw_insert(full_table, column_names, insert_block, settings, "Arrow", transport_settings=transport_settings)
 
     async def insert_df_arrow(  # type: ignore[override]
@@ -1120,12 +1125,12 @@ class AsyncClient(Client):
                     f"insert_df_arrow requires all columns to use PyArrow dtypes. Non-Arrow columns found: [{', '.join(non_arrow_cols)}]. "
                 )
             try:
-                arrow_table = options.arrow.Table.from_pandas(df, preserve_index=False)
+                arrow_table = await asyncio.to_thread(options.arrow.Table.from_pandas, df, preserve_index=False)
             except Exception as e:
                 raise DataError(f"Failed to convert pandas DataFrame to Arrow table: {e}") from e
         else:
             try:
-                arrow_table = df.to_arrow()
+                arrow_table = await asyncio.to_thread(df.to_arrow)
             except Exception as e:
                 raise DataError(f"Failed to convert polars DataFrame to Arrow table: {e}") from e
 

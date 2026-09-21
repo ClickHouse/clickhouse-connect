@@ -1,7 +1,9 @@
 import logging
 import sys
+import threading
 import zoneinfo
 from datetime import timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -1738,6 +1740,71 @@ class TestInsertArrowTransportSettings:
             await client.insert_arrow("some_table", Mock(), transport_settings=transport)
         assert raw_insert.call_args.kwargs.get("transport_settings") == transport
         assert transport not in raw_insert.call_args.args
+
+    @pytest.mark.asyncio
+    async def test_async_insert_arrow_encodes_off_event_loop(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        client.write_compression = None
+        event_loop_thread = threading.get_ident()
+        encoding_threads = []
+        buffer = Mock()
+
+        def encode(*_args):
+            encoding_threads.append(threading.get_ident())
+            return ["col_1"], buffer
+
+        def to_pybytes():
+            encoding_threads.append(threading.get_ident())
+            return b"block"
+
+        buffer.to_pybytes.side_effect = to_pybytes
+        with (
+            patch("clickhouse_connect.driver.asyncclient.check_arrow"),
+            patch("clickhouse_connect.driver.asyncclient.arrow_buffer", side_effect=encode),
+            patch.object(client, "_add_integration_tag"),
+            patch.object(client, "raw_insert", new=AsyncMock(return_value=Mock())),
+        ):
+            await client.insert_arrow("some_table", Mock())
+
+        assert len(encoding_threads) == 2
+        assert all(thread_id != event_loop_thread for thread_id in encoding_threads)
+
+    @pytest.mark.asyncio
+    async def test_async_insert_df_arrow_converts_off_event_loop(self):
+        client = AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            username="default",
+            password="",
+            database="default",
+        )
+        event_loop_thread = threading.get_ident()
+        conversion_threads = []
+        arrow_table = Mock()
+
+        class DataFrame:
+            def to_arrow(self):
+                conversion_threads.append(threading.get_ident())
+                return arrow_table
+
+        with (
+            patch("clickhouse_connect.driver.asyncclient.check_arrow"),
+            patch("clickhouse_connect.driver.asyncclient.options.pl", SimpleNamespace(DataFrame=DataFrame)),
+            patch.object(client, "_add_integration_tag"),
+            patch.object(client, "insert_arrow", new=AsyncMock(return_value=Mock())) as insert_arrow,
+        ):
+            await client.insert_df_arrow("some_table", DataFrame())
+
+        assert conversion_threads[0] != event_loop_thread
+        assert insert_arrow.call_args.kwargs["arrow_table"] is arrow_table
 
 
 class TestInsertArrowTableQuoting:
