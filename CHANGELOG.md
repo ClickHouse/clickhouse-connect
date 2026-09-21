@@ -14,6 +14,7 @@
 
 ### Bug Fixes
 
+- Core musllinux wheels now compile for musl instead of GNU libc, fixing Rust codec imports on Alpine Linux and other musl-based systems.
 - Cancelling a pending Rust codec stream read now releases the waiting decoder worker. Previously, closing the stream could leave a worker blocked and hang async executor shutdown.
 - Rust codec NumPy and Pandas queries now preserve nanoseconds in nullable scalar `DateTime64(9)` columns, including `SimpleAggregateFunction` aliases. They also reject unsupported scalar `DateTime64` precisions consistently for nullable columns and aliases.
 - Rust codec NumPy and Pandas queries now return correct durations and `NaT` for NULL values in `Nullable(SimpleAggregateFunction(..., Time64))` columns. Previously, columns with NULLs returned floating-point bit patterns interpreted as durations.

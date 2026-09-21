@@ -72,6 +72,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+      - name: Start ClickHouse (26.3) in Docker
+        env:
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: '26.3'
+          COMPOSE_PROJECT_NAME: clickhouse-connect-binding-build
+        run: docker compose -f docker-compose.yml up -d --wait clickhouse
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:
@@ -115,6 +120,11 @@ jobs:
           path: core-wheelhouse/*.whl
           if-no-files-found: error
           retention-days: 7
+      - name: Stop ClickHouse
+        if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
+        env:
+          COMPOSE_PROJECT_NAME: clickhouse-connect-binding-build
+        run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   binding-tests:
     runs-on: ubuntu-latest

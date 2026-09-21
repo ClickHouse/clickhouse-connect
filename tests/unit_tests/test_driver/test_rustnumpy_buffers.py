@@ -1,5 +1,6 @@
 """Driver adapters over the binding's private column buffers."""
 
+import errno
 import gc
 import importlib.util
 import sys
@@ -982,6 +983,12 @@ def test_nullable_datetime64_timezone_range_keeps_object_fallback(core, wrapper,
     converter = rustnumpy._build_converter(
         get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=extended, query_tz="UTC")
     )
+    if sys.platform == "win32" and tick < 0:
+        # The object fallback uses fromtimestamp, which rejects pre-epoch values on Windows.
+        with pytest.raises(OSError) as exc:
+            converter(None, batch, 0)
+        assert exc.value.errno == errno.EINVAL
+        return
     result = pd.DataFrame({"c0": converter(None, batch, 0)})
     value = pd.Timestamp(tick // 1000, unit="us", tz="UTC").tz_convert(ZoneInfo(timezone)).to_pydatetime()
     expected = pd.DataFrame({"c0": [value, None]})
@@ -1012,6 +1019,12 @@ def test_nullable_datetime64_timezone_extended_range_error_timing(core, timezone
     converter = rustnumpy._build_converter(
         get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True, query_tz="UTC")
     )
+    if sys.platform == "win32" and tick < 0:
+        # The object fallback uses fromtimestamp, which rejects pre-epoch values on Windows.
+        with pytest.raises(OSError) as exc:
+            converter(None, batch, 0)
+        assert exc.value.errno == errno.EINVAL
+        return
     if int(pd.__version__.split(".", 1)[0]) < 3:
         with pytest.raises(pd.errors.OutOfBoundsDatetime):
             converter(None, batch, 0)
