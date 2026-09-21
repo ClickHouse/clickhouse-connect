@@ -402,6 +402,8 @@ def test_async_pending_read_cancellation_releases_worker(strict_client, call, cl
                     pytest.fail("no pending read was cancelled")
             assert await asyncio.to_thread(consumer_done.wait, 2)
             assert source.source is None
+            if source._thread is not None:
+                await asyncio.to_thread(source._thread.join, 2)
             assert source._thread is None or not source._thread.is_alive()
             assert response.closed
             values = first["n"].to_numpy() if method == "query_df_stream" else first["n"]
