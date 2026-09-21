@@ -18,6 +18,7 @@ on:
       - 'tests/unit_tests/test_driver/test_rust*.py'
       - 'tests/unit_tests/test_streaming_source.py'
       - '.github/workflows/binding_ci.yml'
+      - '.github/scripts/qualify_core_wheel.py'
   push:
     branches:
       - main
@@ -35,6 +36,7 @@ on:
       - 'tests/unit_tests/test_driver/test_rust*.py'
       - 'tests/unit_tests/test_streaming_source.py'
       - '.github/workflows/binding_ci.yml'
+      - '.github/scripts/qualify_core_wheel.py'
   workflow_dispatch:
 
 jobs:
@@ -92,7 +94,7 @@ jobs:
           maturin build --release --locked -m rust/ch-core-py/Cargo.toml -o core-wheelhouse
           pip install core-wheelhouse/*.whl
       - name: Extension smoke check
-        run: python -c "import _ch_core; print(_ch_core.__version__, _ch_core.BINDING_API_VERSION)"
+        run: python -c "import _ch_core; print(_ch_core.__version__, _ch_core.BINDING_API_VERSION, _ch_core.COLUMN_BUFFER_API_VERSION)"
       - name: Run binding tests
         run: pytest rust/ch-core-py/tests -n 4
       - name: Run unit tests
@@ -151,7 +153,7 @@ jobs:
       - name: Install the clickhouse-connect-core wheel
         run: pip install core-wheelhouse/*.whl
       - name: Extension smoke check
-        run: python -c "import _ch_core; print(_ch_core.__version__, _ch_core.BINDING_API_VERSION)"
+        run: python -c "import _ch_core; print(_ch_core.__version__, _ch_core.BINDING_API_VERSION, _ch_core.COLUMN_BUFFER_API_VERSION)"
       - name: Run rust codec integration tests
         env:
           CLICKHOUSE_CONNECT_TEST_DOCKER: 'False'
@@ -217,13 +219,53 @@ jobs:
           cp -R tests "$RUNNER_TEMP/installed-contract/tests"
           cd "$RUNNER_TEMP/installed-contract"
           unset PYTHONPATH
+          status=0
           for use_c in 1 0; do
             CLICKHOUSE_CONNECT_USE_C=$use_c timeout --kill-after=10s 180s "$RUNNER_TEMP/contract-venv/bin/python" -m pytest \
               tests/integration_tests/test_rust_codec_contract.py \
-              tests/unit_tests/test_driver/test_rustcodec_lifecycle.py tests/unit_tests/test_streaming_source.py -q
+              tests/unit_tests/test_driver/test_rustcodec_lifecycle.py tests/unit_tests/test_streaming_source.py -q || status=1
           done
+          exit "$status"
       - name: Stop ClickHouse
         if: ${{ always() && hashFiles('docker-compose.yml') != '' }}
         env:
           COMPOSE_PROJECT_NAME: clickhouse-connect-installed-contract
         run: docker compose -f docker-compose.yml down --volumes --remove-orphans
+
+  binding-freethreaded:
+    name: Experimental installed core (Python 3.14t, GIL off)
+    runs-on: ubuntu-latest
+    needs: rust-checks
+    continue-on-error: true
+    env:
+      PYTHON_GIL: '0'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14t'
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Build the experimental core wheel
+        run: uvx --from 'maturin>=1.7,<2' maturin build --release --locked -m rust/ch-core-py/Cargo.toml -o core-wheelhouse -i "$(command -v python)"
+      - name: Build the portable driver wheel
+        env:
+          CLICKHOUSE_CONNECT_SKIP_CYTHON: '1'
+        run: uv build --wheel --out-dir driver-wheelhouse
+      - name: Qualify with the GIL disabled and without Arrow
+        run: |
+          python .github/scripts/qualify_core_wheel.py \
+            --core-wheels core-wheelhouse --driver-wheel driver-wheelhouse/*-py3-none-any.whl \
+            --output "$RUNNER_TEMP/core-qualification" --allow-source-lz4
+      - name: Upload qualification records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qualification-linux-3.14t
+          path: |
+            ${{ runner.temp }}/core-qualification/*.json
+            ${{ runner.temp }}/core-qualification/*.xml
+          if-no-files-found: warn
