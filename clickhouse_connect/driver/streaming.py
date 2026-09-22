@@ -572,9 +572,12 @@ def _read_ahead_stream(
         name="clickhouse-read-ahead",
         daemon=True,
     )
-    owner._thread = thread
+    with owner._release_lock:
+        if stop_event.is_set():
+            return
+        thread.start()
+        owner._thread = thread
     del owner
-    thread.start()
     # Let the producer finalize the iterator when it exits, including during async source cleanup.
     del src_gen
     yield second
@@ -694,7 +697,8 @@ class ReadAheadSource(Closable):
         # the source only after the join keeps the transport single-reader: the sync source drains on close,
         # which would race a producer still reading it.
         self._stop_event.set()
-        thread = self._thread
+        with self._release_lock:
+            thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=1.0)
         self._drain()
@@ -707,7 +711,8 @@ class ReadAheadSource(Closable):
         cancelled: asyncio.CancelledError | None = None
         cleanup_error: BaseException | None = None
         loop = asyncio.get_running_loop()
-        thread = self._thread
+        with self._release_lock:
+            thread = self._thread
         if thread is not None and thread.is_alive():
             # Join off the event loop so the worst-case wait never blocks it.
             join_future = loop.run_in_executor(None, thread.join, 1.0)

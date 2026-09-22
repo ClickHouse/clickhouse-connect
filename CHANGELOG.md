@@ -10,6 +10,7 @@
 
 ### Bug Fixes
 
+- Closing a Rust codec stream during read-ahead startup no longer lets a producer read from an already closed source. This applies to sync and async cleanup.
 - Closing a sync Rust codec stream early now drains its HTTP response before releasing the response iterator. This fixes premature connection closure that could make the next query on the same client fail with `SESSION_IS_LOCKED`.
 - Concurrent sync and async cleanup of a Rust codec stream now releases its response source only once.
 - Core musllinux wheels now compile for musl instead of GNU libc, fixing Rust codec imports on Alpine Linux and other musl-based systems.

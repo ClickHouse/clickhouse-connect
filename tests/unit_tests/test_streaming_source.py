@@ -1194,6 +1194,113 @@ def test_read_ahead_close_before_consumption_never_starts_thread(chunks):
         _ = closed.gen
 
 
+@pytest.mark.parametrize("async_close", [False, True], ids=["close", "aclose"])
+@pytest.mark.parametrize("pause_at", ["construct", "start"])
+def test_read_ahead_close_during_producer_start(monkeypatch, async_close, pause_at):
+    startup_paused = threading.Event()
+    release_startup = threading.Event()
+    cleanup_ready = threading.Event()
+    reads_after_close = []
+
+    class PausedThread(threading.Thread):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            if self.name == "clickhouse-read-ahead" and pause_at == "construct":
+                startup_paused.set()
+                assert release_startup.wait(2)
+
+        def start(self):
+            if self.name == "clickhouse-read-ahead" and pause_at == "start":
+                startup_paused.set()
+                assert release_startup.wait(2)
+            super().start()
+
+    class TrackedLock:
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def __enter__(self):
+            if not self.lock.acquire(blocking=False):
+                cleanup_ready.set()
+                self.lock.acquire()
+
+        def __exit__(self, *args):
+            self.lock.release()
+
+    class TrackedSource(MockByteSource):
+        @property
+        def gen(self):
+            yield b"first"
+            yield b"second"
+            reads_after_close.append(self.closed)
+            yield b"third"
+
+        def close(self):
+            super().close()
+            cleanup_ready.set()
+
+        async def aclose(self):
+            self.close()
+
+    src = TrackedSource([])
+    read_source = ReadAheadSource(src)
+    read_source._release_lock = TrackedLock()
+    consumer = read_source.gen
+    assert next(consumer) == b"first"
+    monkeypatch.setattr(threading, "Thread", PausedThread)
+
+    def close():
+        if async_close:
+            run_in_new_loop(read_source.aclose())
+        else:
+            read_source.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        consumer_future = executor.submit(next, consumer, None)
+        close_future = None
+        try:
+            assert startup_paused.wait(1)
+            close_future = executor.submit(close)
+            assert cleanup_ready.wait(1)
+        finally:
+            release_startup.set()
+            consumer_future.result(timeout=2)
+            if close_future is not None:
+                close_future.result(timeout=2)
+            if read_source._thread is not None and read_source._thread.is_alive():
+                read_source._thread.join(timeout=1)
+            read_source.close()
+
+    assert src.closed
+    assert not any(reads_after_close)
+    if pause_at == "construct":
+        assert read_source._thread is None
+    else:
+        assert read_source._thread is not None
+        assert not read_source._thread.is_alive()
+
+
+def test_read_ahead_thread_start_failure_does_not_publish_producer(monkeypatch):
+    src = MockByteSource([b"first", b"second", b"third"])
+    read_source = ReadAheadSource(src)
+    consumer = read_source.gen
+    assert next(consumer) == b"first"
+    start_error = RuntimeError("thread start failed")
+
+    def fail_start(self):
+        raise start_error
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+    try:
+        with pytest.raises(RuntimeError, match="thread start failed") as excinfo:
+            next(consumer)
+        assert excinfo.value is start_error
+        assert read_source._thread is None
+    finally:
+        read_source.close()
+    assert src.closed
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("chunks_consumed", [0, 1, 2])
 @pytest.mark.parametrize("cancel_close", [False, True])
