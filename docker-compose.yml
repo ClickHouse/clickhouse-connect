@@ -1,6 +1,7 @@
 services:
   clickhouse:
-    image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-25.8-alpine}'
+    # Keep the fallback aligned with default in .github/clickhouse-versions.json.
+    image: 'clickhouse/clickhouse-server:${CLICKHOUSE_CONNECT_TEST_CH_VERSION-26.3}'
     container_name: 'clickhouse-connect-clickhouse-server'
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: 1
@@ -17,9 +18,13 @@ services:
       - './.docker/clickhouse/single_node/docker_related_config.xml:/etc/clickhouse-server/config.d/docker_related_config.xml'
 
   clickhouse_tls:
+    # Recheck build arguments when switching server versions with a cached image.
+    pull_policy: build
     build:
       context: ./
       dockerfile: .docker/clickhouse/single_node_tls/Dockerfile
+      args:
+        CLICKHOUSE_VERSION: '${CLICKHOUSE_CONNECT_TEST_CH_VERSION-26.3}'
     container_name: 'clickhouse-connect-clickhouse-server-tls'
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: 1

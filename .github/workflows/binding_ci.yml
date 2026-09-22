@@ -23,6 +23,10 @@ on:
       - 'tests/unit_tests/test_sqlalchemy/**'
       - 'tests/unit_tests/test_streaming_source.py'
       - '.github/workflows/binding_ci.yml'
+      - '.github/workflows/clickhouse-versions.yml'
+      - '.github/clickhouse-versions.json'
+      - 'docker-compose.yml'
+      - '.docker/**'
       - '.github/scripts/qualify_core_wheel.py'
   push:
     branches:
@@ -46,10 +50,17 @@ on:
       - 'tests/unit_tests/test_sqlalchemy/**'
       - 'tests/unit_tests/test_streaming_source.py'
       - '.github/workflows/binding_ci.yml'
+      - '.github/workflows/clickhouse-versions.yml'
+      - '.github/clickhouse-versions.json'
+      - 'docker-compose.yml'
+      - '.docker/**'
       - '.github/scripts/qualify_core_wheel.py'
   workflow_dispatch:
 
 jobs:
+  clickhouse-versions:
+    uses: ./.github/workflows/clickhouse-versions.yml
+
   rust-checks:
     runs-on: ubuntu-latest
     name: Cargo fmt + clippy + tests
@@ -78,13 +89,13 @@ jobs:
   binding-build:
     runs-on: ubuntu-latest
     name: Build binding and run unit tests
-    needs: rust-checks
+    needs: [rust-checks, clickhouse-versions]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-      - name: Start ClickHouse (26.3) in Docker
+      - name: Start ClickHouse (${{ needs.clickhouse-versions.outputs.default }}) in Docker
         env:
-          CLICKHOUSE_CONNECT_TEST_CH_VERSION: '26.3'
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ needs.clickhouse-versions.outputs.default }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-binding-build
         run: docker compose -f docker-compose.yml up -d --wait clickhouse
       - name: Set up Python 3.12
@@ -139,12 +150,11 @@ jobs:
   binding-tests:
     runs-on: ubuntu-latest
     name: Rust codec integration tests CH=${{ matrix.clickhouse-version }}
-    needs: binding-build
+    needs: [binding-build, clickhouse-versions]
     strategy:
       fail-fast: false
       matrix:
-        # Keep the server matrix aligned with on_push.yml.
-        clickhouse-version: ['26.3', '26.6', '26.7', '26.8']
+        clickhouse-version: ${{ fromJSON(needs.clickhouse-versions.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -187,7 +197,7 @@ jobs:
   installed-contract:
     runs-on: ubuntu-latest
     name: Installed Rust contract (${{ matrix.profile }})
-    needs: binding-build
+    needs: [binding-build, clickhouse-versions]
     strategy:
       fail-fast: false
       matrix:
@@ -208,7 +218,7 @@ jobs:
       - uses: actions/checkout@v6
       - name: Start the oldest supported ClickHouse from the integration matrix
         env:
-          CLICKHOUSE_CONNECT_TEST_CH_VERSION: '26.3'
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ needs.clickhouse-versions.outputs.default }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-installed-contract
         run: docker compose -f docker-compose.yml up -d --wait clickhouse
       - uses: actions/setup-python@v6
