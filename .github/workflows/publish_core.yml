@@ -11,7 +11,7 @@ on:
       publish_type:
         description: Publish Type
         type: choice
-        default: test
+        default: build
         options:
           - test
           - release
@@ -21,6 +21,25 @@ env:
   MATURIN_MANIFEST: rust/ch-core-py/Cargo.toml
 
 jobs:
+  portable_driver_wheel:
+    name: Build portable driver for core qualification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+      - name: Build pure Python driver wheel
+        env:
+          CLICKHOUSE_CONNECT_SKIP_CYTHON: '1'
+        run: uv build --wheel --out-dir driver-wheelhouse
+      - uses: actions/upload-artifact@v7
+        with:
+          name: qualification-driver
+          path: driver-wheelhouse/*-py3-none-any.whl
+          if-no-files-found: error
+
   build_linux_wheels:
     name: Build ${{ matrix.libc }} wheels (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -37,16 +56,18 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
+          target: ${{ matrix.arch }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i 3.10 3.11 3.12 3.13 3.14
+          args: --release --locked -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i 3.10 3.11 3.12 3.13 3.14
       - uses: actions/upload-artifact@v7
         with:
           name: core-${{ matrix.libc }}-${{ matrix.arch }}
           path: wheelhouse/*.whl
+          if-no-files-found: error
 
   build_macos_wheels:
     name: Build macos universal2 wheels (py${{ matrix.python-version }})
-    runs-on: macos-14
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
@@ -61,11 +82,12 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: universal2-apple-darwin
-          args: --release -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python${{ matrix.python-version }}
+          args: --release --locked -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python${{ matrix.python-version }}
       - uses: actions/upload-artifact@v7
         with:
           name: core-macos-${{ matrix.python-version }}
           path: wheelhouse/*.whl
+          if-no-files-found: error
 
   build_windows_wheels:
     name: Build windows x64 wheels (py${{ matrix.python-version }})
@@ -83,11 +105,12 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          args: --release -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python
+          args: --release --locked -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python
       - uses: actions/upload-artifact@v7
         with:
           name: core-windows-${{ matrix.python-version }}
           path: wheelhouse/*.whl
+          if-no-files-found: error
 
   build_windows_arm64_wheels:
     name: Build windows arm64 wheels (py${{ matrix.python-version }})
@@ -108,11 +131,12 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          args: --release -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python
+          args: --release --locked -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python
       - uses: actions/upload-artifact@v7
         with:
           name: core-windows-arm64-${{ matrix.python-version }}
           path: wheelhouse/*.whl
+          if-no-files-found: error
 
   build_windows_arm64_310_wheel:
     name: Build windows arm64 wheel (py3.10 cross)
@@ -127,37 +151,160 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64-pc-windows-msvc
-          args: --release -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python3.10
+          args: --release --locked -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python3.10
       - uses: actions/upload-artifact@v7
         with:
           name: core-windows-arm64-3.10
           path: wheelhouse/*.whl
+          if-no-files-found: error
 
   build_sdist:
     name: Build sdist
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Check the locked dependency graph
+        run: cargo metadata --locked --manifest-path rust/ch-core-py/Cargo.toml --format-version 1 > /dev/null
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse
+      - name: Check the sdist did not update Cargo.lock
+        run: git diff --exit-code -- rust/Cargo.lock
       - uses: actions/upload-artifact@v7
         with:
           name: core-sdist
           path: wheelhouse/*.tar.gz
+          if-no-files-found: error
+
+  qualify_linux_wheels:
+    name: Qualify ${{ matrix.libc }} wheels (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: [build_linux_wheels, portable_driver_wheel]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, arch: x86_64, libc: manylinux, image: manylinux_2_28_x86_64 }
+          - { runner: ubuntu-latest, arch: x86_64, libc: musllinux, image: musllinux_1_2_x86_64 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, libc: manylinux, image: manylinux_2_28_aarch64 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, libc: musllinux, image: musllinux_1_2_aarch64 }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: core-${{ matrix.libc }}-${{ matrix.arch }}
+          path: core-wheelhouse
+      - uses: actions/download-artifact@v8
+        with:
+          name: qualification-driver
+          path: qualification-driver
+      - name: Run installed buffer and converter tests in the target libc
+        env:
+          QUALIFICATION_IMAGE: ${{ matrix.image }}
+          QUALIFICATION_LIBC: ${{ matrix.libc }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/core-qualification"
+          docker run --rm -e QUALIFICATION_LIBC \
+            -v "$GITHUB_WORKSPACE:/work:ro" -v "$RUNNER_TEMP/core-qualification:/results" \
+            "quay.io/pypa/$QUALIFICATION_IMAGE" bash -euc '
+              /opt/python/cp312-cp312/bin/python -m pip install --only-binary=:all: uv
+              status=0
+              for version in 310 311 312 313 314; do
+                arrow=()
+                source=()
+                if [ "$QUALIFICATION_LIBC" = musllinux ]; then
+                  source=(--allow-source-lz4)
+                fi
+                if [ "$QUALIFICATION_LIBC" = manylinux ] && [ "$version" = 312 ]; then
+                  arrow=(--arrow)
+                fi
+                /opt/python/cp$version-cp$version/bin/python /work/.github/scripts/qualify_core_wheel.py \
+                  --uv /opt/python/cp312-cp312/bin/uv \
+                  --core-wheels /work/core-wheelhouse --driver-wheel /work/qualification-driver/*.whl \
+                  --output /results/cp$version "${arrow[@]}" "${source[@]}" || status=1
+              done
+              exit "$status"
+            '
+      - name: Upload qualification records
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qualification-${{ matrix.libc }}-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/core-qualification/*.json
+            ${{ runner.temp }}/core-qualification/*.xml
+            ${{ runner.temp }}/core-qualification/cp*/*.json
+            ${{ runner.temp }}/core-qualification/cp*/*.xml
+          if-no-files-found: warn
+
+  qualify_native_wheels:
+    name: Qualify ${{ matrix.platform }} wheels (py${{ matrix.python-version }})
+    runs-on: ${{ matrix.runner }}
+    needs: [build_macos_wheels, build_windows_wheels, build_windows_arm64_wheels, portable_driver_wheel]
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        platform: [macos-arm64, macos-x64, windows-x64, windows-arm64]
+        include:
+          - { platform: macos-arm64, runner: macos-15, architecture: arm64, artifact: macos }
+          - { platform: macos-x64, runner: macos-15-intel, architecture: x64, artifact: macos }
+          - { platform: windows-x64, runner: windows-latest, architecture: x64, artifact: windows }
+          - { platform: windows-arm64, runner: windows-11-arm, architecture: arm64, artifact: windows-arm64 }
+        exclude:
+          # The cross-built CPython 3.10 ARM64 wheel has no native interpreter to test.
+          - { platform: windows-arm64, python-version: '3.10' }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          architecture: ${{ matrix.architecture }}
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: core-${{ matrix.artifact }}-${{ matrix.python-version }}
+          path: core-wheelhouse
+      - uses: actions/download-artifact@v8
+        with:
+          name: qualification-driver
+          path: qualification-driver
+      - name: Run installed buffer and converter tests
+        shell: bash
+        env:
+          QUALIFICATION_PLATFORM: ${{ matrix.platform }}
+          QUALIFICATION_PYTHON: ${{ matrix.python-version }}
+        run: |
+          arrow=()
+          if [ "$QUALIFICATION_PLATFORM" != windows-arm64 ] && [ "$QUALIFICATION_PYTHON" = 3.12 ]; then
+            arrow=(--arrow)
+          fi
+          python .github/scripts/qualify_core_wheel.py \
+            --core-wheels core-wheelhouse --driver-wheel qualification-driver/*.whl \
+            --output "$RUNNER_TEMP/core-qualification" "${arrow[@]}"
+      - name: Upload qualification records
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qualification-${{ matrix.platform }}-${{ matrix.python-version }}
+          path: |
+            ${{ runner.temp }}/core-qualification/*.json
+            ${{ runner.temp }}/core-qualification/*.xml
+            ${{ runner.temp }}/core-qualification/cp*/*.json
+            ${{ runner.temp }}/core-qualification/cp*/*.xml
+          if-no-files-found: warn
 
   smoke_test:
     name: Wheel smoke test against ClickHouse
     runs-on: ubuntu-latest
-    needs:
-      - build_linux_wheels
+    needs: [build_linux_wheels, portable_driver_wheel]
     steps:
       - uses: actions/checkout@v6
-      - name: Start ClickHouse (latest) in Docker
+      - name: Start ClickHouse (26.3) in Docker
         env:
-          CLICKHOUSE_CONNECT_TEST_CH_VERSION: latest
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: '26.3'
           COMPOSE_PROJECT_NAME: clickhouse-connect-core-smoke
         run: docker compose -f docker-compose.yml up -d --wait clickhouse
       - name: Set up Python 3.12
@@ -169,16 +316,29 @@ jobs:
         with:
           name: core-manylinux-x86_64
           path: wheelhouse
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: qualification-driver
+          path: qualification-driver
       - name: Install driver and core wheel
         run: |
-          python -m pip install --upgrade pip
-          pip install .
-          pip install wheelhouse/clickhouse_connect_core-*-cp312-*.whl
+          uv venv "$RUNNER_TEMP/core-smoke"
+          uv pip install --python "$RUNNER_TEMP/core-smoke/bin/python" \
+            qualification-driver/*.whl wheelhouse/clickhouse_connect_core-*-cp312-*.whl
       - name: Query and insert round trip on rust_strict
         run: |
-          python - <<'EOF'
+          cd "$RUNNER_TEMP"
+          unset PYTHONPATH
+          "$RUNNER_TEMP/core-smoke/bin/python" - <<'EOF'
+          import sys
+          from pathlib import Path
+
           import _ch_core
           import clickhouse_connect
+
+          for module in (_ch_core, clickhouse_connect):
+              assert Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
 
           print("_ch_core", _ch_core.__version__, "binding API", _ch_core.BINDING_API_VERSION)
           client = clickhouse_connect.get_client(host="localhost", native_codec="rust_strict")
@@ -203,6 +363,8 @@ jobs:
       - build_windows_arm64_310_wheel
       - build_sdist
       - smoke_test
+      - qualify_linux_wheels
+      - qualify_native_wheels
     name: Publish to TestPyPI
     runs-on: ubuntu-latest
     if: ${{ inputs.publish_type == 'test' }}
@@ -235,6 +397,8 @@ jobs:
       - build_windows_arm64_310_wheel
       - build_sdist
       - smoke_test
+      - qualify_linux_wheels
+      - qualify_native_wheels
     name: Publish to PyPI
     runs-on: ubuntu-latest
     if: ${{ inputs.publish_type == 'release' }}

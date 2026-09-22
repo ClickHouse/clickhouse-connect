@@ -6,11 +6,13 @@ import time
 import weakref
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver import rustnumpy
 from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     DataError,
@@ -19,7 +21,7 @@ from clickhouse_connect.driver.exceptions import (
     StreamFailureError,
 )
 from clickhouse_connect.driver.insert import InsertContext
-from tests.integration_tests.conftest import supports_multi_point, type_available
+from tests.integration_tests.conftest import nullable_tuple_settings, supports_multi_point, type_available
 
 pytest.importorskip("_ch_core")
 
@@ -315,12 +317,7 @@ def test_rust_codec_nullable_empty_tuple(client_factory, call, client_mode, test
     if test_config.cloud:
         pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
     client = client_factory(native_codec="rust_strict")
-    setting = call(
-        client.query,
-        "SELECT name FROM system.settings WHERE name = 'allow_experimental_nullable_tuple_type'",
-    ).first_row
-    if setting is None:
-        pytest.skip("Server does not support Nullable(Tuple(...))")
+    settings = nullable_tuple_settings(client)
 
     table = f"rc_nullable_empty_tuple_{client_mode}"
     try:
@@ -328,7 +325,7 @@ def test_rust_codec_nullable_empty_tuple(client_factory, call, client_mode, test
         call(
             client.command,
             f"CREATE TABLE {table} (value Nullable(Tuple()), sentinel UInt8) ENGINE Memory",
-            settings={"allow_experimental_nullable_tuple_type": 1},
+            settings=settings,
         )
         call(client.insert, table, [[None, 13], [(), 79], [None, 80]])
         assert call(client.query, f"SELECT * FROM {table} ORDER BY sentinel").result_rows == [
@@ -1034,6 +1031,31 @@ def test_rust_codec_streaming_parity(client_factory, call, consume_stream):
     assert rust_totals == (5000, 5000)
 
 
+@pytest.mark.parametrize("client_mode", ["sync"], indirect=True)
+@pytest.mark.parametrize(
+    "method",
+    ["query_rows_stream", "query_row_block_stream", "query_column_block_stream", "query_np_stream", "query_df_stream"],
+)
+def test_rust_codec_sync_early_close_releases_session(client_factory, call, method):
+    """The sync transport drains the HTTP response before the same session can run another query."""
+    if method in ("query_np_stream", "query_df_stream"):
+        pytest.importorskip("numpy")
+    if method == "query_df_stream":
+        pytest.importorskip("pandas")
+    client = client_factory(native_codec="rust_strict", compress=False)
+    assert client.get_client_setting("session_id")
+    query = "SELECT number, repeat('x', 512) AS s, sleepEachRow(0.00001) AS pause FROM numbers(100000)"
+    stream = call(getattr(client, method), query, settings={"max_block_size": 1024, "max_threads": 1})
+    source = stream.source.source
+    with stream:
+        for _ in stream:
+            if source._thread is not None:
+                break
+    assert source._thread is not None
+    assert not source._thread.is_alive()
+    assert call(client.query, "SELECT 13").first_row == (13,)
+
+
 def test_rust_codec_numeric_column_blocks_keep_typed_arrays(client_factory, call, consume_stream):
     rust_client = client_factory(native_codec="rust_strict")
     python_client = client_factory(native_codec="python")
@@ -1201,7 +1223,7 @@ def test_rust_codec_nullable_tuple_decode(client_factory, call):
     # reference here rather than a parity target.
     client = client_factory(native_codec="rust_strict")
     query = "SELECT if(number % 2 = 0, CAST((number, 'x'), 'Nullable(Tuple(UInt64, String))'), NULL) AS t FROM numbers(4)"
-    result = call(client.query, query, settings={"enable_nullable_tuple_type": 1})
+    result = call(client.query, query, settings=nullable_tuple_settings(client))
     assert result.result_rows == [((0, "x"),), (None,), ((2, "x"),), (None,)]
 
 
@@ -1210,7 +1232,7 @@ def test_rust_codec_nullable_tuple_aggregate_function_decode(client_factory, cal
     # so boundary recovery must stay correct across the masked rows.
     client = client_factory(native_codec="rust_strict")
     query = "SELECT if(number % 2 = 0, tuple(initializeAggregation('countState', number)), NULL) AS t FROM numbers(4)"
-    result = call(client.query, query, settings={"enable_nullable_tuple_type": 1})
+    result = call(client.query, query, settings=nullable_tuple_settings(client))
     assert result.result_rows == [((b"\x01",),), (None,), ((b"\x01",),), (None,)]
 
 
@@ -1555,6 +1577,275 @@ def test_rust_codec_empty_df_parity(client_factory, call):
     pd.testing.assert_frame_equal(call(rust_client.query_df, query), call(python_client.query_df, query))
 
 
+@pytest.mark.parametrize("mixed", [False, True], ids=["homogeneous", "mixed"])
+def test_rust_codec_buffer_numeric_results(client_factory, call, consume_stream, mixed):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    extra = ", CAST(number % 3 AS Bool) AS b, toDate(number) AS d, toString(number) AS s" if mixed else ", toInt32(number) AS n"
+    query = f"SELECT toInt32(toInt64(number) - 13) AS i{extra} FROM numbers(79)"
+    settings = {"max_block_size": 7}
+
+    rust_np = call(rust_client.query_np, query, settings=settings)
+    python_np = call(python_client.query_np, query, settings=settings)
+    assert rust_np.dtype == python_np.dtype
+    np.testing.assert_array_equal(rust_np, python_np)
+    assert rust_np.flags.writeable
+    if mixed:
+        rust_np["i"][0] = 79
+    else:
+        rust_np[0, 0] = 79
+    for extended in (False, True):
+        rust_df = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+        python_df = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+        pd.testing.assert_frame_equal(rust_df, python_df)
+        assert [getattr(dtype, "byteorder", None) for dtype in rust_df.dtypes] == [
+            getattr(dtype, "byteorder", None) for dtype in python_df.dtypes
+        ]
+        rust_df.iloc[0, 0] = 79
+
+    numpy_blocks = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), numpy_blocks.append)
+    assert len(numpy_blocks) > 1
+    np.testing.assert_array_equal(np.concatenate(numpy_blocks), python_np)
+    assert all(block.flags.writeable for block in numpy_blocks)
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=True), frames.append)
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), python_df)
+    for frame in frames:
+        frame.iloc[0, 0] = 79
+
+
+@pytest.mark.parametrize("extended", [False, True])
+def test_rust_codec_buffer_nullable_numeric_results(client_factory, call, consume_stream, extended):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    query = """
+        SELECT
+            CAST(if(number % 3 = 0, NULL, toUInt64(18446744073709551615) - number) AS Nullable(UInt64)) AS u,
+            CAST(if(number % 3 = 0, NULL, toInt32(number) - 13) AS Nullable(Int32)) AS i,
+            CAST(if(number % 3 = 0, NULL, number / 4.0) AS Nullable(Float32)) AS f,
+            CAST(if(number % 3 = 0, NULL, number % 2) AS Nullable(Bool)) AS b,
+            [toInt32(number)] AS a
+        FROM numbers(79)
+    """
+    settings = {"max_block_size": 7}
+    rust_df = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    python_df = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    pd.testing.assert_frame_equal(rust_df, python_df)
+    if extended:
+        assert rust_df["u"].iloc[1] == 18446744073709551614
+        assert str(rust_df["u"].dtype) == "UInt64"
+        assert rust_df["f"].dtype == np.dtype("float64")
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=extended), frames.append)
+    assert len(frames) > 1
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), python_df)
+    for frame in [rust_df, *frames]:
+        frame.iloc[0, 0] = 79
+        frame.iloc[0, 2] = 13.5
+        frame.iloc[0, 3] = True
+
+    rust_np = call(rust_client.query_np, query, settings=settings)
+    python_np = call(python_client.query_np, query, settings=settings)
+    assert rust_np.dtype == python_np.dtype
+    numpy_blocks = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), numpy_blocks.append)
+    assert len(numpy_blocks) > 1
+    for output in (rust_np, np.concatenate(numpy_blocks)):
+        assert output.shape == python_np.shape == (79, 5)
+        for index in range(5):
+            if index == 2:
+                np.testing.assert_array_equal(output[:, index].astype("float64"), python_np[:, index].astype("float64"))
+            else:
+                np.testing.assert_array_equal(output[:, index], python_np[:, index])
+    for block in [rust_np, *numpy_blocks]:
+        assert block.flags.writeable
+        block[0, 0] = 79
+
+
+@pytest.mark.parametrize("family", ["bfloat16", "interval"])
+@pytest.mark.parametrize("extended", [False, True])
+def test_rust_codec_buffer_bfloat16_interval_results(client_factory, call, consume_stream, family, extended):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    if family == "bfloat16":
+        if not python_client.min_version("24.11"):
+            pytest.skip("BFloat16 requires ClickHouse 24.11+")
+        projection = (
+            "CAST(multiIf(number = 0, -0.0, number = 1, nan, number / 4) AS BFloat16) AS bf, "
+            "CAST(multiIf(number % 3 = 0, NULL, number = 1, nan, number / 4) AS Nullable(BFloat16)) AS nbf"
+        )
+    else:
+        units = ["Nanosecond", "Microsecond", "Millisecond", "Second", "Minute", "Hour", "Day", "Week", "Month", "Quarter", "Year"]
+        projection = ", ".join(
+            f"toInterval{unit}(toInt64(number) - 39) AS i{index}, "
+            f"toInterval{unit}(if(number % 3 = 0, NULL, toInt64(number) - 39)) AS n{index}"
+            for index, unit in enumerate(units)
+        )
+    query = f"SELECT {projection} FROM numbers(79)"
+    settings = {"max_block_size": 7}
+    rust_np = call(rust_client.query_np, query, settings=settings)
+    python_np = call(python_client.query_np, query, settings=settings)
+    assert rust_np.dtype == python_np.dtype
+    np.testing.assert_array_equal(rust_np, python_np)
+    arrays = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), arrays.append)
+    assert len(arrays) > 1
+    np.testing.assert_array_equal(np.concatenate(arrays), python_np)
+    for output in [rust_np, *arrays]:
+        assert output.flags.writeable
+        if output.dtype.names:
+            output[output.dtype.names[0]][0] = 13
+        else:
+            output[0, 0] = 13
+
+    rust_df = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    python_df = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    pd.testing.assert_frame_equal(rust_df, python_df)
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=extended), frames.append)
+    assert len(frames) > 1
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), python_df)
+    if family == "bfloat16":
+        assert rust_df["bf"].dtype == np.dtype("float32")
+        assert rust_df["nbf"].dtype == (pd.Float32Dtype() if extended else np.dtype("float32"))
+        assert pd.isna(rust_df["nbf"].iloc[0]) and pd.isna(rust_df["nbf"].iloc[1])
+    else:
+        assert all(rust_df[f"i{index}"].dtype == np.dtype("int64") for index in range(11))
+        if extended:
+            assert all(rust_df[f"n{index}"].dtype == pd.Int64Dtype() for index in range(11))
+    for frame in [rust_df, *frames]:
+        frame.iloc[0, 0] = 13
+        frame.iloc[0, 1] = 79
+
+
+@pytest.mark.parametrize("family", ["calendar", "duration"])
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("block_size", [7, 79])
+def test_rust_codec_buffer_temporal_results(client_factory, call, consume_stream, test_config, family, extended, block_size):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    python_client = client_factory(native_codec="python")
+    settings = {"max_block_size": block_size}
+    if family == "duration":
+        if test_config.cloud:
+            pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
+        if not python_client.min_version("25.6"):
+            pytest.skip("Time and Time64 require ClickHouse 25.6+")
+        settings["enable_time_time64_type"] = 1
+        expressions = ["CAST(toInt32(number) * 3000 - 90000 AS Time)"]
+        expressions.extend(
+            f"CAST(concat(if(number % 2 = 0, '-', ''), '000:00:13.', leftPad(toString(number * 1234567 + 13), 9, '0')) AS Time64({scale}))"
+            for scale in (0, 3, 6, 9)
+        )
+        projection = ", ".join(
+            f"{expression} AS v{index}, if(number % 3 = 0, NULL, {expression}) AS n{index}" for index, expression in enumerate(expressions)
+        )
+    else:
+        projection = ", ".join(
+            ["toDate(number) AS d", "toDate32('1969-12-31') + toIntervalDay(number) AS d32", "toDateTime(number) AS dt"]
+            + [f"toDateTime64(toInt64(number) - 39, {scale}, 'UTC') AS dt{scale}" for scale in (0, 3, 6, 9)]
+            + ["fromUnixTimestamp64Nano(toInt64(number) - 39, 'America/New_York') AS tz"]
+        )
+    rust_client = client_factory(native_codec="rust_strict")
+    query = f"SELECT {projection} FROM numbers(79)"
+    rust_np = call(rust_client.query_np, query, settings=settings)
+    python_np = call(python_client.query_np, query, settings=settings)
+    assert rust_np.dtype == python_np.dtype
+    np.testing.assert_array_equal(rust_np, python_np)
+    arrays = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), arrays.append)
+    assert len(arrays) > 1 if block_size == 7 else len(arrays) == 1
+    np.testing.assert_array_equal(np.concatenate(arrays), python_np)
+    rust_df = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    python_df = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    pd.testing.assert_frame_equal(rust_df, python_df)
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=extended), frames.append)
+    assert len(frames) > 1 if block_size == 7 else len(frames) == 1
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), python_df)
+    for output in [rust_np, *arrays]:
+        assert output.flags.writeable
+        if output.dtype.names:
+            output[output.dtype.names[0]][0] = output[output.dtype.names[0]][-1]
+        else:
+            output[0, 0] = output[-1, 0]
+    for frame in [rust_df, *frames]:
+        for index in range(len(frame.columns)):
+            frame.iloc[0, index] = frame.iloc[-1, index]
+    empty_query = f"SELECT {projection} FROM numbers(0)"
+    np.testing.assert_array_equal(
+        call(rust_client.query_np, empty_query, settings=settings), call(python_client.query_np, empty_query, settings=settings)
+    )
+    pd.testing.assert_frame_equal(
+        call(rust_client.query_df, empty_query, settings=settings, use_extended_dtypes=extended),
+        call(python_client.query_df, empty_query, settings=settings, use_extended_dtypes=extended),
+    )
+
+
+def test_rust_codec_buffer_nullable_alias_results(client_factory, call):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    query = """
+        SELECT
+            CAST(if(number % 3 = 0, NULL, toInt32(number) - 13) AS Nullable(SimpleAggregateFunction(anyLast, Int32))) AS i,
+            CAST(if(number % 3 = 0, NULL, number % 2 = 0) AS Nullable(SimpleAggregateFunction(anyLast, Bool))) AS b,
+            CAST(if(number % 3 = 0, NULL, number / 4) AS Nullable(SimpleAggregateFunction(anyLast, Float32))) AS f
+        FROM numbers(20)
+    """
+    expected_i = np.array([np.nan if n % 3 == 0 else n - 13 for n in range(20)], dtype="float64")
+    expected_b = [None if n % 3 == 0 else n % 2 == 0 for n in range(20)]
+    expected_f = np.array([np.nan if n % 3 == 0 else n / 4 for n in range(20)], dtype="float32")
+    result = call(rust_client.query_np, query)
+    assert result.dtype == np.dtype([("i", "float64"), ("b", "object"), ("f", "float32")])
+    np.testing.assert_array_equal(result["i"], expected_i)
+    assert list(result["b"]) == expected_b
+    np.testing.assert_array_equal(result["f"], expected_f)
+    frame = call(rust_client.query_df, query)
+    assert frame["i"].dtype == np.dtype("float64") and frame["f"].dtype == np.dtype("float32")
+    np.testing.assert_array_equal(frame["i"].to_numpy(), expected_i)
+    assert list(frame["b"]) == expected_b
+    np.testing.assert_array_equal(frame["f"].to_numpy(), expected_f)
+    frame.iloc[0, 0] = 79
+
+
+def test_rust_codec_buffer_nullable_time_alias_results(client_factory, call, test_config):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    if test_config.cloud:
+        pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
+    python_client = client_factory(native_codec="python")
+    if not python_client.min_version("25.6"):
+        pytest.skip("Time and Time64 require ClickHouse 25.6+")
+    settings = {"enable_time_time64_type": 1}
+    rust_client = client_factory(native_codec="rust_strict")
+    query = """
+        SELECT
+            CAST(if(number % 3 = 0, NULL, toInt64(number) - 39) AS Nullable(SimpleAggregateFunction(anyLast, Time64(9)))) AS t9,
+            CAST(if(number % 3 = 0, NULL, toInt32(number) - 13) AS Nullable(SimpleAggregateFunction(anyLast, Time))) AS t
+        FROM numbers(20)
+    """
+    expected_t9 = np.array([None if n % 3 == 0 else n - 39 for n in range(20)], dtype="timedelta64[s]").astype("timedelta64[ns]")
+    expected_t = np.array([None if n % 3 == 0 else n - 13 for n in range(20)], dtype="timedelta64[s]")
+    result = call(rust_client.query_np, query, settings=settings)
+    assert result.dtype == np.dtype([("t9", "timedelta64[ns]"), ("t", "timedelta64[s]")])
+    np.testing.assert_array_equal(result["t9"], expected_t9)
+    np.testing.assert_array_equal(result["t"], expected_t)
+    for extended in (False, True):
+        frame = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+        python_frame = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+        pd.testing.assert_series_equal(frame["t9"], python_frame["t9"])
+        np.testing.assert_array_equal(frame["t"].to_numpy(), expected_t)
+        frame.iloc[0, 0] = pd.Timedelta(13, "ns")
+
+
 def test_rust_codec_dt64_unsupported_precision_parity(client_factory, call):
     pytest.importorskip("pandas")
     rust_client = client_factory(native_codec="rust_strict")
@@ -1564,6 +1855,162 @@ def test_rust_codec_dt64_unsupported_precision_parity(client_factory, call):
         call(rust_client.query_df, query)
     with pytest.raises(ProgrammingError):
         call(python_client.query_df, query)
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("block_size", [1, 79])
+def test_rust_codec_nullable_datetime64_nanoseconds(client_factory, call, consume_stream, extended, block_size):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    expressions = []
+    expected = {}
+    ticks = [None if number % 3 == 0 else (number - 7) * 1000000000 + 123456789 for number in range(13)]
+    wrappers = [
+        "Nullable({})",
+        "SimpleAggregateFunction(anyLast, Nullable({}))",
+        "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({})))",
+        "SimpleAggregateFunction(anyLast, Nullable(SimpleAggregateFunction(anyLast, {})))",
+    ]
+    for timezone_name in ["UTC", "America/New_York"]:
+        values = pd.DatetimeIndex(np.array(ticks, dtype="datetime64[ns]"))
+        if timezone_name != "UTC":
+            values = values.tz_localize("UTC").tz_convert(ZoneInfo(timezone_name))
+        for wrapper in wrappers:
+            name = f"c{len(expressions)}"
+            declared = wrapper.format(f"DateTime64(9, '{timezone_name}')")
+            expressions.append(
+                f"CAST(if(number % 3 = 0, NULL, fromUnixTimestamp64Nano((toInt64(number) - 7) * 1000000000 + 123456789, "
+                f"'{timezone_name}')) AS {declared}) AS {name}"
+            )
+            expected[name] = values
+    query = f"SELECT {', '.join(expressions)} FROM numbers(13)"
+    kwargs = {"settings": {"max_block_size": block_size}, "use_extended_dtypes": extended}
+    expected_frame = pd.DataFrame(expected)
+    frame = call(rust_client.query_df, query, **kwargs)
+    python_frame = call(python_client.query_df, query, **kwargs)
+    for index, name in enumerate(frame):
+        object_blocks = block_size == 1 and (not extended or index % len(wrappers) >= 2 or index >= len(wrappers))
+        assert frame[name].dtype == (np.dtype(object) if object_blocks else expected_frame[name].dtype)
+        pd.testing.assert_index_equal(pd.DatetimeIndex(frame[name]), pd.DatetimeIndex(expected_frame[name]))
+        pd.testing.assert_index_equal(pd.DatetimeIndex(python_frame[name]), pd.DatetimeIndex(expected_frame[name]))
+        if object_blocks:
+            for tick, value in zip(ticks, frame[name]):
+                if tick is not None:
+                    assert isinstance(value, pd.Timestamp)
+                    assert value.value == tick
+                    assert value.tzinfo == (None if index < len(wrappers) else ZoneInfo("America/New_York"))
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, **kwargs), frames.append)
+    assert len(frames) > 1 if block_size == 1 else len(frames) == 1
+    if block_size == 1:
+        # pandas 2 concat ignores the dtype of all-NA pieces, so compare each piece with its buffered rows.
+        offset = 0
+        for piece in frames:
+            rows = frame.iloc[offset : offset + len(piece)]
+            for name in frame:
+                pd.testing.assert_index_equal(
+                    pd.DatetimeIndex(piece[name]).as_unit("ns"), pd.DatetimeIndex(rows[name]).as_unit("ns"), check_names=False
+                )
+            offset += len(piece)
+        assert offset == len(frame)
+    else:
+        pd.testing.assert_frame_equal(frames[0], frame)
+    for output in [frame, *frames]:
+        for index in range(len(output.columns)):
+            value = expected_frame.iloc[1, index]
+            if output.iloc[:, index].dtype == np.dtype("datetime64[ns]") and value.tzinfo is not None:
+                value = value.tz_convert("UTC").tz_localize(None)
+            output.iloc[0, index] = value
+
+
+@pytest.mark.parametrize("scale", [1, 8])
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "Nullable({})",
+        "SimpleAggregateFunction(anyLast, Nullable({}))",
+        "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({})))",
+        "SimpleAggregateFunction(anyLast, Nullable(SimpleAggregateFunction(anyLast, {})))",
+    ],
+)
+def test_rust_codec_nullable_datetime64_unsupported_precision(client_factory, call, scale, wrapper):
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    declared = wrapper.format(f"DateTime64({scale})")
+    query = f"SELECT CAST(if(number = 1, NULL, toDateTime64(number, {scale})) AS {declared}) AS c FROM numbers(3)"
+    for codec in ["python", "rust_strict"]:
+        client = client_factory(native_codec=codec)
+        for method in [client.query_np, client.query_df]:
+            with pytest.raises(ProgrammingError, match="Cannot use .* as a numpy or Pandas datatype"):
+                call(method, query)
+
+
+def test_rust_codec_nullable_datetime64_timezone_range(client_factory, call, consume_stream):
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    query = """
+        SELECT CAST(if(number = 1, NULL, fromUnixTimestamp64Nano(9223360000000000000, 'Asia/Kathmandu'))
+                    AS Nullable(DateTime64(9, 'Asia/Kathmandu'))) AS c0
+        FROM numbers(2)
+    """
+    expected_value = datetime(2262, 4, 12, 2, 11, 40, tzinfo=ZoneInfo("Asia/Kathmandu"))
+    expected = pd.DataFrame({"c0": [expected_value, None]})
+    frame = call(rust_client.query_df, query, use_extended_dtypes=False)
+    pd.testing.assert_frame_equal(frame, expected)
+    assert frame.c0.iloc[0] == expected_value
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, use_extended_dtypes=False), frames.append)
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), expected)
+    for output in [frame, *frames]:
+        output.iloc[0, 0] = expected_value
+
+
+@pytest.mark.parametrize("block_size", [1, 79])
+@pytest.mark.parametrize("nulls", ["none", "some", "all"])
+def test_rust_codec_nullable_datetime64_numpy_nanoseconds(client_factory, call, consume_stream, block_size, nulls):
+    np = pytest.importorskip("numpy")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    wrappers = [
+        "Nullable({})",
+        "SimpleAggregateFunction(anyLast, Nullable({}))",
+        "SimpleAggregateFunction(anyLast, SimpleAggregateFunction(anyLast, Nullable({})))",
+        "SimpleAggregateFunction(anyLast, Nullable(SimpleAggregateFunction(anyLast, {})))",
+    ]
+    expressions = []
+    for timezone_name in ["UTC", "America/New_York"]:
+        for wrapper in wrappers:
+            declared = wrapper.format(f"DateTime64(9, '{timezone_name}')")
+            value = f"fromUnixTimestamp64Nano((toInt64(number) - 7) * 1000000000 + 123456789, '{timezone_name}')"
+            if nulls == "all":
+                value = "NULL"
+            elif nulls == "some":
+                value = f"if(number % 3 = 0, NULL, {value})"
+            expressions.append(f"CAST({value} AS {declared}) AS c{len(expressions)}")
+    query = f"SELECT {', '.join(expressions)} FROM numbers(13)"
+    kwargs = {"settings": {"max_block_size": block_size}}
+    output = call(rust_client.query_np, query, **kwargs)
+    python_output = call(python_client.query_np, query, **kwargs)
+    assert output.shape == (13, len(expressions))
+    assert output.dtype == np.dtype(object)
+    np.testing.assert_array_equal(output, python_output)
+    for number, row in enumerate(output):
+        for value in row:
+            if nulls == "all" or nulls == "some" and number % 3 == 0:
+                assert value is None
+            else:
+                assert type(value) is np.datetime64
+                assert value.dtype == np.dtype("datetime64[ns]")
+                assert value.astype("int64") == (number - 7) * 1000000000 + 123456789
+    pieces = []
+    consume_stream(call(rust_client.query_np_stream, query, **kwargs), pieces.append)
+    assert len(pieces) > 1 if block_size == 1 else len(pieces) == 1
+    np.testing.assert_array_equal(np.concatenate(pieces), output)
+    for block in [output, *pieces]:
+        assert block.flags.writeable
+        block[0, 0] = np.datetime64(13, "ns")
 
 
 def test_rust_codec_uuid_df_parity(client_factory, call):
@@ -1916,13 +2363,14 @@ def test_rust_codec_nullable_tuple_insert(client_factory, call, client_mode):
     # the reference. Requires the true type name to reach the encoder because
     # Tuple.insert_name drops the Nullable wrapper.
     client = client_factory(native_codec="rust_strict")
+    settings = nullable_tuple_settings(client)
     table = f"rc_ins_ntup_{client_mode}"
     call(client.command, f"DROP TABLE IF EXISTS {table}")
     try:
         call(
             client.command,
             f"CREATE TABLE {table} (id UInt32, t Nullable(Tuple(a Int64, b String))) ENGINE Memory",
-            settings={"enable_nullable_tuple_type": 1},
+            settings=settings,
         )
         call(client.insert, table, [[0, (1, "x")], [1, None], [2, (3, "z")]], column_names=["id", "t"])
         result = call(client.query, f"SELECT * FROM {table} ORDER BY id")
@@ -2271,3 +2719,128 @@ def test_rust_codec_sqlalchemy_dialect_metadata(test_config, codec):
                 conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("family", ["array", "dictionary"])
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("block_size", [7, 79])
+def test_rust_codec_buffer_container_time_results(
+    client_factory, call, consume_stream, test_config, monkeypatch, family, extended, block_size
+):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    if test_config.cloud:
+        pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
+    python_client = client_factory(native_codec="python")
+    if not python_client.min_version("25.6"):
+        pytest.skip("Time and Time64 require ClickHouse 25.6+")
+    rust_client = client_factory(native_codec="rust_strict")
+    settings = {"enable_time_time64_type": 1, "max_block_size": block_size}
+    if family == "array":
+        expressions = ["arrayMap(x -> CAST(toInt32(x) - 13 AS Time), range(number % 4)) AS t"]
+        expressions.extend(
+            f"arrayMap(x -> CAST(toInt64(x) - 13 AS Time64({scale})), range(number % 4)) AS t{scale}" for scale in (0, 3, 6, 9)
+        )
+        expressions.append(
+            "[CAST([], 'Array(Nullable(Time64(9)))'), "
+            "arrayMap(x -> CAST(if(x % 2 = 0, NULL, toInt64(x) - 13) AS Nullable(Time64(9))), range(number % 4))] AS nested"
+        )
+    else:
+        settings["allow_suspicious_low_cardinality_types"] = 1
+        expressions = [
+            "CAST(toInt32(number % 3) - 1 AS LowCardinality(Time)) AS t",
+            "CAST(if(number % 3 = 0, NULL, toInt32(number % 5) - 2) AS LowCardinality(Nullable(Time))) AS nullable",
+        ]
+    projection = ", ".join(["toInt32(number) AS i", *expressions, "CAST('raw' AS FixedString(3)) AS s"])
+    query = f"SELECT {projection} FROM numbers(79)"
+
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    rust_np = call(rust_client.query_np, query, settings=settings)
+    python_np = call(python_client.query_np, query, settings=settings)
+    assert rust_np.shape == python_np.shape == (79,)
+    assert rust_np.dtype == python_np.dtype
+    np.testing.assert_array_equal(rust_np, python_np)
+    arrays = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), arrays.append)
+    assert len(arrays) > 1 if block_size == 7 else len(arrays) == 1
+    np.testing.assert_array_equal(np.concatenate(arrays), python_np)
+    rust_df = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    python_df = call(python_client.query_df, query, settings=settings, use_extended_dtypes=extended)
+    if family == "dictionary" and not extended and int(pd.__version__.split(".", 1)[0]) < 3:
+        # Rust keeps timedelta64[s] here while the Python codec's object list infers ns on pandas < 3.
+        python_df["nullable"] = python_df["nullable"].astype("timedelta64[s]")
+    pd.testing.assert_frame_equal(rust_df, python_df)
+    frames = []
+    consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=extended), frames.append)
+    assert len(frames) > 1 if block_size == 7 else len(frames) == 1
+    pd.testing.assert_frame_equal(pd.concat(frames, ignore_index=True), python_df)
+    gc.collect()
+    for output in [rust_np, *arrays]:
+        assert output.flags.writeable
+        output[0] = output[-1]
+    for frame in [rust_df, *frames]:
+        for index in range(len(frame.columns)):
+            frame.iat[0, index] = frame.iat[-1, index]
+    empty_query = f"SELECT {projection} FROM numbers(0)"
+    np.testing.assert_array_equal(
+        call(rust_client.query_np, empty_query, settings=settings), call(python_client.query_np, empty_query, settings=settings)
+    )
+    pd.testing.assert_frame_equal(
+        call(rust_client.query_df, empty_query, settings=settings, use_extended_dtypes=extended),
+        call(python_client.query_df, empty_query, settings=settings, use_extended_dtypes=extended),
+    )
+
+
+@pytest.mark.parametrize("block_size", [1, 79])
+def test_rust_codec_numpy_without_arrow(client_factory, call, consume_stream, monkeypatch, block_size):
+    np = pytest.importorskip("numpy")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    query = (
+        "SELECT number AS n, toFloat32(number / 2) AS f, "
+        "if(number % 3 = 0, unhex('ff'), toString(number)) AS s, "
+        "tuple(toInt32(number), toString(number)) AS t FROM numbers(13)"
+    )
+    settings = {"max_block_size": block_size}
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    monkeypatch.setattr(rustnumpy.options, "pd", None)
+    expected = call(python_client.query_np, query, settings=settings)
+    result = call(rust_client.query_np, query, settings=settings)
+    assert result.dtype == expected.dtype
+    np.testing.assert_array_equal(result, expected)
+    context_result = call(rust_client.query, query, use_numpy=True, settings=settings)
+    np.testing.assert_array_equal(context_result.np_result, expected)
+    chunks = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), chunks.append)
+    np.testing.assert_array_equal(np.concatenate(chunks), expected)
+    assert len(chunks) > 1 if block_size == 1 else len(chunks) == 1
+
+
+@pytest.mark.parametrize("storage", ["python", "pyarrow"])
+@pytest.mark.parametrize("block_size", [1, 79])
+def test_rust_codec_pandas_selected_string_storage(client_factory, call, consume_stream, monkeypatch, storage, block_size):
+    pd = pytest.importorskip("pandas")
+    if storage == "pyarrow":
+        pytest.importorskip("pyarrow")
+    else:
+        monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    query = (
+        "SELECT number AS n, if(number % 3 = 0, unhex('ff'), if(number % 3 = 1, '', '\u00e9')) AS s, "
+        "CAST(if(number % 3 = 0, NULL, toString(number)) AS Nullable(String)) AS nullable, "
+        "[toInt32(number), toInt32(number) + 1] AS items FROM numbers(13)"
+    )
+    settings = {"max_block_size": block_size}
+    with pd.option_context("mode.string_storage", storage):
+        expected = call(python_client.query_df, query, settings=settings, use_extended_dtypes=True)
+        result = call(rust_client.query_df, query, settings=settings, use_extended_dtypes=True)
+        pd.testing.assert_frame_equal(result, expected)
+        assert result["s"].dtype.storage == storage
+        assert result["nullable"].dtype.storage == storage
+        chunks = []
+        consume_stream(call(rust_client.query_df_stream, query, settings=settings, use_extended_dtypes=True), chunks.append)
+        pd.testing.assert_frame_equal(pd.concat(chunks, ignore_index=True), expected)
+        assert len(chunks) > 1 if block_size == 1 else len(chunks) == 1
+        empty = call(rust_client.query_df, query.replace("numbers(13)", "numbers(0)"), use_extended_dtypes=True)
+        assert empty.empty

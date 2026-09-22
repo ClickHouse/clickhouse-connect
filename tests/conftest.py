@@ -8,7 +8,8 @@ from clickhouse_connect.datatypes.format import clear_all_formats
 from clickhouse_connect.driver import tzutil
 
 os.environ["TZ"] = "UTC"
-time.tzset()
+if hasattr(time, "tzset"):
+    time.tzset()
 
 
 @pytest.fixture(autouse=True)

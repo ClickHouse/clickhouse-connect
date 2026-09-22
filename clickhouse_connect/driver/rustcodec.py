@@ -10,7 +10,6 @@ from clickhouse_connect.datatypes.network import IPv4
 from clickhouse_connect.datatypes.special import UUID, SimpleAggregateFunction
 from clickhouse_connect.datatypes.string import FixedString, String
 from clickhouse_connect.datatypes.temporal import Date, DateTimeBase
-from clickhouse_connect.driver import options
 from clickhouse_connect.driver.compression import get_compressor
 from clickhouse_connect.driver.exceptions import (
     DataError,
@@ -45,8 +44,10 @@ logger: logging.Logger = logging.getLogger(__name__)
 NativeCodec = Literal["python", "rust", "rust_strict"]
 
 _VALID_CODECS = ("python", "rust", "rust_strict")
+_FEED_SLICE_BYTES = 1 << 20
 
 REQUIRED_BINDING_API_VERSION = 3
+REQUIRED_COLUMN_BUFFER_API_VERSION = 1
 
 _versions_logged = False
 
@@ -66,10 +67,11 @@ def _log_versions_once(resolved: str, core: Any) -> None:
         return
     _versions_logged = True
     logger.info(
-        "native_codec=%s using clickhouse-connect-core %s (binding API %s), clickhouse-connect %s",
+        "native_codec=%s using clickhouse-connect-core %s (binding API %s, column buffer API %s), clickhouse-connect %s",
         resolved,
         getattr(core, "__version__", "unknown"),
         getattr(core, "BINDING_API_VERSION", 0),
+        getattr(core, "COLUMN_BUFFER_API_VERSION", 0),
         common.version(),
     )
 
@@ -98,6 +100,13 @@ def resolve_native_codec(native_codec: str | None) -> str:
             f"binding API {api_version}, but this version of clickhouse-connect requires binding API "
             f"{REQUIRED_BINDING_API_VERSION} or newer. Upgrade it with pip install --upgrade clickhouse-connect-core."
         )
+    buffer_api_version = getattr(core, "COLUMN_BUFFER_API_VERSION", 0)
+    if buffer_api_version < REQUIRED_COLUMN_BUFFER_API_VERSION:
+        raise NotSupportedError(
+            f"The installed clickhouse-connect-core version {getattr(core, '__version__', 'unknown')} provides "
+            f"column buffer API {buffer_api_version}, but this version of clickhouse-connect requires column buffer API "
+            f"{REQUIRED_COLUMN_BUFFER_API_VERSION} or newer. Upgrade it with pip install --upgrade clickhouse-connect-core."
+        )
     _log_versions_once(resolved, core)
     return resolved
 
@@ -117,9 +126,6 @@ def _rust_query_ineligible_reason(context: QueryContext) -> str | None:
     settings/transport_settings/external_data are honored and not listed here. The columns-only LIMIT 0 branch is
     answered from FORMAT JSON metadata in both clients before any transform runs.
     """
-    if context.use_numpy and options.arrow is None:
-        # numpy and pandas output route through the zero-copy Arrow exit, which needs pyarrow.
-        return "pyarrow not installed"
     if context.query_formats:
         return "query_formats"
     if context.column_formats:
@@ -285,10 +291,7 @@ class _RustNativeTransform:
             if self.strict:
                 source.close()
                 raise NotSupportedError(f'native_codec="rust_strict" does not support {reason}; use native_codec="python" or "rust"')
-            if reason == "pyarrow not installed":
-                logger.warning("Native codec fallback to Python for query: %s", reason)
-            else:
-                logger.info("Native codec fallback to Python for query: %s", reason)
+            logger.info("Native codec fallback to Python for query: %s", reason)
             return NativeTransform.parse_response(source, context)
 
         core = _ch_core_module()
@@ -328,7 +331,13 @@ class _RustNativeTransform:
                         if hit is not None:
                             read_source.close()
                             raise server_error(hit)
-                    yield from decoder.feed(chunk)
+                    if len(chunk) > _FEED_SLICE_BYTES:
+                        # Bound the decoder's copies and the blocks returned by each feed.
+                        with memoryview(chunk) as view:
+                            for start in range(0, len(view), _FEED_SLICE_BYTES):
+                                yield from decoder.feed(view[start : start + _FEED_SLICE_BYTES])
+                    else:
+                        yield from decoder.feed(chunk)
                 yield from decoder.finish()
             except StreamFailureError:
                 raise

@@ -49,6 +49,13 @@ def type_available(client: Client | AsyncClient, data_type: str) -> None:
     pytest.skip(f"New {data_type.upper()} type not available in this version: {client.server_version}")
 
 
+def nullable_tuple_settings(client: Client | AsyncClient) -> dict[str, int]:
+    setting = "allow_experimental_nullable_tuple_type"
+    if setting not in client.server_settings:
+        pytest.skip("Server does not support Nullable(Tuple(...))")
+    return {setting: 1}
+
+
 def supports_multi_point(client: Client | AsyncClient, call: Callable | None = None) -> bool:
     if call is None and isinstance(client, AsyncClient):
         raise TypeError("call is required when checking MultiPoint support with AsyncClient")

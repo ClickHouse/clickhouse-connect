@@ -184,6 +184,7 @@ class _CompatibleCore:
 
     __version__ = "0.1.0"
     BINDING_API_VERSION = rustcodec.REQUIRED_BINDING_API_VERSION
+    COLUMN_BUFFER_API_VERSION = rustcodec.REQUIRED_COLUMN_BUFFER_API_VERSION
 
 
 class TestNativeCodecIntegrationTag:

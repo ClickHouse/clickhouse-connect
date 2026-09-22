@@ -1,3 +1,4 @@
+import gc
 import multiprocessing
 import os
 import socket
@@ -323,6 +324,71 @@ class TestDefaultPoolManager:
             before, after, registered = pool.apply(_child_http_client_manager_count, (20,))
         assert after <= before + 1
         assert registered
+
+
+@pytest.mark.parametrize("close_buffered", [False, True])
+@pytest.mark.parametrize("drain_fails", [False, True])
+def test_response_source_drains_before_closing_iterator(close_buffered, drain_fails):
+    events = []
+    response = Mock(headers={})
+
+    def chunks(*_args):
+        try:
+            yield b"first"
+            yield b"second"
+        finally:
+            events.append("iterator closed")
+
+    def drain():
+        events.append("drained")
+        if drain_fails:
+            raise RuntimeError("drain failed")
+
+    response.stream = chunks
+    response.drain_conn = drain
+    response.close.side_effect = lambda: events.append("response closed")
+    with patch.object(httputil.common, "get_setting", return_value=0):
+        source = ResponseSource(response)
+    assert next(source.gen) == b"first"
+    if close_buffered:
+        source.gen.close()
+        gc.collect()
+    assert events == []
+
+    if drain_fails:
+        with pytest.raises(RuntimeError, match="drain failed"):
+            source.close()
+    else:
+        source.close()
+    source.gen.close()
+    gc.collect()
+    assert events == ["drained", "response closed", "iterator closed"]
+
+
+def test_response_source_close_during_read():
+    read_started = threading.Event()
+    release_read = threading.Event()
+    response = Mock(headers={})
+
+    def chunks(*_args):
+        read_started.set()
+        assert release_read.wait(5)
+        yield b"first"
+
+    response.stream = chunks
+    with patch.object(httputil.common, "get_setting", return_value=0):
+        source = ResponseSource(response)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        read = executor.submit(next, source.gen)
+        try:
+            assert read_started.wait(1)
+            source.close()
+            response.drain_conn.assert_called_once_with()
+            response.close.assert_called_once_with()
+        finally:
+            release_read.set()
+            assert read.result(timeout=1) == b"first"
+            source.gen.close()
 
 
 class TestResponseSourceZstd:
