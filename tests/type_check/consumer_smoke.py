@@ -5,9 +5,14 @@ from typing import Any
 
 import numpy
 import pandas
+from sqlalchemy.engine import CursorResult
+from sqlalchemy.engine.interfaces import DBAPIConnection, DBAPIModule
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from typing_extensions import assert_type
 
 import clickhouse_connect
+from clickhouse_connect.cc_sqlalchemy.asyncio import ClickHouseAsyncDialect
+from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver import AsyncClient, Client, create_async_client, create_client
 from clickhouse_connect.driver.query import QueryResult
 from clickhouse_connect.driver.summary import QuerySummary
@@ -44,9 +49,47 @@ def context_manager() -> None:
         client.command("SELECT 1")
 
 
+def dbapi_cursor_client(cursor: Cursor) -> None:
+    assert_type(cursor.client, Client)
+    assert_type(cursor.client.command("SELECT 13"), str | int | Sequence[str] | QuerySummary)
+
+
 async def async_query() -> None:
     client = await clickhouse_connect.get_async_client(host="localhost")
     assert_type(client, AsyncClient)
+    assert_type(
+        AsyncClient(
+            interface="http",
+            host="localhost",
+            port=8123,
+            connect_timeout=1.25,
+            send_receive_timeout=2.5,
+        ),
+        AsyncClient,
+    )
     assert_type(await create_async_client(host="localhost"), AsyncClient)
+    assert_type(
+        await create_async_client(host="localhost", connector_limit=None, connector_limit_per_host=None, keepalive_timeout=None),
+        AsyncClient,
+    )
     async with client:
         assert_type(await client.query("SELECT 13"), QueryResult)
+
+
+def async_sqlalchemy_dialect(connection: DBAPIConnection) -> None:
+    dialect = ClickHouseAsyncDialect()
+    assert_type(dialect.import_dbapi(), DBAPIModule)
+    assert_type(dialect.get_driver_connection(connection), AsyncClient)
+
+
+async def async_sqlalchemy_connection() -> None:
+    engine = create_async_engine("clickhousedb+async://user:password@localhost:8123/default")
+    assert_type(engine, AsyncEngine)
+    async with engine.connect() as connection:
+        assert_type(connection, AsyncConnection)
+        assert_type(await connection.exec_driver_sql("SELECT 13"), CursorResult[Any])
+        raw_connection = await connection.get_raw_connection()
+        client = ClickHouseAsyncDialect().get_driver_connection(raw_connection)
+        assert_type(client, AsyncClient)
+        assert_type(await client.command("SELECT 13"), str | int | Sequence[str] | QuerySummary)
+        assert_type(await client.insert("events", [[13]], column_names=["value"]), QuerySummary)

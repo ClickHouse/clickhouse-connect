@@ -5,6 +5,7 @@ is exercised with a recording stand-in for the client, and the auth-refresh
 retry loop is driven against a fake transport on a client built via __new__.
 """
 
+import asyncio
 from inspect import signature
 from unittest.mock import MagicMock, patch
 
@@ -252,6 +253,7 @@ def _fake_async_response(status, ex_code=None):
 class _FakeLease:
     def __init__(self, session):
         self.session = session
+        self._owner_loop = asyncio.get_running_loop()
         self.inflight = 0
 
     def acquire(self):

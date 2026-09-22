@@ -160,7 +160,6 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         compare_server_default=True,
         include_object=ch_alembic.include_object,
-        dialect_name="clickhousedb",
         version_table="alembic_version",
     )
 
@@ -176,7 +175,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        default_schema = connection.exec_driver_sql("SELECT currentDatabase()").scalar()
+        default_schema = connection.dialect.default_schema_name
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

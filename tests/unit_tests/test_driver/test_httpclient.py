@@ -235,7 +235,7 @@ class _MockInsertContext:
 class _FakeInsertTransform:
     threaded_insert = True
 
-    def build_insert(self, context):
+    def build_insert(self, context, error_handler=None):
         yield b"body"
 
 

@@ -5,9 +5,10 @@ import sqlalchemy as sa
 from sqlalchemy.engine import Engine
 
 from clickhouse_connect.cc_sqlalchemy import engines, types
+from tests.integration_tests.conftest import TestConfig
 
 
-def test_memory_engine_reflection(test_engine: Engine, test_db: str):
+def test_memory_engine_reflection(test_engine: Engine, test_db: str, test_config: TestConfig):
     metadata = sa.MetaData(schema=test_db)
     table = sa.Table(
         f"memory_engine_{uuid4().hex[:8]}", metadata, sa.Column("id", types.UInt64), engines.Memory(settings={"max_rows_to_keep": 13})
@@ -19,9 +20,11 @@ def test_memory_engine_reflection(test_engine: Engine, test_db: str):
             assert reflected.engine.settings["max_rows_to_keep"] == 13
             replay = sa.Table(table.name + "_replay", metadata, sa.Column("id", types.UInt64), eval(repr(reflected.engine), vars(engines)))
             replay.create(conn)
-            for target in (table, replay):
-                conn.execute(target.insert(), [{"id": 13}, {"id": 79}])
-                assert conn.execute(sa.select(target).order_by(target.c.id)).all() == [(13,), (79,)]
+            # Cloud replicates the table definition, but Memory rows stay on the server that received the insert.
+            if not test_config.cloud:
+                for target in (table, replay):
+                    conn.execute(target.insert(), [{"id": 13}, {"id": 79}])
+                    assert conn.execute(sa.select(target).order_by(target.c.id)).all() == [(13,), (79,)]
         finally:
             metadata.drop_all(conn, checkfirst=True)
 

@@ -117,11 +117,14 @@ def test_stream_error_show_clickhouse_errors_modes(param_client, call, consume_s
         param_client.show_clickhouse_errors = original
 
     error_msg = str(excinfo.value)
+    assert excinfo.value.code == 395
     if mode == "scrub":
+        assert excinfo.value.name == "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"
         assert "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO" in error_msg
         assert "version" not in error_msg.lower()
         assert param_client.url not in error_msg
     else:
+        assert excinfo.value.name is None
         assert error_msg == "The ClickHouse server returned an error"
 
 
