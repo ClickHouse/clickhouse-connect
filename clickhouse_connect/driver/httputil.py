@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from typing import Any
 
 import certifi
@@ -263,12 +263,14 @@ class ResponseSource:
             decompress = lz_decompress
 
         buffer_size = common.get_setting("http_buffer_size")
+        read_gen = response.stream(chunk_size, decompress is None)
+        # Keep the HTTP iterator alive until close() drains the response.
+        self._read_gen: Generator[bytes, None, None] | None = read_gen
 
         def buffered():
             chunks = deque()
             done = False
             current_size = 0
-            read_gen = response.stream(chunk_size, decompress is None)
             read_error = None
             while True:
                 while not done:
@@ -302,5 +304,10 @@ class ResponseSource:
         self.gen = buffered()
 
     def close(self):
-        self.response.drain_conn()
-        self.response.close()
+        try:
+            self.response.drain_conn()
+        finally:
+            try:
+                self.response.close()
+            finally:
+                self._read_gen = None

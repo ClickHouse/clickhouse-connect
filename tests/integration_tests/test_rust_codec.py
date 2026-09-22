@@ -1031,6 +1031,31 @@ def test_rust_codec_streaming_parity(client_factory, call, consume_stream):
     assert rust_totals == (5000, 5000)
 
 
+@pytest.mark.parametrize("client_mode", ["sync"], indirect=True)
+@pytest.mark.parametrize(
+    "method",
+    ["query_rows_stream", "query_row_block_stream", "query_column_block_stream", "query_np_stream", "query_df_stream"],
+)
+def test_rust_codec_sync_early_close_releases_session(client_factory, call, method):
+    """The sync transport drains the HTTP response before the same session can run another query."""
+    if method in ("query_np_stream", "query_df_stream"):
+        pytest.importorskip("numpy")
+    if method == "query_df_stream":
+        pytest.importorskip("pandas")
+    client = client_factory(native_codec="rust_strict", compress=False)
+    assert client.get_client_setting("session_id")
+    query = "SELECT number, repeat('x', 512) AS s, sleepEachRow(0.00001) AS pause FROM numbers(100000)"
+    stream = call(getattr(client, method), query, settings={"max_block_size": 1024, "max_threads": 1})
+    source = stream.source.source
+    with stream:
+        for _ in stream:
+            if source._thread is not None:
+                break
+    assert source._thread is not None
+    assert not source._thread.is_alive()
+    assert call(client.query, "SELECT 13").first_row == (13,)
+
+
 def test_rust_codec_numeric_column_blocks_keep_typed_arrays(client_factory, call, consume_stream):
     rust_client = client_factory(native_codec="rust_strict")
     python_client = client_factory(native_codec="python")
