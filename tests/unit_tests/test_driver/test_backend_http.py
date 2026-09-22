@@ -1,10 +1,12 @@
 import asyncio
-import io
+from email import policy
+from email.parser import BytesParser
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
+from yarl import URL
 
 from clickhouse_connect import common
 from clickhouse_connect.driver._backend.contracts import AsyncBackend, SyncBackend
@@ -737,40 +739,61 @@ class TestAsyncRequestTargetPath:
         assert get.call_args.args == ("http://localhost:8123/clickhouse/ping",)
 
 
-class _RetryMultipartSession:
-    closed = False
+@pytest.mark.parametrize("data_type", [bytes, bytearray, memoryview])
+@pytest.mark.filterwarnings("error::ResourceWarning")
+@pytest.mark.asyncio
+async def test_async_large_multipart_upload_streams_and_retries(monkeypatch, data_type):
+    file_data = b"13,79\n" * 200_000
+    attempts = []
 
-    def __init__(self):
-        self.file_streams = []
-
-    async def request(self, **kwargs):
-        form = kwargs["data"]
-        file_stream = form._fields[0][2]
-        self.file_streams.append(file_stream)
-        assert file_stream.read() == b"external table data"
-        file_stream.close()
-        if len(self.file_streams) == 1:
+    async def send(**kwargs):
+        kwargs["url"] = URL(kwargs["url"])
+        request = aiohttp.ClientRequest(**kwargs)
+        writer = SimpleNamespace(write=AsyncMock())
+        await request.body.write(writer)
+        chunks = [call.args[0] for call in writer.write.call_args_list]
+        body = b"".join(chunks)
+        assert max(map(len, chunks)) < len(file_data)
+        assert request.headers["Content-Length"] == str(len(body))
+        assert "Transfer-Encoding" not in request.headers
+        message = BytesParser(policy=policy.default).parsebytes(f"Content-Type: {request.headers['Content-Type']}\r\n\r\n".encode() + body)
+        attempts.append(list(message.iter_parts()))
+        if len(attempts) == 1:
             raise aiohttp.ServerDisconnectedError("stale connection")
         return SimpleNamespace(status=200, headers={})
 
-
-@pytest.mark.asyncio
-async def test_async_multipart_retry_rebuilds_byte_file_stream(monkeypatch):
     backend = make_async_backend()
-    session = _RetryMultipartSession()
-    backend.session = session
+    backend.session = SimpleNamespace(closed=False, request=send)
     monkeypatch.setattr(common, "get_setting", lambda name: None)
 
     response = await backend.request(
         None,
         {},
-        files={"points": ("points.arrow", b"external table data", "application/octet-stream")},
+        files={
+            "points": ("points.csv", data_type(file_data), "text/csv"),
+            "empty": ("empty.bin", b""),
+            "query": (None, "SELECT * FROM points"),
+            "param_id": "13",
+        },
     )
-
-    assert len(session.file_streams) == 2
-    assert all(isinstance(stream, io.BytesIO) for stream in session.file_streams)
-    assert session.file_streams[0] is not session.file_streams[1]
     release_lease(response)
+
+    assert len(attempts) == 2
+    for parts in attempts:
+        assert [
+            (
+                part.get_param("name", header="Content-Disposition"),
+                part.get_filename(),
+                part.get_content_type(),
+                part.get_payload(decode=True),
+            )
+            for part in parts
+        ] == [
+            ("points", "points.csv", "text/csv", file_data),
+            ("empty", "empty.bin", "application/octet-stream", b""),
+            ("query", None, "text/plain", b"SELECT * FROM points"),
+            ("param_id", None, "text/plain", b"13"),
+        ]
 
 
 class TestAsyncSessionLoop:
