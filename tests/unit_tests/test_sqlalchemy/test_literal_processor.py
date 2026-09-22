@@ -90,7 +90,8 @@ def test_generic_array_of_clickhouse_type_is_not_double_escaped(server_side):
         )
 
     if sqlalchemy.__version__.startswith("1.4."):
-        with pytest.raises(CompileError, match="No literal value renderer"):
+        # Older supported 1.4 releases raise NotImplementedError for missing literal renderers.
+        with pytest.raises((CompileError, NotImplementedError), match="No literal value renderer|Don't know how to literal-quote"):
             compile_literal()
         return
 

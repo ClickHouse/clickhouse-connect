@@ -9,6 +9,7 @@ import pytest
 from clickhouse_connect.datatypes.format import clear_default_format, set_default_formats, set_read_format
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import DataError
+from tests.integration_tests.conftest import nullable_tuple_settings
 
 
 def test_low_card(param_client: Client, call, table_context: Callable):
@@ -194,12 +195,7 @@ def test_empty_tuple_inserts(param_client: Client, call, table_context: Callable
 def test_nullable_empty_tuple(param_client: Client, call, test_config):
     if test_config.cloud:
         pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
-    setting = call(
-        param_client.query,
-        "SELECT name FROM system.settings WHERE name = 'allow_experimental_nullable_tuple_type'",
-    ).first_row
-    if setting is None:
-        pytest.skip("Server does not support Nullable(Tuple(...))")
+    settings = nullable_tuple_settings(param_client)
 
     table = "nullable_empty_tuple"
     call(param_client.command, f"DROP TABLE IF EXISTS {table}")
@@ -207,7 +203,7 @@ def test_nullable_empty_tuple(param_client: Client, call, test_config):
         call(
             param_client.command,
             f"CREATE TABLE {table} (value Nullable(Tuple()), sentinel UInt8) ENGINE MergeTree ORDER BY sentinel",
-            settings={"allow_experimental_nullable_tuple_type": 1},
+            settings=settings,
         )
         call(param_client.insert, table, [[None, 13], [(), 79], [None, 80]])
         rows = call(param_client.query, f"SELECT value, sentinel FROM {table} ORDER BY sentinel").result_rows

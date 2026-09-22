@@ -57,11 +57,42 @@ class StreamingResponseSource(Closable):
         self._producer_started = threading.Event()
         self._producer_error: Exception | None = None
         self._producer_completed = False
+        self._lease_lock = threading.Lock()
+        self._lease_released = False
 
     def _release_lease(self):
+        with self._lease_lock:
+            if self._lease_released:
+                return
+            self._lease_released = True
         release = getattr(self.response, "_lease_release", None)
-        if release is not None:
-            release()
+        if release is None:
+            return
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+            if current_loop is loop:
+                release()
+                return
+            try:
+                loop.call_soon_threadsafe(release)
+            except RuntimeError:
+                pass
+            else:
+                return
+        release()
+
+    @staticmethod
+    def _retrieve_producer_task_result(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:
+            logger.debug("Discarded producer error during streaming response cleanup", exc_info=True)
 
     async def start_producer(self, loop: asyncio.AbstractEventLoop):
         """Start the async producer task.
@@ -82,6 +113,13 @@ class StreamingResponseSource(Closable):
                 await self.queue.async_q.put(EOF_SENTINEL)
                 self._producer_completed = True
 
+            except asyncio.CancelledError:
+                try:
+                    if self.response and not self.response.closed:
+                        self.response.close()
+                except Exception:
+                    logger.debug("Failed to close cancelled streaming response", exc_info=True)
+                raise
             except Exception as e:
                 logger.error("Producer error while streaming response: %s", e, exc_info=True)
                 if not data_sent:
@@ -94,8 +132,10 @@ class StreamingResponseSource(Closable):
                     pass
 
             finally:
-                self.queue.shutdown()
-                self._release_lease()
+                try:
+                    self.queue.shutdown()
+                finally:
+                    self._release_lease()
 
         self._loop = loop
         self._producer_task = loop.create_task(producer())
@@ -183,26 +223,28 @@ class StreamingResponseSource(Closable):
 
     async def aclose(self):
         """Async cleanup resources"""
-        self.queue.shutdown()
-
-        if self._producer_task and not self._producer_task.done():
-            self._producer_task.cancel()
+        try:
             try:
-                await self._producer_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-
-        if self.response and not self.response.closed:
-            if not self._producer_completed:
-                self.response.close()
-                await asyncio.sleep(0.05)
-        self._release_lease()
+                self.queue.shutdown()
+                if self._producer_task and not self._producer_task.done():
+                    self._producer_task.cancel()
+                    try:
+                        done, _ = await asyncio.wait((self._producer_task,))
+                    except asyncio.CancelledError:
+                        self._producer_task.add_done_callback(self._retrieve_producer_task_result)
+                        raise
+                    for task in done:
+                        self._retrieve_producer_task_result(task)
+            finally:
+                if self.response and not self.response.closed:
+                    if not self._producer_completed:
+                        self.response.close()
+                        await asyncio.sleep(0.05)
+        finally:
+            self._release_lease()
 
     def close(self):
         """Synchronous cleanup resources"""
-        self.queue.shutdown()
 
         def cleanup():
             if self._producer_task and not self._producer_task.done():
@@ -211,16 +253,21 @@ class StreamingResponseSource(Closable):
                 if not self._producer_completed:
                     self.response.close()
 
-        # Task cancellation and aiohttp response teardown must run on the event
-        # loop thread. close() is normally called from an executor thread.
-        if self._loop is not None and not self._loop.is_closed():
+        try:
             try:
-                self._loop.call_soon_threadsafe(cleanup)
-            except RuntimeError:
-                cleanup()
-        else:
-            cleanup()
-        self._release_lease()
+                self.queue.shutdown()
+            finally:
+                # Task cancellation and aiohttp response teardown must run on the event
+                # loop thread. close() is normally called from an executor thread.
+                if self._loop is not None and not self._loop.is_closed():
+                    try:
+                        self._loop.call_soon_threadsafe(cleanup)
+                    except RuntimeError:
+                        cleanup()
+                else:
+                    cleanup()
+        finally:
+            self._release_lease()
 
 
 async def start_streaming_response(response, encoding: str | None = None, exception_tag: str | None = None) -> StreamingResponseSource:
@@ -347,9 +394,14 @@ class StreamingInsertSource:
         self.context = context
         self.loop = loop
         self.queue: AsyncSyncQueue[bytes | bytearray | Exception] = AsyncSyncQueue(maxsize=maxsize)
+        self.insert_exception: Exception | None = None
         self._stop_event = threading.Event()
         self._producer_future = None
         self._started = False
+
+    def _record_insert_exception(self, ex: Exception) -> None:
+        if self.insert_exception is None:
+            self.insert_exception = ex
 
     def start_producer(self):
         if self._started:
@@ -358,7 +410,7 @@ class StreamingInsertSource:
 
         def producer():
             try:
-                block_gen = self.transform.build_insert(self.context)
+                block_gen = self.transform.build_insert(self.context, self._record_insert_exception)
                 while not self._stop_event.is_set():
                     try:
                         block = next(block_gen)
@@ -375,8 +427,7 @@ class StreamingInsertSource:
                     logger.debug("Insert producer error: %s", e)
                 else:
                     logger.error("Insert producer error: %s", e, exc_info=True)
-                if getattr(self.context, "insert_exception", None) is None:
-                    self.context.insert_exception = e
+                self._record_insert_exception(e)
                 if not self._stop_event.is_set():
                     self._put(e)
             finally:
@@ -464,12 +515,24 @@ def _read_ahead_producer(
     except BaseException as ex:  # noqa: BLE001 - forwarded to the consumer thread verbatim
         put(("error", ex))
     finally:
-        put(("eof", None))
+        try:
+            # The producer owns this iterator. Free-threaded Python may defer its
+            # finalizer after thread exit, so close it before reporting completion.
+            close = getattr(src_gen, "close", None)
+            if close is not None:
+                close()
+        except BaseException as ex:  # noqa: BLE001 - preserve stream error forwarding
+            put(("error", ex))
+        finally:
+            put(("eof", None))
 
 
-def _read_ahead_consumer(source_queue: queue.Queue[tuple[str, object]]) -> Iterator[bytes]:
-    while True:
-        tag, payload = source_queue.get()
+def _read_ahead_consumer(source_queue: queue.Queue[tuple[str, object]], stop_event: threading.Event) -> Iterator[bytes]:
+    while not stop_event.is_set():
+        try:
+            tag, payload = source_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
         if tag == "data":
             yield cast(bytes, payload)
         elif tag == "error":
@@ -509,11 +572,16 @@ def _read_ahead_stream(
         name="clickhouse-read-ahead",
         daemon=True,
     )
-    owner._thread = thread
+    with owner._release_lock:
+        if stop_event.is_set():
+            return
+        thread.start()
+        owner._thread = thread
     del owner
-    thread.start()
+    # Let the producer finalize the iterator when it exits, including during async source cleanup.
+    del src_gen
     yield second
-    yield from _read_ahead_consumer(out)
+    yield from _read_ahead_consumer(out, stop_event)
 
 
 def _drain_read_ahead_queue(source_queue: queue.Queue[tuple[str, object]]) -> None:
@@ -534,8 +602,21 @@ def _release_abandoned_read_ahead(source: ByteSource, source_queue: queue.Queue[
             pass
 
 
+async def _wait_for_cleanup(
+    future: asyncio.Future,
+    cancelled: asyncio.CancelledError | None = None,
+) -> asyncio.CancelledError | None:
+    while not future.done():
+        try:
+            await asyncio.wait((future,))
+        except asyncio.CancelledError as ex:
+            if cancelled is None:
+                cancelled = ex
+    future.result()
+    return cancelled
+
+
 def _finalize_read_ahead_off_loop(
-    loop: asyncio.AbstractEventLoop,
     source: ByteSource,
     source_queue: queue.Queue[tuple[str, object]],
     producer_thread: threading.Thread | None,
@@ -545,10 +626,7 @@ def _finalize_read_ahead_off_loop(
             producer_thread.join(timeout=1.0)
     except Exception:  # noqa: BLE001 - finalizers must not raise
         pass
-    try:
-        loop.call_soon_threadsafe(_release_abandoned_read_ahead, source, source_queue)
-    except Exception:  # noqa: BLE001 - a closed loop must not leak the source
-        _release_abandoned_read_ahead(source, source_queue)
+    _release_abandoned_read_ahead(source, source_queue)
 
 
 class ReadAheadSource(Closable):
@@ -565,6 +643,7 @@ class ReadAheadSource(Closable):
         self.exception_tag: str | None = getattr(source, "exception_tag", None)
         self.queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=maxsize)
         self._stop_event = threading.Event()
+        self._release_lock = threading.Lock()
         self._gen_cache: Iterator[bytes] | None = None
         self._thread: threading.Thread | None = None
 
@@ -579,20 +658,19 @@ class ReadAheadSource(Closable):
                 return
 
             self._stop_event.set()
-            source, self.source = self.source, None
+            source = self._take_source()
             if source is None:
                 return
             try:
                 loop.run_in_executor(
                     None,
                     _finalize_read_ahead_off_loop,
-                    loop,
                     source,
                     self.queue,
                     self._thread,
                 )
             except Exception:
-                _finalize_read_ahead_off_loop(loop, source, self.queue, self._thread)
+                _finalize_read_ahead_off_loop(source, self.queue, self._thread)
         except Exception:  # noqa: BLE001 - finalizers must not raise
             pass
 
@@ -608,10 +686,10 @@ class ReadAheadSource(Closable):
     def _drain(self):
         _drain_read_ahead_queue(self.queue)
 
-    def _release_source(self):
-        source, self.source = self.source, None
-        if source is not None:
-            source.close()
+    def _take_source(self) -> ByteSource | None:
+        with self._release_lock:
+            source, self.source = self.source, None
+        return source
 
     def close(self) -> None:
         # Join the producer before closing the source. A queue-blocked producer returns within one put
@@ -619,22 +697,56 @@ class ReadAheadSource(Closable):
         # the source only after the join keeps the transport single-reader: the sync source drains on close,
         # which would race a producer still reading it.
         self._stop_event.set()
-        thread = self._thread
+        with self._release_lock:
+            thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=1.0)
         self._drain()
-        self._release_source()
+        source = self._take_source()
+        if source is not None:
+            source.close()
 
     async def aclose(self) -> None:
         self._stop_event.set()
-        thread = self._thread
+        cancelled: asyncio.CancelledError | None = None
+        cleanup_error: BaseException | None = None
+        loop = asyncio.get_running_loop()
+        with self._release_lock:
+            thread = self._thread
         if thread is not None and thread.is_alive():
             # Join off the event loop so the worst-case wait never blocks it.
-            await asyncio.get_running_loop().run_in_executor(None, thread.join, 1.0)
+            join_future = loop.run_in_executor(None, thread.join, 1.0)
+            try:
+                cancelled = await _wait_for_cleanup(join_future, cancelled)
+            except BaseException as ex:  # noqa: BLE001 - source cleanup must still run
+                cleanup_error = ex
         self._drain()
-        # Release on the loop thread: the async source's close cancels its producer task, which must not
-        # run from an executor thread.
-        self._release_source()
+        source = self._take_source()
+        if source is not None:
+            try:
+                aclose = getattr(source, "aclose", None)
+                if aclose is not None:
+                    cancelled = await _wait_for_cleanup(asyncio.ensure_future(aclose()), cancelled)
+                else:
+                    source.close()
+            except BaseException as ex:  # noqa: BLE001 - preserve cancellation after cleanup
+                if cleanup_error is None:
+                    cleanup_error = ex
+        # A source close can unblock a producer whose in-flight read outlived the first bounded join.
+        # Wait once more so async cleanup does not return while that producer is still unwinding.
+        if thread is not None and thread.is_alive():
+            join_future = loop.run_in_executor(None, thread.join, 1.0)
+            try:
+                cancelled = await _wait_for_cleanup(join_future, cancelled)
+            except BaseException as ex:  # noqa: BLE001 - preserve the first cleanup failure
+                if cleanup_error is None:
+                    cleanup_error = ex
+        if cancelled is not None:
+            if cleanup_error is not None:
+                raise cancelled from cleanup_error
+            raise cancelled
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 class _SyncStreamingInsertSource:

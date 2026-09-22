@@ -18,6 +18,6 @@ client = clickhouse_connect.get_client(host="localhost", native_codec="rust")
 
 The codec is experimental and opt in. See the [clickhouse-connect documentation](https://clickhouse.com/docs/integrations/language-clients/python/rust-codec) for supported values, fallback rules, and version compatibility.
 
-The `_ch_core` module has no public API contract. Its interface exists solely for the clickhouse-connect driver, which checks a binding API version at client creation and tells you when this wheel needs an upgrade.
+The `_ch_core` module has no public API contract. Its interface exists solely for the clickhouse-connect driver, which checks the binding API version and required capabilities at client creation and tells you when this wheel needs an upgrade. Core 0.2.1 provides binding API 3 and column-buffer API 1.
 
 Issues and source live in the [clickhouse-connect repository](https://github.com/ClickHouse/clickhouse-connect) under `rust/ch-core-py`. The decoding core itself is [ch-core-rs](https://github.com/ClickHouse/ch-core-rs).

@@ -12,6 +12,14 @@ from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.transform import NativeTransform
 from tests.helpers import TAGGED_EXCEPTION_BODY, TAGGED_EXCEPTION_TAG, bytes_source, to_bytes
 
+_STREAM_ERROR_MESSAGE = (
+    "Code: 395. DB::Exception: Value passed to 'throwIf' function is non-zero. "
+    "(FUNCTION_THROW_IF_VALUE_IS_NON_ZERO) (version 26.2.4.23 (official build))"
+)
+_SCRUBBED_STREAM_ERROR_MESSAGE = (
+    "Code: 395. DB::Exception: Value passed to 'throwIf' function is non-zero. (FUNCTION_THROW_IF_VALUE_IS_NON_ZERO)"
+)
+
 
 def test_gen_and_exception_tag_exposed():
     class Source:
@@ -159,27 +167,17 @@ def _tagged_exception_body(message: str) -> bytes:
 
 
 @pytest.mark.parametrize(
-    "mode,expected,forbidden",
+    "mode,expected,expected_name",
     [
-        (
-            "scrub",
-            "Code: 395. DB::Exception: Value passed to 'throwIf' function is non-zero. (FUNCTION_THROW_IF_VALUE_IS_NON_ZERO)",
-            "version",
-        ),
-        (False, GENERIC_CLICKHOUSE_ERROR, "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"),
+        (True, _STREAM_ERROR_MESSAGE, "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"),
+        ("scrub", _SCRUBBED_STREAM_ERROR_MESSAGE, "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"),
+        (False, GENERIC_CLICKHOUSE_ERROR, None),
     ],
 )
-def test_tagged_exception_honors_show_clickhouse_errors(mode, expected, forbidden):
+def test_tagged_exception_honors_show_clickhouse_errors(mode, expected, expected_name):
     class TaggedSource:
         def __init__(self):
-            self.gen = iter(
-                [
-                    _tagged_exception_body(
-                        "Code: 395. DB::Exception: Value passed to 'throwIf' function is non-zero. "
-                        "(FUNCTION_THROW_IF_VALUE_IS_NON_ZERO) (version 26.2.4.23 (official build))"
-                    )
-                ]
-            )
+            self.gen = iter([_tagged_exception_body(_STREAM_ERROR_MESSAGE)])
             self.exception_tag = TAGGED_EXCEPTION_TAG
 
         def close(self, ex: Exception | None = None):
@@ -191,7 +189,65 @@ def test_tagged_exception_honors_show_clickhouse_errors(mode, expected, forbidde
         with pytest.raises(StreamFailureError) as ex:
             NativeTransform.parse_response(cls(TaggedSource()), context)
         assert str(ex.value) == expected
-        assert forbidden not in str(ex.value)
+        assert ex.value.code == 395
+        assert ex.value.name == expected_name
+
+
+def test_incomplete_block_server_error_exposes_metadata():
+    class IncompleteSource:
+        last_message = _STREAM_ERROR_MESSAGE.encode()
+
+        def __init__(self):
+            self.calls = 0
+
+        def read_leb128(self):
+            self.calls += 1
+            if self.calls == 1:
+                return 1
+            raise StreamCompleteException
+
+        def close(self):
+            pass
+
+    with pytest.raises(StreamFailureError) as ex:
+        NativeTransform.parse_response(IncompleteSource())
+
+    assert ex.value.code == 395
+    assert ex.value.name == "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"
+
+
+def test_transport_failure_server_error_exposes_metadata():
+    class FailedSource:
+        last_message = _STREAM_ERROR_MESSAGE.encode()
+
+        def read_leb128(self):
+            raise OperationalError("transport failed")
+
+        def close(self):
+            pass
+
+    with pytest.raises(StreamFailureError) as ex:
+        NativeTransform.parse_response(FailedSource())
+
+    assert ex.value.code == 395
+    assert ex.value.name == "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"
+
+
+def test_transport_failure_malformed_server_metadata_stays_none():
+    class FailedSource:
+        last_message = b"Code: invalid. DB::Exception: malformed metadata"
+
+        def read_leb128(self):
+            raise OperationalError("transport failed")
+
+        def close(self):
+            pass
+
+    with pytest.raises(StreamFailureError) as ex:
+        NativeTransform.parse_response(FailedSource())
+
+    assert ex.value.code is None
+    assert ex.value.name is None
 
 
 def test_transport_failure_with_native_last_message_does_not_leak_binary_data():
@@ -214,6 +270,36 @@ def test_transport_failure_with_native_last_message_does_not_leak_binary_data():
     with pytest.raises(StreamFailureError) as ex:
         NativeTransform.parse_response(FailedSource(), context)
     assert str(ex.value) == "unrecognized data found in stream: `" + "ff" * 16 + "`"
+
+
+def test_existing_stream_failure_preserves_identity_and_metadata():
+    original = StreamFailureError(
+        "original stream failure",
+        code=395,
+        name="FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
+    )
+
+    class FailedSource:
+        last_message = b""
+
+        def __init__(self):
+            self.closed = False
+
+        def read_leb128(self):
+            raise original
+
+        def close(self):
+            self.closed = True
+
+    source = FailedSource()
+    with pytest.raises(StreamFailureError) as ex:
+        NativeTransform.parse_response(source)
+
+    assert ex.value is original
+    assert str(ex.value) == "original stream failure"
+    assert ex.value.code == 395
+    assert ex.value.name == "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"
+    assert source.closed is True
 
 
 def test_scrub_mode_ignores_code_marker_outside_error_window():
@@ -256,6 +342,8 @@ def test_stream_complete_without_server_error_uses_connection_drop_message(mode)
     with pytest.raises(StreamFailureError) as ex:
         NativeTransform.parse_response(ShortSource(), context)
     assert str(ex.value) == "Stream ended unexpectedly (connection closed by server)"
+    assert ex.value.code is None
+    assert ex.value.name is None
 
 
 @pytest.mark.parametrize("mode", [True, "scrub", False])
@@ -274,3 +362,5 @@ def test_read_failure_without_server_error_uses_connection_drop_message(mode):
     with pytest.raises(StreamFailureError) as ex:
         NativeTransform.parse_response(FailedSource(), context)
     assert str(ex.value) == "Stream failed during read (connection closed by server)"
+    assert ex.value.code is None
+    assert ex.value.name is None

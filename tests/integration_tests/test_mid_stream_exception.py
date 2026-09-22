@@ -4,6 +4,11 @@ from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import StreamFailureError
 
 
+def _assert_throw_if_metadata(exc: StreamFailureError) -> None:
+    assert exc.code == 395
+    assert exc.name == "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"
+
+
 def test_mid_stream_exception(test_client: Client):
     """Test that mid-stream exceptions are properly detected and raised."""
     query = "SELECT sleepEachRow(0.01), throwIf(number=100) FROM numbers(200)"
@@ -14,6 +19,7 @@ def test_mid_stream_exception(test_client: Client):
 
     error_msg = str(exc_info.value)
     assert "Value passed to 'throwIf' function is non-zero" in error_msg
+    _assert_throw_if_metadata(exc_info.value)
     assert test_client.command("SELECT 1") == 1
 
 
@@ -28,6 +34,7 @@ def test_mid_stream_exception_streaming(test_client: Client):
 
     error_msg = str(exc_info.value)
     assert "Value passed to 'throwIf' function is non-zero" in error_msg
+    _assert_throw_if_metadata(exc_info.value)
     assert test_client.command("SELECT 1") == 1
 
 
@@ -42,6 +49,7 @@ async def test_mid_stream_exception_async(test_native_async_client):
 
     error_msg = str(exc_info.value)
     assert "Value passed to 'throwIf' function is non-zero" in error_msg
+    _assert_throw_if_metadata(exc_info.value)
     assert await test_native_async_client.command("SELECT 1") == 1
 
 
@@ -59,4 +67,5 @@ async def test_mid_stream_exception_streaming_async(test_native_async_client):
 
     error_msg = str(exc_info.value)
     assert "Value passed to 'throwIf' function is non-zero" in error_msg
+    _assert_throw_if_metadata(exc_info.value)
     assert await test_native_async_client.command("SELECT 1") == 1

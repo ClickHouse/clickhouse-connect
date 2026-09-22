@@ -111,4 +111,6 @@ def test_disabled_materialized_cte_is_a_silent_no_op(test_engine: Engine, book: 
     stmt = sa_select(func.count()).select_from(ranked).execution_options(settings=settings)
 
     with test_engine.connect() as conn:
+        if not settings["enable_analyzer"] and conn.connection.driver_connection.client.min_version("26.9"):
+            pytest.skip("enable_analyzer cannot be disabled on ClickHouse 26.9+")
         assert conn.execute(stmt).scalar_one() == 3

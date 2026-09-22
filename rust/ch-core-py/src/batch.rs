@@ -11,6 +11,7 @@ use ch_core_rs::ffi as core_ffi;
 use ch_core_rs::native::decode::decode_all_bytes;
 use ch_core_rs::schema::ChType;
 
+use crate::buffers::{column_buffers, ColumnBuffers};
 use crate::decoder::{buffer_to_vec, decode_err, decode_options};
 use crate::pyval::{fill_column, prepare_column_ctx, ColumnCtx};
 
@@ -132,6 +133,12 @@ impl ColBatch {
             .iter()
             .map(|f| f.ch_type.to_string())
             .collect()
+    }
+
+    /// Private column buffer descriptors, one per decoded chunk, or None
+    /// for unsupported storage. Buffers retain only their source chunk.
+    fn column_buffers(&self, py: Python<'_>, index: usize) -> PyResult<Option<Vec<ColumnBuffers>>> {
+        column_buffers(py, &self.inner, index)
     }
 
     /// Export all chunks as an Arrow C Stream capsule. `requested_schema` is

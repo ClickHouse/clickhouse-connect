@@ -12,6 +12,8 @@ from clickhouse_connect.dbapi.cursor import Cursor
 
 registry.register("clickhouse", "clickhouse_connect.cc_sqlalchemy.dialect", "ClickHouseDialect")
 registry.register("clickhouse.connect", "clickhouse_connect.cc_sqlalchemy.dialect", "ClickHouseDialect")
+registry.register("clickhouse.async", "clickhouse_connect.cc_sqlalchemy.asyncio", "ClickHouseAsyncDialect")
+registry.register("clickhousedb.async", "clickhouse_connect.cc_sqlalchemy.asyncio", "ClickHouseAsyncDialect")
 
 dialect_name = driver_name
 ischema_names = schema_types

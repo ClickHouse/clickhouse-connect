@@ -7,6 +7,7 @@ libraries.  In most cases docstring are taken from the DBIApi 2.0 documentation
 import re
 
 _error_name_re = re.compile(r"\(([A-Z][A-Z0-9_]+)\)")
+_error_code_re = re.compile(r"\bCode:\s*(\d+)")
 
 # Trailing "(version 26.2.4.23)" or "(version 26.2.4.23 (official build))" /
 # Altinity-style "(version 22.8.15.25.altinitystable)". Nested parentheses in
@@ -24,6 +25,18 @@ def error_code_from_header(header_value: str | None) -> int | None:
     try:
         return int(header_value)
     except (TypeError, ValueError):
+        return None
+
+
+def _error_code_from_message(message: str | None) -> int | None:
+    if not message:
+        return None
+    match = _error_code_re.search(message)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
         return None
 
 
@@ -58,7 +71,7 @@ class Error(ClickHouseError):
     name. Both are None when unavailable, e.g. transport errors or suppressed error detail.
     """
 
-    def __init__(self, *args, code: int | None = None, name: str | None = None):
+    def __init__(self, *args: object, code: int | None = None, name: str | None = None):
         super().__init__(*args)
         self.code = code
         self.name = name
@@ -124,5 +137,5 @@ class StreamCompleteException(Exception):  # noqa: N818
     """Internal exception used to indicate the end of a ClickHouse query result stream."""
 
 
-class StreamFailureError(Exception):
+class StreamFailureError(OperationalError):
     """Stream failed unexpectedly"""

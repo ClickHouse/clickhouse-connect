@@ -45,6 +45,7 @@ class _PresentCore:
 
     __version__ = "0.1.0"
     BINDING_API_VERSION = rustcodec.REQUIRED_BINDING_API_VERSION
+    COLUMN_BUFFER_API_VERSION = rustcodec.REQUIRED_COLUMN_BUFFER_API_VERSION
 
 
 def eligible_ctx(**kwargs) -> QueryContext:
@@ -169,19 +170,39 @@ def test_resolve_rust_raises_when_binding_api_too_old(monkeypatch, codec, core):
     assert "pip install --upgrade clickhouse-connect-core" in message
 
 
+@pytest.mark.parametrize("buffer_api_version", [1, 2], ids=["required_buffer_api", "newer_buffer_api"])
 @pytest.mark.parametrize(
     "api_version",
     [rustcodec.REQUIRED_BINDING_API_VERSION, rustcodec.REQUIRED_BINDING_API_VERSION + 1],
     ids=["required", "newer"],
 )
-def test_resolve_rust_accepts_compatible_binding_api(monkeypatch, reset_version_log, api_version):
+def test_resolve_rust_accepts_compatible_binding_api(monkeypatch, reset_version_log, api_version, buffer_api_version):
     class _Core:
         __version__ = "0.1.0"
         BINDING_API_VERSION = api_version
+        COLUMN_BUFFER_API_VERSION = buffer_api_version
 
     monkeypatch.setitem(sys.modules, "_ch_core", _Core)
     assert resolve_native_codec("rust") == "rust"
     assert resolve_native_codec("rust_strict") == "rust_strict"
+
+
+@pytest.mark.parametrize("buffer_api_version", [None, 0], ids=["missing", "stale"])
+@pytest.mark.parametrize("codec", ["rust", "rust_strict"])
+def test_resolve_rust_requires_column_buffer_api(monkeypatch, buffer_api_version, codec):
+    class _Core:
+        __version__ = "0.2.0"
+        BINDING_API_VERSION = rustcodec.REQUIRED_BINDING_API_VERSION
+
+    if buffer_api_version is not None:
+        _Core.COLUMN_BUFFER_API_VERSION = buffer_api_version
+    monkeypatch.setitem(sys.modules, "_ch_core", _Core)
+
+    with pytest.raises(NotSupportedError, match="requires column buffer API 1 or newer") as excinfo:
+        _make_native_transform(codec)
+    assert "clickhouse-connect-core version 0.2.0" in str(excinfo.value)
+    assert "pip install --upgrade clickhouse-connect-core" in str(excinfo.value)
+    assert resolve_native_codec("python") == "python"
 
 
 def test_built_binding_matches_required_api_version():
@@ -190,6 +211,7 @@ def test_built_binding_matches_required_api_version():
     extension is built; skipped on pure-Python environments."""
     core = pytest.importorskip("_ch_core")
     assert core.BINDING_API_VERSION == rustcodec.REQUIRED_BINDING_API_VERSION
+    assert core.COLUMN_BUFFER_API_VERSION == rustcodec.REQUIRED_COLUMN_BUFFER_API_VERSION
 
 
 def test_resolve_rust_logs_versions_once(monkeypatch, caplog, reset_version_log):
@@ -203,6 +225,7 @@ def test_resolve_rust_logs_versions_once(monkeypatch, caplog, reset_version_log)
     assert "native_codec=rust" in message
     assert _PresentCore.__version__ in message
     assert f"binding API {_PresentCore.BINDING_API_VERSION}" in message
+    assert f"column buffer API {_PresentCore.COLUMN_BUFFER_API_VERSION}" in message
     assert common.version() in message
 
 
@@ -268,11 +291,10 @@ def test_rust_query_eligible(builder):
     assert _rust_query_ineligible_reason(builder()) is None
 
 
-def test_rust_query_ineligible_pyarrow_missing(monkeypatch):
-    monkeypatch.setattr(rustcodec.options, "arrow", None, raising=False)
-    assert _rust_query_ineligible_reason(eligible_ctx(use_numpy=True)) == "pyarrow not installed"
-    # Non-numpy queries never touch the Arrow exit, so a missing pyarrow is irrelevant.
-    assert _rust_query_ineligible_reason(eligible_ctx()) is None
+@pytest.mark.parametrize("as_pandas", [False, True])
+def test_rust_query_eligible_without_pyarrow(monkeypatch, as_pandas):
+    monkeypatch.setattr("clickhouse_connect.driver.options.arrow", None)
+    assert _rust_query_ineligible_reason(eligible_ctx(use_numpy=True, as_pandas=as_pandas)) is None
 
 
 def test_rust_query_ineligible_global_read_format(clean_formats):
@@ -305,20 +327,14 @@ def test_strict_global_read_format_raises_and_closes_source(clean_formats):
 def test_non_strict_ineligible_delegates_to_python_and_logs_reason(monkeypatch, caplog):
     sentinel = object()
     monkeypatch.setattr(NativeTransform, "parse_response", staticmethod(lambda source, context: sentinel))
-    monkeypatch.setattr(rustcodec.options, "arrow", None, raising=False)
-    pyarrow_src = FakeSource([])
     option_src = FakeSource([])
     with caplog.at_level(logging.INFO, logger="clickhouse_connect"):
-        pyarrow_result = _RustNativeTransform(strict=False).parse_response(pyarrow_src, eligible_ctx(use_numpy=True))
         option_result = _RustNativeTransform(strict=False).parse_response(option_src, eligible_ctx(use_none=False))
 
-    assert pyarrow_result is sentinel
     assert option_result is sentinel
-    assert pyarrow_src.closed is False
     assert option_src.closed is False
     fallback_records = [record for record in caplog.records if "fallback to Python for query" in record.getMessage()]
     assert [(record.getMessage(), record.levelno) for record in fallback_records] == [
-        ("Native codec fallback to Python for query: pyarrow not installed", logging.WARNING),
         ("Native codec fallback to Python for query: use_none=False", logging.INFO),
     ]
 
@@ -347,6 +363,23 @@ def test_build_insert_probe_not_implemented_non_strict(monkeypatch):
     assert rust_ctx.insert_exception is None
 
 
+def test_build_insert_python_fallback_forwards_error_handler(monkeypatch):
+    class FakeCore:
+        @staticmethod
+        def encode_native_block(*args):
+            raise NotImplementedError("unsupported")
+
+    monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
+    context = _uint64_ctx([("not an integer",)])
+    errors = []
+
+    chunks = list(_RustNativeTransform(strict=False).build_insert(context, errors.append))
+
+    assert chunks == [b"INTERNAL EXCEPTION WHILE SERIALIZING"]
+    assert context.insert_exception is None
+    assert len(errors) == 1
+
+
 def test_build_insert_probe_not_implemented_strict(monkeypatch):
     class FakeCore:
         @staticmethod
@@ -358,7 +391,8 @@ def test_build_insert_probe_not_implemented_strict(monkeypatch):
         _RustNativeTransform(strict=True).build_insert(_uint64_ctx([(13,)]))
 
 
-def test_build_insert_mid_block_failure(monkeypatch):
+@pytest.mark.parametrize("use_error_handler", [False, True])
+def test_build_insert_mid_block_failure(monkeypatch, use_error_handler):
     calls = {"n": 0}
 
     class FakeCore:
@@ -373,14 +407,21 @@ def test_build_insert_mid_block_failure(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "_ch_core", FakeCore)
     ctx = _uint64_ctx([(13,), (79,)], block_size=1)
+    errors = []
+    error_handler = errors.append if use_error_handler else None
 
-    chunks = list(_RustNativeTransform(strict=False).build_insert(ctx))
+    chunks = list(_RustNativeTransform(strict=False).build_insert(ctx, error_handler))
 
     assert chunks == [b"rust_block", b"INTERNAL EXCEPTION WHILE SERIALIZING"]
     # Binding ValueErrors surface as DataError with the binding's message.
-    assert isinstance(ctx.insert_exception, DataError)
-    assert str(ctx.insert_exception) == "late"
-    assert isinstance(ctx.insert_exception.__cause__, ValueError)
+    recorded = errors[0] if use_error_handler else ctx.insert_exception
+    assert isinstance(recorded, DataError)
+    assert str(recorded) == "late"
+    assert isinstance(recorded.__cause__, ValueError)
+    if use_error_handler:
+        assert ctx.insert_exception is None
+    else:
+        assert ctx.insert_exception is recorded
 
 
 def test_build_insert_global_write_format_strict_raises(monkeypatch, clean_formats):
@@ -677,6 +718,7 @@ def test_decode_feed_error_disambiguation(monkeypatch, error, exception_tag, chu
     [
         pytest.param(ValueError("Malformed payload"), False, id="decoder_value_error_false"),
         pytest.param(EOFError("Truncated payload"), "scrub", id="decoder_eof_scrub"),
+        pytest.param(EOFError("Truncated payload"), True, id="decoder_eof_full"),
     ],
 )
 def test_decode_untagged_server_error_honors_detail_policy(monkeypatch, decoder_error, mode):
@@ -694,12 +736,19 @@ def test_decode_untagged_server_error_honors_detail_policy(monkeypatch, decoder_
         _RustNativeTransform(strict=True).parse_response(src, context)
 
     message = str(excinfo.value)
+    assert excinfo.value.code == 62
     if mode is False:
         assert message == GENERIC_CLICKHOUSE_ERROR
-    else:
+        assert excinfo.value.name is None
+    elif mode == "scrub":
+        assert excinfo.value.name == "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"
         assert "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO" in message
         assert "version" not in message.lower()
         assert "http://" not in message
+    else:
+        assert excinfo.value.name == "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"
+        assert "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO" in message
+        assert "version 26.8.1.2041" in message
     assert src.closed is True
 
 
@@ -901,3 +950,65 @@ def test_decode_unsupported_type_raises_not_supported(ch_core):
     block = b"\x01\x01" + _varint_str("v") + _varint_str("AggregateFunction(avg, UInt64)") + b"\x00" * 8
     with pytest.raises(NotSupportedError):
         _RustNativeTransform(strict=True).parse_response(FakeSource([block]), eligible_ctx())
+
+
+@pytest.mark.parametrize(
+    ("chunk_size", "feed_sizes"),
+    [
+        ((1 << 20) - 1, [(1 << 20) - 1, 4]),
+        (1 << 20, [1 << 20, 4]),
+        ((1 << 20) + 1, [1 << 20, 1, 4]),
+        (3 * (1 << 20) + 5, [1 << 20, 1 << 20, 1 << 20, 5, 4]),
+    ],
+)
+def test_decode_feeds_large_chunks_in_bounded_slices(monkeypatch, chunk_size, feed_sizes):
+    seen = []
+    batches = [_FakeBatch(["a"], ["Int32"], columns=[[13]]), _FakeBatch(["a"], ["Int32"], columns=[[79]])]
+
+    class _RecordingDecoder:
+        def __init__(self, has_block_info=False):
+            del has_block_info
+
+        def feed(self, chunk):
+            seen.append(len(chunk))
+            return [batches.pop(0)] if batches else []
+
+        def finish(self):
+            return []
+
+    class _FakeCore:
+        StreamDecoder = _RecordingDecoder
+
+    monkeypatch.setitem(sys.modules, "_ch_core", _FakeCore)
+    src = FakeSource([b"\x00" * chunk_size, b"tail"])
+    result = _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert result.result_rows == [(13,), (79,)]
+    assert seen == feed_sizes
+    assert src.closed is True
+
+
+def test_decode_releases_large_chunk_view_before_next_chunk(monkeypatch):
+    large_chunk = bytearray((1 << 20) + 1)
+
+    class _ResizingDecoder:
+        def __init__(self, has_block_info=False):
+            del has_block_info
+
+        def feed(self, chunk):
+            if chunk == b"tail":
+                large_chunk.clear()
+                return [_FakeBatch(["a"], ["Int32"], columns=[[13]])]
+            return []
+
+        def finish(self):
+            return []
+
+    class _FakeCore:
+        StreamDecoder = _ResizingDecoder
+
+    monkeypatch.setitem(sys.modules, "_ch_core", _FakeCore)
+    src = FakeSource([large_chunk, b"tail"])
+    result = _RustNativeTransform(strict=True).parse_response(src, eligible_ctx())
+    assert result.result_rows == [(13,)]
+    assert not large_chunk
+    assert src.closed is True
