@@ -1,11 +1,14 @@
 import asyncio
+import io
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import aiohttp
 import pytest
 
+from clickhouse_connect import common
 from clickhouse_connect.driver._backend.contracts import AsyncBackend, SyncBackend
-from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, _plan_files, _plan_raw_files
+from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, _plan_files, _plan_raw_files, release_lease
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend, _plan_fields
 from clickhouse_connect.driver._backend.httpcommon import (
     QueryRequestPlan,
@@ -732,6 +735,42 @@ class TestAsyncRequestTargetPath:
 
         assert await backend.ping() is True
         assert get.call_args.args == ("http://localhost:8123/clickhouse/ping",)
+
+
+class _RetryMultipartSession:
+    closed = False
+
+    def __init__(self):
+        self.file_streams = []
+
+    async def request(self, **kwargs):
+        form = kwargs["data"]
+        file_stream = form._fields[0][2]
+        self.file_streams.append(file_stream)
+        assert file_stream.read() == b"external table data"
+        file_stream.close()
+        if len(self.file_streams) == 1:
+            raise aiohttp.ServerDisconnectedError("stale connection")
+        return SimpleNamespace(status=200, headers={})
+
+
+@pytest.mark.asyncio
+async def test_async_multipart_retry_rebuilds_byte_file_stream(monkeypatch):
+    backend = make_async_backend()
+    session = _RetryMultipartSession()
+    backend.session = session
+    monkeypatch.setattr(common, "get_setting", lambda name: None)
+
+    response = await backend.request(
+        None,
+        {},
+        files={"points": ("points.arrow", b"external table data", "application/octet-stream")},
+    )
+
+    assert len(session.file_streams) == 2
+    assert all(isinstance(stream, io.BytesIO) for stream in session.file_streams)
+    assert session.file_streams[0] is not session.file_streams[1]
+    release_lease(response)
 
 
 class TestAsyncSessionLoop:

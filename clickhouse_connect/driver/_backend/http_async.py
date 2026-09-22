@@ -675,6 +675,8 @@ class HttpAsyncBackend:
                             else:
                                 filename = field_value[0]
                                 file_data = field_value[1]
+                                if isinstance(file_data, (bytes, bytearray, memoryview)):
+                                    file_data = io.BytesIO(file_data)
                                 content_type = field_value[2] if len(field_value) > 2 else None
                                 form.add_field(field_name, file_data, filename=filename, content_type=content_type)
                         else:

@@ -8,6 +8,7 @@
 
 ### Bug Fixes
 
+- Async external-data uploads now wrap byte-backed multipart files in a fresh stream for each request attempt. Large uploads no longer use aiohttp's blocking raw-bytes path, and retries can replay the complete payload. Closes [#1057](https://github.com/ClickHouse/clickhouse-connect/issues/1057).
 - Rust codec read-ahead threads now close their source iterator explicitly when they stop. Early stream cleanup no longer depends on prompt garbage collection, which can delay cleanup on free-threaded Python.
 - Arrow `insert_arrow` / `insert_df_arrow` now quote table and database identifiers the same way `insert()` does, so hyphenated and other names that need backquotes work on both the sync and async clients. Closes [#1014](https://github.com/ClickHouse/clickhouse-connect/issues/1014).
 - Queries whose text only appears to end in `LIMIT 0` because of `//` comments, quoted identifiers, or escaped string contents no longer take the columns-only metadata path and discard returned rows. Metadata probes now confirm a real trailing `LIMIT 0` against the bound SQL, including chDB, while binary-bound queries use the normal Native path. If a probe still returns rows, as with some `UNION`, `EXCEPT`, or `EXPLAIN` queries, the client raises `InternalError` after one execution without replaying the query. Use `raw_query()` to retrieve results for those queries. This addresses the false metadata-probe cases in [#925](https://github.com/ClickHouse/clickhouse-connect/issues/925).
