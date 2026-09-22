@@ -108,7 +108,7 @@ def test_arrow_stream_to_insert_with_busy_executor(test_config, table_context, i
             result = await client.query(f"SELECT number FROM {table} ORDER BY number")
             assert result.result_rows == [(number,) for number in range(3000)]
 
-    with table_context("test_arrow_stream_to_insert", ["number UInt64"]) as ctx:
+    with table_context(f"test_arrow_stream_to_insert_{input_kind}", ["number UInt64"]) as ctx:
         asyncio.run(copy_stream(ctx.table))
 
 
