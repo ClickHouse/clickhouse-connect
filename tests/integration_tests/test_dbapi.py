@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from contextlib import nullcontext
 from unittest import mock
 
 import pytest
@@ -252,7 +253,8 @@ def test_cursor_context_manager_closes_on_exception(dbapi_connection):
         cursor.fetchone()
 
 
-def test_connection_context_manager(test_config: TestConfig, test_db: str):
+@pytest.mark.parametrize("raise_error", [False, True], ids=["success", "exception"])
+def test_connection_context_manager(test_config: TestConfig, test_db: str, raise_error: bool):
     connection = dbapi.connect(
         host=test_config.host,
         port=test_config.port,
@@ -260,10 +262,17 @@ def test_connection_context_manager(test_config: TestConfig, test_db: str):
         password=test_config.password,
         database=test_db,
     )
+    error = RuntimeError("boom")
+    expectation = pytest.raises(RuntimeError) if raise_error else nullcontext()
     with mock.patch.object(connection, "close", wraps=connection.close) as close_mock:
-        with connection as entered:
-            assert entered is connection
-            cursor = connection.cursor()
-            cursor.execute("SELECT 13 AS value_1")
-            assert cursor.fetchall() == [(13,)]
+        with expectation as exc_info:
+            with connection as entered:
+                assert entered is connection
+                cursor = connection.cursor()
+                cursor.execute("SELECT 13 AS value_1")
+                assert cursor.fetchall() == [(13,)]
+                if raise_error:
+                    raise error
     close_mock.assert_called_once_with()
+    if raise_error:
+        assert exc_info.value is error
