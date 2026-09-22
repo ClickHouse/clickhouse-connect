@@ -306,6 +306,12 @@ class Cursor:
     def close(self) -> None:
         self.data = None
 
+    def __enter__(self) -> "Cursor":
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback) -> None:
+        self.close()
+
     def execute(
         self,
         operation: str,

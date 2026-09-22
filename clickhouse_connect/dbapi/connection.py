@@ -40,6 +40,14 @@ class Connection:
     def close(self) -> None:
         self.client.close()
 
+    def __enter__(self) -> "Connection":
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback) -> None:
+        # ClickHouse has no client-side transactions (commit/rollback are no-ops),
+        # so exiting the context closes the connection instead of ending a transaction.
+        self.close()
+
     def commit(self) -> None:
         pass
 

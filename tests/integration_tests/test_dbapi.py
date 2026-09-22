@@ -1,10 +1,11 @@
 from collections.abc import Callable
+from unittest import mock
 
 import pytest
 from pytest import fixture
 
 from clickhouse_connect import dbapi
-from clickhouse_connect.driver.exceptions import DatabaseError
+from clickhouse_connect.driver.exceptions import DatabaseError, ProgrammingError
 from tests.integration_tests.conftest import TestConfig
 
 
@@ -230,3 +231,39 @@ def test_description_metadata_requery_with_leading_and_trailing_comments(dbapi_c
 
     assert cursor.fetchall() == []
     assert cursor.description == []
+
+
+def test_cursor_context_manager(dbapi_connection):
+    with dbapi_connection.cursor() as cursor:
+        cursor.execute("SELECT 13 AS value_1")
+        assert cursor.fetchall() == [(13,)]
+
+    with pytest.raises(ProgrammingError):
+        cursor.fetchall()
+
+
+def test_cursor_context_manager_closes_on_exception(dbapi_connection):
+    with pytest.raises(RuntimeError, match="boom"):
+        with dbapi_connection.cursor() as cursor:
+            cursor.execute("SELECT 13 AS value_1")
+            raise RuntimeError("boom")
+
+    with pytest.raises(ProgrammingError):
+        cursor.fetchone()
+
+
+def test_connection_context_manager(test_config: TestConfig, test_db: str):
+    connection = dbapi.connect(
+        host=test_config.host,
+        port=test_config.port,
+        username=test_config.username,
+        password=test_config.password,
+        database=test_db,
+    )
+    with mock.patch.object(connection, "close", wraps=connection.close) as close_mock:
+        with connection as entered:
+            assert entered is connection
+            cursor = connection.cursor()
+            cursor.execute("SELECT 13 AS value_1")
+            assert cursor.fetchall() == [(13,)]
+    close_mock.assert_called_once_with()
