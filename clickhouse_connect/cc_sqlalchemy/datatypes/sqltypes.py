@@ -44,6 +44,7 @@ from clickhouse_connect.driver.exceptions import ClickHouseError, InternalError
 from clickhouse_connect.driver.parser import parse_callable, parse_columns, parse_enum
 
 _T = TypeVar("_T")
+_ChSqlaTypeT = TypeVar("_ChSqlaTypeT", bound=ChSqlaType)
 
 _TYPE_ARGS = {name.lower(): ch_type._type_args for name, ch_type in type_map.items()}
 _TYPE_ARGS.update({name.lower(): type_args for name, type_args in _WRAPPER_TYPE_ARGS.items()})
@@ -426,7 +427,7 @@ class Time64(ChSqlaType, Interval):  # type: ignore[misc]
         return self
 
 
-def Nullable(element: ChSqlaType | type[ChSqlaType]) -> ChSqlaType:  # noqa: N802
+def Nullable(element: _ChSqlaTypeT | type[_ChSqlaTypeT]) -> _ChSqlaTypeT:  # noqa: N802
     """Wrap a ChSqlaType instance or class with a Nullable modifier for DDL construction."""
     if callable(element):
         return element(type_def=NULLABLE_TYPE_DEF)
@@ -435,7 +436,7 @@ def Nullable(element: ChSqlaType | type[ChSqlaType]) -> ChSqlaType:  # noqa: N80
     return element.__class__(type_def=TypeDef(wrappers, orig.keys, orig.values))
 
 
-def LowCardinality(element: ChSqlaType | type[ChSqlaType]) -> ChSqlaType:  # noqa: N802
+def LowCardinality(element: _ChSqlaTypeT | type[_ChSqlaTypeT]) -> _ChSqlaTypeT:  # noqa: N802
     """Wrap a ChSqlaType instance or class with a LowCardinality modifier for DDL construction."""
     if callable(element):
         return element(type_def=LC_TYPE_DEF)
