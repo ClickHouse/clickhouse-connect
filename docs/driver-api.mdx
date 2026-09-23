@@ -812,32 +812,29 @@ The module exports the PEP 249 exception hierarchy: `Warning`, `Error`, `Interfa
 ```python
 from clickhouse_connect import dbapi
 
-connection = dbapi.connect(
+with dbapi.connect(
     host="localhost",
     username="default",
     password="password",
     database="default",
-)
-cursor = connection.cursor()
-
-try:
-    cursor.execute(
-        "SELECT name FROM system.tables "
-        "WHERE database = %(database)s ORDER BY name LIMIT 5",
-        {"database": "system"},
-    )
-    print(cursor.description)
-    print(cursor.fetchall())
-finally:
-    cursor.close()
-    connection.close()
+) as connection:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT name FROM system.tables "
+            "WHERE database = %(database)s ORDER BY name LIMIT 5",
+            {"database": "system"},
+        )
+        print(cursor.description)
+        print(cursor.fetchall())
 ```
+
+As a driver extension, `Connection` and `Cursor` context managers return the existing object and call `close()` on normal and exceptional exit. They don't suppress exceptions from the block.
 
 `Cursor.execute` and `Cursor.executemany` accept additional `settings` and `query_formats` keyword arguments. `settings` passes ClickHouse settings. `query_formats` applies read formats by ClickHouse type when a statement returns rows, using the same mapping as `Client.query`. Both methods also accept the keyword-only `pyformat_encoded` argument. Its default `True` follows the DB-API `pyformat` contract. The SQLAlchemy dialect sets it to `False` when the statement compiler emitted raw percent signs, so applications normally should not set it. Parameterized `Cursor.executemany` operations execute once for each parameter set, preserving SQL binding and expression semantics. With HTTP, this sends one request per parameter set. If a later parameter set fails, earlier writes remain committed. For these `executemany` inserts, `Cursor.rowcount` is the sum of the `written_rows` values reported by ClickHouse, or `-1` when that value is unavailable. INSERT statements sent through `Cursor.execute` report `0`. The placeholder-less `INSERT INTO table (columns) VALUES` compatibility form uses Native insertion. A placeholder-less INSERT ending in `VALUES` raises `ProgrammingError` if it cannot be recognized as that compatibility form. Applications that need explicit Native bulk insertion should use `Client.insert`. `fetchone`, `fetchmany`, and `fetchall` consume the current materialized result.
 
 `Cursor.description` derives `null_ok` from each result column type. Non-nullable types report `False`, and nullable types report `True`, including `Nullable` wrappers, `Variant`, and `Dynamic`. `None` means the nullability is unknown. When a query that starts with `SELECT` or `WITH`, ignoring leading comments, returns no rows and no column metadata, the cursor runs a `LIMIT 0` metadata query to populate `description`. If that metadata query fails, `description` is left empty.
 
-ClickHouse does not provide traditional transactions through this HTTP interface. `Connection.commit()` and `Connection.rollback()` are no-ops. The [session ID concurrency rules](/integrations/language-clients/python/advanced-usage#managing-clickhouse-session-ids) still apply when a connection is shared.
+ClickHouse does not provide traditional transactions through this HTTP interface. `Connection.commit()` and `Connection.rollback()` are no-ops, so leaving a connection context calls `Connection.close()` instead of committing or rolling back. The [session ID concurrency rules](/integrations/language-clients/python/advanced-usage#managing-clickhouse-session-ids) still apply when a connection is shared.
 
 ## Utility classes and functions {#utility-classes-and-functions}
 

@@ -2,6 +2,7 @@ import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import TracebackType
 from typing import Any, cast
 
 from clickhouse_connect.datatypes.base import ClickHouseType
@@ -305,6 +306,17 @@ class Cursor:
 
     def close(self) -> None:
         self.data = None
+
+    def __enter__(self) -> "Cursor":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        exc_traceback: TracebackType | None,
+    ) -> None:
+        self.close()
 
     def execute(
         self,

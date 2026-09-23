@@ -1,3 +1,4 @@
+from types import TracebackType
 from typing import Any
 
 from clickhouse_connect.dbapi.cursor import Cursor
@@ -39,6 +40,19 @@ class Connection:
 
     def close(self) -> None:
         self.client.close()
+
+    def __enter__(self) -> "Connection":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        exc_traceback: TracebackType | None,
+    ) -> None:
+        # ClickHouse has no client-side transactions (commit/rollback are no-ops),
+        # so exiting the context closes the connection instead of ending a transaction.
+        self.close()
 
     def commit(self) -> None:
         pass
