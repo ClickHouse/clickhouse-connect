@@ -21,6 +21,13 @@ from clickhouse_connect.driver.query import QueryResult
 from clickhouse_connect.driver.streaming import ReadAheadSource, StreamingResponseSource
 
 
+def _cancellation_cause(ex: asyncio.CancelledError) -> BaseException | None:
+    # Python 3.10 re-raises a cancelled task as a new CancelledError chained to the original.
+    if ex.__cause__ is None and isinstance(ex.__context__, asyncio.CancelledError):
+        ex = ex.__context__
+    return ex.__cause__
+
+
 @pytest.fixture(params=["python", "cython"])
 def buffer_cls(request):
     if request.param == "cython":
@@ -407,7 +414,7 @@ async def test_external_close_keeps_cleanup_error(cancelled):
         assert await reader == [b"first"]
         with pytest.raises(asyncio.CancelledError if cancelled else RuntimeError) as excinfo:
             await cleanup
-    assert (excinfo.value.__cause__ if cancelled else excinfo.value) is close_error
+    assert (_cancellation_cause(excinfo.value) if cancelled else excinfo.value) is close_error
     response.close.assert_called_once_with()
 
 
@@ -591,7 +598,7 @@ async def test_cancelled_query_close_finishes_sync_drain(buffer_cls, close_fails
         release_drain.set()
         with pytest.raises(asyncio.CancelledError) as excinfo:
             await cleanup
-    assert excinfo.value.__cause__ is (close_error if close_fails else None)
+    assert _cancellation_cause(excinfo.value) is (close_error if close_fails else None)
     source.close()
     response.close.assert_called_once_with()
 
