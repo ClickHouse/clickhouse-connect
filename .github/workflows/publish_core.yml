@@ -21,6 +21,9 @@ env:
   MATURIN_MANIFEST: rust/ch-core-py/Cargo.toml
 
 jobs:
+  clickhouse-versions:
+    uses: ./.github/workflows/clickhouse-versions.yml
+
   portable_driver_wheel:
     name: Build portable driver for core qualification
     runs-on: ubuntu-latest
@@ -299,12 +302,12 @@ jobs:
   smoke_test:
     name: Wheel smoke test against ClickHouse
     runs-on: ubuntu-latest
-    needs: [build_linux_wheels, portable_driver_wheel]
+    needs: [build_linux_wheels, portable_driver_wheel, clickhouse-versions]
     steps:
       - uses: actions/checkout@v6
-      - name: Start ClickHouse (26.3) in Docker
+      - name: Start ClickHouse (${{ needs.clickhouse-versions.outputs.default }}) in Docker
         env:
-          CLICKHOUSE_CONNECT_TEST_CH_VERSION: '26.3'
+          CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ needs.clickhouse-versions.outputs.default }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-core-smoke
         run: docker compose -f docker-compose.yml up -d --wait clickhouse
       - name: Set up Python 3.12

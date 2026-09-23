@@ -11,6 +11,7 @@
 
 ### Bug Fixes
 
+- Async `insert_arrow` and `insert_df_arrow` now run DataFrame conversion and Arrow encoding in a dedicated worker owned by the client. This reduces event-loop stalls during large inserts. Closes [#1054](https://github.com/ClickHouse/clickhouse-connect/issues/1054).
 - Closing a Rust codec stream during read-ahead startup no longer lets a producer read from an already closed source. This applies to sync and async cleanup.
 - Closing a sync Rust codec stream early now drains its HTTP response before releasing the response iterator. This fixes premature connection closure that could make the next query on the same client fail with `SESSION_IS_LOCKED`.
 - Concurrent sync and async cleanup of a Rust codec stream now releases its response source only once.
@@ -18,6 +19,7 @@
 - Cancelling a pending Rust codec stream read now releases the waiting decoder worker. Previously, closing the stream could leave a worker blocked and hang async executor shutdown.
 - Rust codec NumPy and Pandas queries now preserve nanoseconds in nullable scalar `DateTime64(9)` columns, including `SimpleAggregateFunction` aliases. They also reject unsupported scalar `DateTime64` precisions consistently for nullable columns and aliases.
 - Rust codec NumPy and Pandas queries now return correct durations and `NaT` for NULL values in `Nullable(SimpleAggregateFunction(..., Time64))` columns. Previously, columns with NULLs returned floating-point bit patterns interpreted as durations.
+- Large async external-data uploads now use bounded writes to avoid long event-loop stalls during TLS encryption. Closes [#1057](https://github.com/ClickHouse/clickhouse-connect/issues/1057).
 
 ### Compatibility
 

@@ -1729,6 +1729,7 @@ class TestInsertArrowTransportSettings:
             database="default",
         )
         client.write_compression = None
+        client._backend.session = Mock(closed=False, headers={})
         transport = {"X-Test-Header": "1"}
         with (
             patch("clickhouse_connect.driver.asyncclient.check_arrow"),
@@ -1769,6 +1770,7 @@ class TestInsertArrowTableQuoting:
             database="default",
         )
         client.write_compression = None
+        client._backend.session = Mock(closed=False, headers={})
         return client
 
     def _sync_raw_insert_table(self, table: str, database: str | None = None) -> str:
