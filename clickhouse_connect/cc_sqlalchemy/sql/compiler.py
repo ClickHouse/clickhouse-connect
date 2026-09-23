@@ -336,30 +336,21 @@ class ChStatementCompiler(SQLCompiler):
         raise NotImplementedError("ClickHouse doesn't support sequences")
 
     def group_by_clause(self, select, **kw):
-        """Render GROUP BY using label aliases instead of full expressions."""
-        kw["_ch_group_by"] = True
-        return super().group_by_clause(select, **kw)
-
-    def visit_label(
-        self,
-        label,
-        within_columns_clause=False,
-        render_label_as_label=None,
-        **kw,
-    ):
-        ch_group_by = kw.pop("_ch_group_by", False)
-        if ch_group_by and not within_columns_clause and render_label_as_label is None:
-            if isinstance(label.name, elements._truncated_label):
-                labelname = self._truncated_identifier("colident", label.name)
-            else:
-                labelname = label.name
-            return self.preparer.format_label(label, labelname)
-        return super().visit_label(
-            label,
-            within_columns_clause=within_columns_clause,
-            render_label_as_label=render_label_as_label,
-            **kw,
-        )
+        """Use aliases for top-level labels defined by the current SELECT."""
+        clauses = []
+        for clause in select._group_by_clauses:
+            if isinstance(clause, elements.Label):
+                selected = self.stack[-1]["compile_state"]._label_resolve_dict[2].get(clause.name)
+                if (
+                    isinstance(selected, elements.Label)
+                    and not clause.shares_lineage(selected)
+                    and clause.compare(selected, compare_values=False)
+                ):
+                    clause = selected
+                clause = elements._label_reference(clause)
+            clauses.append(clause)
+        text = self._generate_delimited_list(clauses, ", ", **kw)
+        return " GROUP BY " + text if text else ""
 
     def _ch_modifier_attr(self, select, compile_state, attr, default):
         """Read a CH modifier attribute."""
