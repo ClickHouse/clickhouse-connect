@@ -13,6 +13,7 @@ from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_ANY_CONT
 from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from libc.string cimport memcpy
 
+from clickhouse_connect.driver.common import _close_async
 from clickhouse_connect.driver.exceptions import StreamCompleteException
 
 cdef union ull_wrapper:
@@ -365,6 +366,11 @@ cdef class ResponseBuffer:
         if self.source:
             self.source.close()
             self.source = None
+
+    async def aclose(self) -> None:
+        source, self.source = self.source, None
+        if source:
+            await _close_async(source)
 
     @property
     def exception_tag(self):

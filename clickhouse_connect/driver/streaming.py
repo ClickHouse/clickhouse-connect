@@ -616,6 +616,18 @@ async def _wait_for_cleanup(
     return cancelled
 
 
+async def _join_read_ahead_producer(
+    thread: threading.Thread,
+    cancelled: asyncio.CancelledError | None,
+) -> asyncio.CancelledError | None:
+    try:
+        join_future = asyncio.get_running_loop().run_in_executor(None, thread.join, 1.0)
+    except RuntimeError:
+        # The default executor is shut down. Skip the bounded join rather than block the loop.
+        return cancelled
+    return await _wait_for_cleanup(join_future, cancelled)
+
+
 def _finalize_read_ahead_off_loop(
     source: ByteSource,
     source_queue: queue.Queue[tuple[str, object]],
@@ -692,16 +704,17 @@ class ReadAheadSource(Closable):
         return source
 
     def close(self) -> None:
-        # Join the producer before closing the source. A queue-blocked producer returns within one put
-        # timeout of the stop event; a read-blocked producer exits after its in-flight read returns. Closing
-        # the source only after the join keeps the transport single-reader: the sync source drains on close,
-        # which would race a producer still reading it.
+        # Let queue-blocked producers exit first. The source owns any pending transport read
+        # and must synchronize or cancel it during close.
         self._stop_event.set()
         with self._release_lock:
             thread = self._thread
-        if thread is not None and thread.is_alive():
+        # A finalizer on the producer thread may run inside Queue.put while it holds the queue mutex.
+        on_producer = thread is threading.current_thread()
+        if thread is not None and not on_producer and thread.is_alive():
             thread.join(timeout=1.0)
-        self._drain()
+        if not on_producer:
+            self._drain()
         source = self._take_source()
         if source is not None:
             source.close()
@@ -710,14 +723,12 @@ class ReadAheadSource(Closable):
         self._stop_event.set()
         cancelled: asyncio.CancelledError | None = None
         cleanup_error: BaseException | None = None
-        loop = asyncio.get_running_loop()
         with self._release_lock:
             thread = self._thread
         if thread is not None and thread.is_alive():
             # Join off the event loop so the worst-case wait never blocks it.
-            join_future = loop.run_in_executor(None, thread.join, 1.0)
             try:
-                cancelled = await _wait_for_cleanup(join_future, cancelled)
+                cancelled = await _join_read_ahead_producer(thread, cancelled)
             except BaseException as ex:  # noqa: BLE001 - source cleanup must still run
                 cleanup_error = ex
         self._drain()
@@ -735,9 +746,8 @@ class ReadAheadSource(Closable):
         # A source close can unblock a producer whose in-flight read outlived the first bounded join.
         # Wait once more so async cleanup does not return while that producer is still unwinding.
         if thread is not None and thread.is_alive():
-            join_future = loop.run_in_executor(None, thread.join, 1.0)
             try:
-                cancelled = await _wait_for_cleanup(join_future, cancelled)
+                cancelled = await _join_read_ahead_producer(thread, cancelled)
             except BaseException as ex:  # noqa: BLE001 - preserve the first cleanup failure
                 if cleanup_error is None:
                     cleanup_error = ex
