@@ -1,6 +1,7 @@
 import asyncio
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
 import pytest
@@ -71,6 +72,44 @@ async def test_concurrent_streams(test_config):
         assert len(results) == 3
         assert all(r > 0 for r in results)
         assert elapsed < 5.0
+
+
+@pytest.mark.parametrize("input_kind", ["arrow", "pandas", "polars"])
+def test_arrow_stream_to_insert_with_busy_executor(test_config, table_context, input_kind):
+    if not arrow:
+        pytest.skip("PyArrow package not available")
+    if input_kind != "arrow":
+        pytest.importorskip(input_kind)
+
+    async def copy_stream(table):
+        # Use a private event loop so its one-worker executor cannot affect other tests.
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+        async with await get_async_client(**make_client_config(test_config, autogenerate_session_id=False)) as client:
+            query = "SELECT number FROM numbers(3000)"
+            settings = {"max_block_size": 100, "max_threads": 1}
+            if input_kind == "arrow":
+                stream = await client.query_arrow_stream(query, settings=settings)
+            else:
+                stream = await client.query_df_arrow_stream(query, settings=settings, dataframe_library=input_kind)
+
+            async def insert_batches():
+                batches = 0
+                async with stream:
+                    async for batch in stream:
+                        if input_kind == "arrow":
+                            await client.insert_arrow(table, arrow.Table.from_batches([batch]))
+                        else:
+                            await client.insert_df_arrow(table, batch)
+                        batches += 1
+                return batches
+
+            # The stream must exceed the reader's queue capacity to keep its worker occupied.
+            assert await asyncio.wait_for(insert_batches(), timeout=15) > 10
+            result = await client.query(f"SELECT number FROM {table} ORDER BY number")
+            assert result.result_rows == [(number,) for number in range(3000)]
+
+    with table_context(f"test_arrow_stream_to_insert_{input_kind}", ["number UInt64"]) as ctx:
+        asyncio.run(copy_stream(ctx.table))
 
 
 @pytest.mark.asyncio

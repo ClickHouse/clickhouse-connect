@@ -10,6 +10,7 @@
 
 ### Bug Fixes
 
+- Async `insert_arrow` and `insert_df_arrow` now run DataFrame conversion and Arrow encoding in a dedicated worker owned by the client. This reduces event-loop stalls during large inserts. Closes [#1054](https://github.com/ClickHouse/clickhouse-connect/issues/1054).
 - Closing a Rust codec stream during read-ahead startup no longer lets a producer read from an already closed source. This applies to sync and async cleanup.
 - Closing a sync Rust codec stream early now drains its HTTP response before releasing the response iterator. This fixes premature connection closure that could make the next query on the same client fail with `SESSION_IS_LOCKED`.
 - Concurrent sync and async cleanup of a Rust codec stream now releases its response source only once.
