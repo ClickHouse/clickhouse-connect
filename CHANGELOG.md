@@ -2,9 +2,28 @@
 
 ## UNRELEASED
 
+### Improvements
+
+- Rust codec NumPy and Pandas queries no longer require PyArrow. This includes buffered and streamed results and `query(..., use_numpy=True)`. Pandas strings use the Arrow conversion when PyArrow is installed and the Rust object conversion otherwise. Invalid UTF-8 keeps its existing hex rendering. Explicit Arrow storage and Arrow methods still require PyArrow.
+- The Rust codec now converts non-nullable 8-64-bit integers, Float32/64, Boolean, BFloat16, Interval, Date/Date32, DateTime/DateTime64, and Time/Time64 columns to NumPy/Pandas directly from its decoded buffers. Nullable BFloat16 and Time/Time64 also use direct buffers, as do arrays of Time/Time64 and LowCardinality(Time). Extended Pandas nullable integer, float, and Interval output uses direct buffers as well. Output dtypes are unchanged.
+- The Rust codec now feeds large response chunks to the decoder in bounded slices. This reduces temporary decoder copies and the number of decoded blocks held during conversion, lowering peak memory for large `query_np`, `query_df`, and `query()` results. Output is unchanged.
+
 ### Bug Fixes
 
+- Async `insert_arrow` and `insert_df_arrow` now run DataFrame conversion and Arrow encoding in a dedicated worker owned by the client. This reduces event-loop stalls during large inserts. Closes [#1054](https://github.com/ClickHouse/clickhouse-connect/issues/1054).
+- Closing a Rust codec stream during read-ahead startup no longer lets a producer read from an already closed source. This applies to sync and async cleanup.
+- Closing a sync Rust codec stream early now drains its HTTP response before releasing the response iterator. This fixes premature connection closure that could make the next query on the same client fail with `SESSION_IS_LOCKED`.
+- Concurrent sync and async cleanup of a Rust codec stream now releases its response source only once.
+- Core musllinux wheels now compile for musl instead of GNU libc, fixing Rust codec imports on Alpine Linux and other musl-based systems.
+- Cancelling a pending Rust codec stream read now releases the waiting decoder worker. Previously, closing the stream could leave a worker blocked and hang async executor shutdown.
+- Rust codec NumPy and Pandas queries now preserve nanoseconds in nullable scalar `DateTime64(9)` columns, including `SimpleAggregateFunction` aliases. They also reject unsupported scalar `DateTime64` precisions consistently for nullable columns and aliases.
+- Rust codec NumPy and Pandas queries now return correct durations and `NaT` for NULL values in `Nullable(SimpleAggregateFunction(..., Time64))` columns. Previously, columns with NULLs returned floating-point bit patterns interpreted as durations.
 - Large async external-data uploads now use bounded writes to avoid long event-loop stalls during TLS encryption. Closes [#1057](https://github.com/ClickHouse/clickhouse-connect/issues/1057).
+
+### Compatibility
+
+- Rust NumPy object columns for nullable scalar `DateTime64(9)` now contain `numpy.datetime64` cells at UTC nanosecond resolution instead of Python `datetime` cells. SQL NULL stays `None`. Use `query_df` to retain named timezone metadata. Pandas datetime output now uses nanoseconds instead of Pandas 3's microseconds, while existing object dtypes from all-null blocks remain.
+- The Rust extra now requires `clickhouse-connect-core>=0.2.1,<0.3`. Rust codec setup checks the column buffer API separately from the binding API and reports upgrade guidance for older core wheels.
 
 ## 1.9.0, 2026-09-21
 

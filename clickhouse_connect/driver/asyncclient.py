@@ -7,8 +7,11 @@ import sys
 import uuid
 from base64 import b64encode
 from collections.abc import Awaitable, Callable, Generator, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from datetime import tzinfo
-from typing import TYPE_CHECKING, Any, BinaryIO, cast
+from threading import Lock
+from typing import TYPE_CHECKING, Any, BinaryIO, TypeVar, cast
 
 import aiohttp
 
@@ -86,6 +89,8 @@ from clickhouse_connect.driver.streaming import (
 from clickhouse_connect.driver.summary import QuerySummary
 from clickhouse_connect.driver.transform import NativeTransform, Transform
 from clickhouse_connect.driver.types import Closable
+
+_T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
 
@@ -276,6 +281,8 @@ class AsyncClient(Client):
         self._client_settings: dict[str, str] = {}
         self._init_lock = asyncio.Lock()
         self._initialized = False
+        self._arrow_insert_executor: ThreadPoolExecutor | None = None
+        self._arrow_insert_lock = Lock()
         self._reported_libs: set[str] = set()
         self.headers["User-Agent"] = self.headers["User-Agent"].replace("mode:sync;", "mode:async;")
         if headers:
@@ -457,11 +464,20 @@ class AsyncClient(Client):
         await self.close()
         return False
 
+    def _close_arrow_insert_executor(self) -> None:
+        with self._arrow_insert_lock:
+            executor = self._arrow_insert_executor
+            self._arrow_insert_executor = None
+        if executor is not None:
+            executor.shutdown(wait=False)
+
     async def close(self) -> None:  # type: ignore[override]
+        self._close_arrow_insert_executor()
         await self._backend.close()
 
     def _force_close(self) -> None:
         self._backend.force_close()
+        self._close_arrow_insert_executor()
 
     async def close_connections(self) -> None:  # type: ignore[override]
         """Rotate the connection pool: new requests use a fresh session; in-flight
@@ -1087,6 +1103,32 @@ class AsyncClient(Client):
         streaming_source = await start_streaming_response(response, encoding=encoding, exception_tag=exception_tag)
         return self._arrow_batch_stream(streaming_source, converter)
 
+    async def _run_arrow_preparation(self, prepare: Callable[[], _T]) -> _T:
+        with self._arrow_insert_lock:
+            if self._session is None:
+                raise ProgrammingError(
+                    "Session not initialized. Use 'async with get_async_client(...)' or call 'await client._initialize()' first."
+                )
+            if self._arrow_insert_executor is None:
+                # Stream readers can occupy every default worker while awaiting inserts.
+                # One separate worker also bounds concurrent Arrow preparation per client.
+                self._arrow_insert_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clickhouse-arrow-insert")
+            executor = self._arrow_insert_executor
+
+            def run() -> _T:
+                # Reject work queued before close() without cancelling the caller.
+                with self._arrow_insert_lock:
+                    if self._arrow_insert_executor is not executor:
+                        raise ProgrammingError("Client session is unavailable; the client may have been closed.")
+                return prepare()
+
+            future = asyncio.get_running_loop().run_in_executor(executor, copy_context().run, run)
+        result = await future
+        with self._arrow_insert_lock:
+            if self._arrow_insert_executor is not executor:
+                raise ProgrammingError("Client session is unavailable; the client may have been closed.")
+        return result
+
     async def insert_arrow(  # type: ignore[override]
         self,
         table: str,
@@ -1107,9 +1149,14 @@ class AsyncClient(Client):
         self._add_integration_tag("arrow")
         full_table = _qualified_table(table, database)
         compression = self.write_compression if self.write_compression in ("zstd", "lz4") else None
-        column_names, insert_block = arrow_buffer(arrow_table, compression)
-        if hasattr(insert_block, "to_pybytes"):
-            insert_block = insert_block.to_pybytes()
+
+        def encode_arrow() -> tuple[Sequence[str], bytes | BinaryIO]:
+            column_names, insert_block = arrow_buffer(arrow_table, compression)
+            if hasattr(insert_block, "to_pybytes"):
+                insert_block = insert_block.to_pybytes()
+            return column_names, insert_block
+
+        column_names, insert_block = await self._run_arrow_preparation(encode_arrow)
         return await self.raw_insert(full_table, column_names, insert_block, settings, "Arrow", transport_settings=transport_settings)
 
     async def insert_df_arrow(  # type: ignore[override]
@@ -1152,16 +1199,16 @@ class AsyncClient(Client):
                 raise ProgrammingError(
                     f"insert_df_arrow requires all columns to use PyArrow dtypes. Non-Arrow columns found: [{', '.join(non_arrow_cols)}]. "
                 )
-            try:
-                arrow_table = options.arrow.Table.from_pandas(df, preserve_index=False)
-            except Exception as e:
-                raise DataError(f"Failed to convert pandas DataFrame to Arrow table: {e}") from e
-        else:
-            try:
-                arrow_table = df.to_arrow()
-            except Exception as e:
-                raise DataError(f"Failed to convert polars DataFrame to Arrow table: {e}") from e
 
+        def convert_dataframe() -> pyarrow.Table:
+            try:
+                if df_lib == "pandas":
+                    return options.arrow.Table.from_pandas(df, preserve_index=False)
+                return df.to_arrow()
+            except Exception as e:
+                raise DataError(f"Failed to convert {df_lib} DataFrame to Arrow table: {e}") from e
+
+        arrow_table = await self._run_arrow_preparation(convert_dataframe)
         self._add_integration_tag(df_lib)
         return await self.insert_arrow(
             table=table,

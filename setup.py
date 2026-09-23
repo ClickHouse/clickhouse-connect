@@ -104,7 +104,7 @@ def run_setup():
             "tzdata": ["tzdata"],
             "async": ["aiohttp>=3.9.0"],
             "chdb": ["chdb>=4.1.7"],
-            "rust": ["clickhouse-connect-core>=0.2.0,<0.3"],
+            "rust": ["clickhouse-connect-core>=0.2.1,<0.3"],
         },
         entry_points={
             "sqlalchemy.dialects": [

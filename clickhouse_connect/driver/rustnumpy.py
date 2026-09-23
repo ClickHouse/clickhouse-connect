@@ -3,13 +3,16 @@
 The rust Arrow export is raw: Date is uint16 days, DateTime is uint32 seconds with the timezone dropped,
 Enum is raw ints. A naive to_pandas() therefore yields wrong dtypes. These converters are resolved once
 per query from the driver's own ClickHouseType (np_type, tzinfo, nullability) so the produced columns match
-the Python codec by construction. Non-nullable numeric and temporal columns take the Arrow exit. Time and
-Time64 keep their declared duration units through NumPy and extended pandas output. Extended pandas output
-builds String columns from the Arrow buffers. Other strings, enums, and remaining nullable columns take the rust
-python-object exit and are finalized through the driver's own _finalize_column.
+the Python codec by construction. Primitive numerics and Booleans use typed buffers, including nullable
+integer and float columns in extended pandas output. BFloat16 widens its buffer words to float32, and
+Intervals expose signed counts through buffers. Scalar temporal columns, arrays of Time/Time64, and LowCardinality(Time)
+also use typed buffers. Time and Time64 keep their declared duration units through NumPy and extended pandas output.
+Extended pandas output uses Arrow buffers for String storage when PyArrow is available. Other strings,
+enums, and remaining nullable columns take the rust python-object exit and are finalized through the driver's own _finalize_column.
 """
 
 import logging
+import sys
 from collections.abc import Callable, Sequence
 from typing import Any, cast
 
@@ -19,7 +22,7 @@ from clickhouse_connect.datatypes.container import Array, Map, Nested, Tuple
 from clickhouse_connect.datatypes.numeric import BFloat16, Interval
 from clickhouse_connect.datatypes.special import SimpleAggregateFunction
 from clickhouse_connect.datatypes.string import String
-from clickhouse_connect.datatypes.temporal import Date, DateTime, DateTime64, DateTimeBase, Time, Time64
+from clickhouse_connect.datatypes.temporal import Date, DateTimeBase, Time, Time64
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.common import first_value
 from clickhouse_connect.driver.exceptions import NotSupportedError
@@ -30,6 +33,9 @@ logger: logging.Logger = logging.getLogger(__name__)
 BlockConverter = Callable[[Any, Any, int], Any]
 
 _TIME64_UNITS = {0: "s", 3: "ms", 6: "us", 9: "ns"}
+_INTERVAL_ARROW_UNITS = {"IntervalSecond": "s", "IntervalMillisecond": "ms", "IntervalMicrosecond": "us", "IntervalNanosecond": "ns"}
+_NUMERIC_BUFFER_TYPES = frozenset({"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Float32", "Float64"})
+_NUMERIC_BUFFER_KINDS = frozenset(name.lower() for name in _NUMERIC_BUFFER_TYPES)
 _COMPOUND_JSON_BINARY_TYPE_INDEXES = frozenset({0x1E, 0x1F, 0x20, 0x23, 0x26, 0x27, 0x2B, 0x30})
 
 
@@ -139,64 +145,256 @@ class _Converter:
         return self._convert(arrow_table, col_batch, index)
 
 
-def _arrow_column(arrow_table: Any, index: int) -> Any:
-    return arrow_table.column(index).combine_chunks()
+def _buffer_values(column: Any) -> Any:
+    """View a primitive descriptor, or unpack its Boolean bits."""
+    if column.kind == "bool_bitmap":
+        packed = options.np.frombuffer(column.values, dtype="uint8")
+        return options.np.unpackbits(packed, count=column.length, bitorder="little").view(options.np.bool_)
+    if column.kind in _NUMERIC_BUFFER_KINDS:
+        dtype = options.np.dtype(column.kind)
+    elif column.kind == "bfloat16":
+        dtype = options.np.dtype("uint16")
+    else:
+        raise NotImplementedError(f"Unsupported column buffer kind {column.kind!r}")
+    if column.byteorder != sys.byteorder:
+        dtype = dtype.newbyteorder()
+    return options.np.frombuffer(column.values, dtype=dtype, count=column.length)
 
 
-def _numeric_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-    return _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False)
+def _buffer_null_mask(column: Any) -> Any:
+    """Expand validity bits into a writable Boolean null mask."""
+    if column.validity is None:
+        return options.np.zeros(column.length, dtype=options.np.bool_)
+    packed = options.np.frombuffer(column.validity, dtype="uint8")
+    mask = options.np.unpackbits(packed, count=column.length, bitorder="little").view(options.np.bool_)
+    options.np.logical_not(mask, out=mask)
+    return mask
 
 
-def _make_bfloat16_convert(as_extended_pandas: bool) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        column = _arrow_column(arrow_table, index)
-        data = column.buffers()[1]
-        if data is None:
-            values = options.np.zeros(len(column), dtype=options.np.float32)
-        else:
-            words = options.np.frombuffer(data, dtype="<u2", count=len(column), offset=column.offset * 2)
-            values = words.astype(options.np.uint32)
-            values <<= options.np.uint32(16)
-            values = values.view(options.np.float32)
-        if column.null_count:
-            values[column.is_null().to_numpy(zero_copy_only=False)] = options.np.nan
-        if as_extended_pandas:
-            return options.pd.array(values, dtype="Float32")
+def _join_chunks(chunks: list[Any], dtype: Any) -> Any:
+    if not chunks:
+        return options.np.empty(0, dtype=dtype)
+    return chunks[0] if len(chunks) == 1 else options.np.concatenate(chunks)
+
+
+def _make_numeric_buffer_convert(ch_type: ClickHouseType, nullable_alias: bool = False) -> BlockConverter:
+    dtype = options.np.dtype(ch_type.np_type)
+    bool_objects = options.np.array([False, True, None], dtype=object) if nullable_alias and dtype.kind == "b" else None
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for {ch_type.name}")
+        chunks = []
+        for column in columns:
+            values = _buffer_values(column)
+            if nullable_alias and column.null_count:
+                null_mask = _buffer_null_mask(column)
+                if bool_objects is not None:
+                    values = bool_objects.take(options.np.where(null_mask, options.np.uint8(2), values.view(options.np.uint8)))
+                else:
+                    values = options.np.where(null_mask, options.np.nan, values)
+            chunks.append(values)
+        return _join_chunks(chunks, dtype)
+
+    return convert
+
+
+def _make_numeric_dictionary_convert(ch_type: ClickHouseType) -> BlockConverter:
+    """Preserve NumPy output for numeric aliases that hide dictionary storage."""
+    while isinstance(ch_type, SimpleAggregateFunction):
+        ch_type = ch_type.element_type
+    binary = isinstance(ch_type, BFloat16)
+    unit = _INTERVAL_ARROW_UNITS.get(ch_type.base_type or "") if isinstance(ch_type, Interval) else None
+    dtype = options.np.dtype(object if binary else f"timedelta64[{unit}]" if unit else ch_type.np_type).newbyteorder("=")
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for {ch_type.name}")
+        chunks = []
+        null_count = 0
+        for column in columns:
+            index_dtype = options.np.dtype("int32")
+            if column.byteorder != sys.byteorder:
+                index_dtype = index_dtype.newbyteorder()
+            indices = options.np.frombuffer(column.values, dtype=index_dtype, count=column.length).astype(options.np.intp, copy=False)
+            if binary:
+                dictionary = options.np.frombuffer(column.child.values, dtype="V2", count=column.child.length).astype(object)
+            else:
+                dictionary = _buffer_values(column.child).astype("int64" if unit else dtype, copy=False)
+                if unit:
+                    dictionary = dictionary.view(dtype)
+            if column.null_count:
+                null_count += column.null_count
+                if dtype.kind in ("i", "u"):
+                    dictionary = dictionary.astype("float64")
+                elif dtype.kind == "b":
+                    dictionary = dictionary.astype(object)
+                else:
+                    dictionary = dictionary.copy()
+                dictionary[0] = None if dtype.kind in ("b", "O") else options.np.timedelta64("NaT", unit) if unit else options.np.nan
+            chunks.append(dictionary[indices])
+        values = _join_chunks(chunks, dtype)
+        if not null_count and dtype.kind not in ("b", "O"):
+            values.flags.writeable = False
         return values
 
     return convert
 
 
-def _interval_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-    column = _arrow_column(arrow_table, index)
-    return column.cast(options.arrow.int64()).to_numpy(zero_copy_only=False)
+def _make_bfloat16_convert(as_extended_pandas: bool) -> BlockConverter:
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError("Unsupported column buffers for BFloat16")
+        chunks = []
+        for column in columns:
+            values = _buffer_values(column).astype(options.np.uint32)
+            values <<= options.np.uint32(16)
+            values = values.view(options.np.float32)
+            if column.null_count:
+                values = options.np.where(_buffer_null_mask(column), options.np.nan, values)
+            chunks.append(values)
+        values = _join_chunks(chunks, "float32")
+        if as_extended_pandas:
+            distinguish_nan = getattr(getattr(options.pd.options, "future", None), "distinguish_nan_and_na", False)
+            mask = options.np.zeros(len(values), dtype="bool") if distinguish_nan else options.np.isnan(values)
+            if not distinguish_nan and mask.any():
+                values = options.np.where(mask, options.np.nan, values)
+            return options.pd.arrays.FloatingArray(values, mask, copy=False)
+        return values
+
+    return convert
+
+
+def _make_bfloat16_alias_convert(as_float: bool = False) -> BlockConverter:
+    """Preserve the raw fixed-binary output of nested BFloat16 aliases."""
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError("Unsupported column buffers for BFloat16")
+        chunks = []
+        for column in columns:
+            values = options.np.frombuffer(column.values, dtype="V2", count=column.length).astype(object)
+            if column.null_count:
+                values[_buffer_null_mask(column)] = None
+            chunks.append(values)
+        values = _join_chunks(chunks, object)
+        return values.astype("float64") if as_float else values
+
+    return convert
+
+
+def _make_interval_alias_convert(unit: str) -> BlockConverter:
+    """Preserve duration output for nested aliases of sub-minute Intervals."""
+    dtype = options.np.dtype(f"timedelta64[{unit}]")
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        return _temporal_buffer_values(col_batch, index, dtype)[0]
+
+    return convert
+
+
+def _temporal_buffer_values(col_batch: Any, index: int, dtype: Any) -> tuple[Any, int]:
+    columns = col_batch.column_buffers(index)
+    if columns is None:
+        raise NotImplementedError(f"Unsupported column buffers for {dtype}")
+    chunks = []
+    null_count = 0
+    for column in columns:
+        values = _buffer_values(column).astype("int64", copy=False).view(dtype)
+        if column.null_count:
+            values = options.np.where(_buffer_null_mask(column), dtype.type("NaT", options.np.datetime_data(dtype)[0]), values)
+            null_count += column.null_count
+        chunks.append(values)
+    return _join_chunks(chunks, dtype), null_count
 
 
 def _make_date_convert(as_pandas: bool) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        days = _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False).astype("datetime64[D]")
+    dtype = options.np.dtype("datetime64[D]")
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        days, _ = _temporal_buffer_values(col_batch, index, dtype)
         return days.astype("datetime64[s]") if as_pandas else days
 
     return convert
 
 
-def _make_datetime_convert(as_pandas: bool, active_tz: Any) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        naive = _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False).astype("datetime64[s]")
+def _make_datetime_convert(ch_type: DateTimeBase, as_pandas: bool, active_tz: Any) -> BlockConverter:
+    dtype = options.np.dtype(ch_type.np_type)
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        values, _ = _temporal_buffer_values(col_batch, index, dtype)
         if as_pandas and active_tz is not None:
-            return options.pd.DatetimeIndex(naive, tz="UTC").tz_convert(active_tz)
-        return naive
+            return options.pd.DatetimeIndex(values, tz="UTC").tz_convert(active_tz)
+        return values
 
     return convert
 
 
-def _make_datetime64_convert(as_pandas: bool, active_tz: Any) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        # Arrow timestamp[unit] -> datetime64[unit], tz metadata dropped to UTC instants.
-        column = _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False)
-        if as_pandas and active_tz is not None:
-            return options.pd.DatetimeIndex(column, tz="UTC").tz_convert(active_tz)
-        return column
+def _make_nullable_datetime_pandas_convert(
+    ch_type: DateTimeBase, extended: bool, active_tz: Any, object_convert: BlockConverter
+) -> BlockConverter:
+    """Keep nanosecond ticks without changing all-null column inference."""
+    dtype = options.np.dtype(ch_type.np_type)
+    safe_min = options.np.datetime64(-(2**63) + 1, "ns") + options.np.timedelta64(1, "D")
+    safe_max = options.np.datetime64(2**63 - 1, "ns") - options.np.timedelta64(1, "D")
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        values, null_count = _temporal_buffer_values(col_batch, index, dtype)
+        if null_count == len(values):
+            return values if extended else [None] * len(values)
+        if active_tz is not None:
+            result = options.pd.DatetimeIndex(values, tz="UTC").tz_convert(active_tz)
+            edges = options.np.flatnonzero((values < safe_min) | (values > safe_max))
+            if len(edges) and not _boxes_in_range(result, edges):
+                # Timezone-local scalar values can exceed the nanosecond range.
+                return object_convert(_arrow_table, col_batch, index)
+            return result
+        return values
+
+    return convert
+
+
+def _boxes_in_range(index: Any, positions: Any) -> bool:
+    try:
+        for position in positions.tolist():
+            _ = index[position]
+    except options.pd.errors.OutOfBoundsDatetime:
+        return False
+    return True
+
+
+def _make_nullable_datetime_numpy_convert(ch_type: DateTimeBase) -> BlockConverter:
+    dtype = options.np.dtype(ch_type.np_type)
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for {ch_type.name}")
+        # List output keeps the codec's object dtype metadata and two-dimensional result layout.
+        result: list[Any] = []
+        for column in columns:
+            if column.null_count == column.length:
+                result.extend([None] * column.length)
+                continue
+            values = _buffer_values(column).astype("int64", copy=False).view(dtype)
+            if not column.null_count:
+                result.extend(values)
+            elif column.null_count * 3 > column.length:
+                # Above one third NULL, scatter scalars only at valid positions.
+                objects = options.np.empty(column.length, dtype=object)
+                valid = options.np.logical_not(_buffer_null_mask(column))
+                objects[valid] = list(values[valid])
+                result.extend(objects.tolist())
+            else:
+                chunk = list(values)
+                for null_index in options.np.flatnonzero(_buffer_null_mask(column)).tolist():
+                    chunk[null_index] = None
+                result.extend(chunk)
+        return result
 
     return convert
 
@@ -212,38 +410,21 @@ def _make_time_convert(
     as_pandas: bool = False,
     use_extended_dtypes: bool = False,
 ) -> BlockConverter:
-    unit = "s" if isinstance(ch_type, Time) else _time64_unit(ch_type)
+    dtype = options.np.dtype(ch_type.np_type)
     nullable_pandas_ns = as_pandas and not use_extended_dtypes and _pandas_infers_ns_timedeltas()
 
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        column = _arrow_column(arrow_table, index)
-        if ch_type.nullable:
-            null_count = column.null_count
-            if isinstance(ch_type, Time):
-                column = column.cast(options.arrow.int64())
-            values = column.cast(options.arrow.duration(unit)).to_numpy(zero_copy_only=False)
-            if as_pandas:
-                return values.astype("timedelta64[ns]") if nullable_pandas_ns else values
-            # The Python codec's query_np contract for nullable temporal columns
-            # is an object array of numpy.timedelta64 scalars and None. Assign a
-            # list here because direct ndarray assignment coerces the scalars to
-            # datetime.timedelta at microsecond precision.
-            result = list(values)
-            if null_count:
-                for null_index in options.np.flatnonzero(options.np.isnat(values)):
-                    result[null_index] = None
-            return result
-        values = column.to_numpy(zero_copy_only=False)
-        if isinstance(ch_type, Time64):
-            # The core exports Time64 as its raw signed Int64 tick buffer because
-            # Arrow time types cannot represent negative or >=24-hour values.
-            # NumPy timedelta64 has the same 64-bit layout, so only reinterpret
-            # the dtype here. No values or validity data are copied.
-            return values.view(ch_type.np_type)
-        # Time is Int32 on the wire while NumPy timedelta64 uses Int64. Widening
-        # requires one allocation, but still avoids one Python timedelta object
-        # per cell and lets NumPy perform the conversion in bulk.
-        return values.astype(ch_type.np_type, copy=False)
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        values, null_count = _temporal_buffer_values(col_batch, index, dtype)
+        if not ch_type.nullable:
+            return values
+        if as_pandas:
+            return values.astype("timedelta64[ns]", copy=False) if nullable_pandas_ns else values
+        # list() preserves NumPy scalars and nanoseconds in nullable object output.
+        result = list(values)
+        if null_count:
+            for null_index in options.np.flatnonzero(options.np.isnat(values)):
+                result[null_index] = None
+        return result
 
     return convert
 
@@ -405,48 +586,75 @@ def _array_time_leaf(ch_type: ClickHouseType) -> tuple[int, Time | Time64] | Non
 
 
 def _make_array_time_convert(leaf: Time | Time64, depth: int, context: QueryContext) -> BlockConverter:
-    unit = "s" if isinstance(leaf, Time) else _time64_unit(leaf)
+    dtype = options.np.dtype(leaf.np_type)
+    nat = options.np.timedelta64("NaT", options.np.datetime_data(dtype)[0])
     extended_time_null = context.as_pandas and context.use_extended_dtypes
 
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        column = _arrow_column(arrow_table, index)
-        offset_levels = []
-        for _ in range(depth):
-            offset_levels.append(column.offsets.to_numpy().tolist())
-            column = column.values
-        if leaf.nullable:
-            null_count = column.null_count
-            if isinstance(leaf, Time):
-                column = column.cast(options.arrow.int64())
-            values = column.cast(options.arrow.duration(unit)).to_numpy(zero_copy_only=False)
-            # list() of a timedelta64 array yields numpy scalars, NaT included,
-            # which is the extended-dtypes null representation already.
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for Array({leaf.name})")
+        chunks = []
+        # Preserve the combined-column policy: any SQL NULL makes every NaT become None outside extended output.
+        null_count = 0
+        for column in columns:
+            offset_levels = []
+            for _ in range(depth):
+                offset_levels.append(options.np.frombuffer(column.offsets, dtype="int64").tolist())
+                column = column.child
+            null_count += column.null_count
+            chunks.append((offset_levels, column))
+        result = []
+        for offset_levels, column in chunks:
+            values = _buffer_values(column).astype("int64", copy=False).view(dtype)
+            if column.null_count:
+                values = options.np.where(_buffer_null_mask(column), nat, values)
             cells = list(values)
-            if null_count and not extended_time_null:
+            if leaf.nullable and null_count and not extended_time_null:
                 for null_index in options.np.flatnonzero(options.np.isnat(values)):
                     cells[null_index] = None
-        else:
-            values = column.to_numpy(zero_copy_only=False)
-            values = values.view(leaf.np_type) if isinstance(leaf, Time64) else values.astype(leaf.np_type, copy=False)
-            cells = list(values)
-        for offsets in reversed(offset_levels):
-            cells = [cells[start:stop] for start, stop in zip(offsets, offsets[1:])]
-        return cells
+            for offsets in reversed(offset_levels):
+                cells = [cells[start:stop] for start, stop in zip(offsets, offsets[1:])]
+            result.extend(cells)
+        return result
 
     return convert
 
 
 def _make_low_card_time_convert(ch_type: Time, as_pandas: bool) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        # The core exports LowCardinality(Time) as dictionary<int32, int32> with
-        # nulls in the indices. Decoding then casting stays fully vectorized.
-        column = _arrow_column(arrow_table, index).dictionary_decode()
-        values = column.cast(options.arrow.int64()).cast(options.arrow.duration("s")).to_numpy(zero_copy_only=False)
+    dtype = options.np.dtype("timedelta64[s]")
+    nat = options.np.timedelta64("NaT", "s")
+
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for {ch_type.name}")
+        chunks = []
+        null_count = 0
+        for column in columns:
+            index_dtype = options.np.dtype("int32")
+            if column.byteorder != sys.byteorder:
+                index_dtype = index_dtype.newbyteorder()
+            # Native intp indices take NumPy's direct gather path.
+            indices = options.np.frombuffer(column.values, dtype=index_dtype, count=column.length).astype(options.np.intp, copy=False)
+            dictionary = _buffer_values(column.child).astype("int64").view(dtype)
+            if column.null_count:
+                # Null rows carry dictionary index 0, which the binding checks against the validity bitmap.
+                dictionary[0] = nat
+                null_count += column.null_count
+            chunks.append(dictionary[indices])
+        values = _join_chunks(chunks, dtype)
         if as_pandas or not ch_type.nullable:
             return values
+        if null_count * 3 > len(values):
+            # Above one third NULL, scatter scalars only at valid positions.
+            objects = options.np.empty(len(values), dtype=object)
+            valid = options.np.logical_not(options.np.isnat(values))
+            objects[valid] = list(values[valid])
+            return objects.tolist()
         result = list(values)
-        if column.null_count:
-            for null_index in options.np.flatnonzero(options.np.isnat(values)):
+        if null_count:
+            for null_index in options.np.flatnonzero(options.np.isnat(values)).tolist():
                 result[null_index] = None
         return result
 
@@ -637,10 +845,9 @@ def _make_object_convert(ch_type: ClickHouseType, context: QueryContext) -> Bloc
     return convert
 
 
-def _make_string_convert(ch_type: ClickHouseType, context: QueryContext) -> BlockConverter:
+def _make_string_convert(ch_type: ClickHouseType, context: QueryContext, pd_dtype: Any) -> BlockConverter:
     # Extended pandas String output built from the Arrow buffers instead of a Python str list. The rust export
     # does not validate UTF-8, so a block with invalid bytes takes the object exit and renders them as hex.
-    pd_dtype = options.pd.StringDtype()
     object_convert = _make_object_convert(ch_type, context)
 
     def convert(arrow_table: Any, col_batch: Any, index: int) -> Any:
@@ -655,23 +862,33 @@ def _make_string_convert(ch_type: ClickHouseType, context: QueryContext) -> Bloc
 
 
 def _make_nullable_int_convert(pd_dtype: Any) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        return pd_dtype.__from_arrow__(_arrow_column(arrow_table, index))
+    def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
+        columns = col_batch.column_buffers(index)
+        if columns is None:
+            raise NotImplementedError(f"Unsupported column buffers for {pd_dtype}")
+        values = [_buffer_values(column) for column in columns]
+        masks = [_buffer_null_mask(column) for column in columns]
+        if not values:
+            return options.pd.arrays.IntegerArray(options.np.empty(0, dtype=pd_dtype.numpy_dtype), options.np.empty(0, dtype="bool"))
+        data = values[0] if len(values) == 1 else options.np.concatenate(values)
+        mask = masks[0] if len(masks) == 1 else options.np.concatenate(masks)
+        return options.pd.arrays.IntegerArray(data.astype(pd_dtype.numpy_dtype, copy=False), mask, copy=False)
 
     return convert
 
 
-def _make_nullable_interval_convert(pd_dtype: Any) -> BlockConverter:
-    def convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
-        column = _arrow_column(arrow_table, index).cast(options.arrow.int64())
-        return pd_dtype.__from_arrow__(column)
-
-    return convert
-
-
-def _nullable_float_convert(arrow_table: Any, _col_batch: Any, index: int) -> Any:
+def _nullable_float_buffer_convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
     # The Python codec renders nullable Float32/Float64 as a plain float64 array with NaN in null positions.
-    return _arrow_column(arrow_table, index).to_numpy(zero_copy_only=False).astype("float64")
+    columns = col_batch.column_buffers(index)
+    if columns is None:
+        raise NotImplementedError("Unsupported column buffers for nullable float")
+    chunks = []
+    for column in columns:
+        values = _buffer_values(column)
+        if column.null_count:
+            values = options.np.where(_buffer_null_mask(column), options.np.nan, values)
+        chunks.append(values.astype("float64", copy=False))
+    return _join_chunks(chunks, "float64")
 
 
 def _np_kind(ch_type: ClickHouseType) -> str | None:
@@ -681,31 +898,65 @@ def _np_kind(ch_type: ClickHouseType) -> str | None:
         return None
 
 
+def _numeric_buffer_type(ch_type: ClickHouseType) -> ClickHouseType | None:
+    while isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
+        ch_type = ch_type.element_type
+    if not ch_type.low_card and (
+        ch_type.base_type in _NUMERIC_BUFFER_TYPES or ch_type.base_type in ("Bool", "Boolean") or isinstance(ch_type, (BFloat16, Interval))
+    ):
+        return ch_type
+    return None
+
+
+def _datetime_buffer_type(ch_type: ClickHouseType) -> tuple[DateTimeBase, bool] | None:
+    nullable = ch_type.nullable
+    while isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
+        ch_type = ch_type.element_type
+        nullable = nullable or ch_type.nullable
+    return (ch_type, nullable) if isinstance(ch_type, DateTimeBase) and not ch_type.low_card else None
+
+
 def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Converter:
+    declared_nullable = ch_type.nullable
     # SimpleAggregateFunction is a name-decoration alias: convert as the element type, matching both the
     # rust core's physical_delegate expansion and the Python codec's delegated read.
     if isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
         ch_type = ch_type.element_type
     _validate_time64_units(ch_type)
+    datetime_buffer_type = _datetime_buffer_type(ch_type)
+    if datetime_buffer_type is not None:
+        datetime_type, nullable = datetime_buffer_type
+        np_type = datetime_type.np_type
+        if nullable and np_type == "datetime64[ns]":
+            if not context.as_pandas:
+                return _Converter(False, _make_nullable_datetime_numpy_convert(datetime_type))
+            extended = context.use_extended_dtypes and isinstance(ch_type, DateTimeBase)
+            return _Converter(
+                False,
+                _make_nullable_datetime_pandas_convert(
+                    datetime_type, extended, context.active_tz(datetime_type.tzinfo), _make_object_convert(ch_type, context)
+                ),
+            )
     if isinstance(ch_type, BFloat16) and not ch_type.low_card:
         extended = ch_type.nullable and context.as_pandas and context.use_extended_dtypes
-        return _Converter(True, _make_bfloat16_convert(extended))
+        return _Converter(False, _make_bfloat16_convert(extended))
     # LowCardinality(T) routes through the object exit regardless of inner type. Its values are correct there,
     # and the Python codec's own LowCardinality numpy handling is inconsistent per inner type (and truncates
     # LowCardinality(numeric)), so there is no clean parity target for an Arrow dictionary fast path.
     if isinstance(ch_type, (Time, Time64)) and not ch_type.low_card:
-        return _Converter(True, _make_time_convert(ch_type, context.as_pandas, context.use_extended_dtypes))
+        return _Converter(False, _make_time_convert(ch_type, context.as_pandas, context.use_extended_dtypes))
     if isinstance(ch_type, Time) and ch_type.low_card:
-        return _Converter(True, _make_low_card_time_convert(ch_type, context.as_pandas))
+        return _Converter(False, _make_low_card_time_convert(ch_type, context.as_pandas))
     if isinstance(ch_type, Interval) and not ch_type.low_card:
         if not ch_type.nullable:
-            return _Converter(True, _interval_convert)
+            # Nullable(SimpleAggregateFunction(anyLast, Interval)) unwraps to a plain Interval whose column carries nulls.
+            return _Converter(False, _make_numeric_buffer_convert(ch_type, nullable_alias=True))
         if context.as_pandas and context.use_extended_dtypes:
-            return _Converter(True, _make_nullable_interval_convert(options.pd.Int64Dtype()))
+            return _Converter(False, _make_nullable_int_convert(options.pd.Int64Dtype()))
     array_time = _array_time_leaf(ch_type)
     if array_time is not None:
         depth, leaf = array_time
-        return _Converter(True, _make_array_time_convert(leaf, depth, context))
+        return _Converter(False, _make_array_time_convert(leaf, depth, context))
     if _contains_nested_time(ch_type):
         return _Converter(False, _make_nested_time_convert(ch_type, context))
     if (
@@ -715,25 +966,38 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
         and context.use_extended_dtypes
         and ch_type.read_format(context) == "native"
     ):
-        return _Converter(True, _make_string_convert(ch_type, context))
+        # StringDtype() validates the dependency for Arrow storage.
+        pd_dtype = options.pd.StringDtype()
+        if options.arrow is not None:
+            return _Converter(True, _make_string_convert(ch_type, context, pd_dtype))
     if not ch_type.nullable and not ch_type.low_card:
-        if isinstance(ch_type, DateTime64):
-            _ = ch_type.np_type  # ProgrammingError for precisions outside {0,3,6,9}, matching the Python codec
-            return _Converter(True, _make_datetime64_convert(context.as_pandas, context.active_tz(ch_type.tzinfo)))
-        if isinstance(ch_type, DateTime):
-            return _Converter(True, _make_datetime_convert(context.as_pandas, context.active_tz(ch_type.tzinfo)))
+        if isinstance(ch_type, DateTimeBase):
+            # np_type raises ProgrammingError for DateTime64 precisions outside {0,3,6,9}, matching the Python codec
+            return _Converter(False, _make_datetime_convert(ch_type, context.as_pandas, context.active_tz(ch_type.tzinfo)))
         if isinstance(ch_type, Date):  # Date32 subclasses Date
-            return _Converter(True, _make_date_convert(context.as_pandas))
+            return _Converter(False, _make_date_convert(context.as_pandas))
+        if not declared_nullable and (ch_type.base_type in _NUMERIC_BUFFER_TYPES or ch_type.base_type in ("Bool", "Boolean")):
+            return _Converter(False, _make_numeric_buffer_convert(ch_type))
         if _np_kind(ch_type) in ("i", "u", "f", "b"):
-            return _Converter(True, _numeric_convert)
+            physical_type = _numeric_buffer_type(ch_type)
+            if isinstance(physical_type, BFloat16):
+                return _Converter(False, _make_bfloat16_alias_convert())
+            if isinstance(physical_type, Interval) and physical_type.base_type in _INTERVAL_ARROW_UNITS:
+                return _Converter(False, _make_interval_alias_convert(_INTERVAL_ARROW_UNITS[physical_type.base_type]))
+            if physical_type is not None:
+                return _Converter(False, _make_numeric_buffer_convert(physical_type, nullable_alias=True))
+            return _Converter(False, _make_numeric_dictionary_convert(ch_type))
     elif ch_type.nullable and not ch_type.low_card and context.as_pandas and context.use_extended_dtypes:
-        # query_df renders nullable numeric via zero-copy pandas extension arrays. Building them from the Arrow
-        # validity+values buffers skips the per-value Python object list the object exit would otherwise create.
+        # Extended pandas output keeps integer masks and widens nullable floats to float64 with NaN.
         kind = _np_kind(ch_type)
         if kind in ("i", "u"):
-            return _Converter(True, _make_nullable_int_convert(options.pd.api.types.pandas_dtype(ch_type.base_type)))
+            return _Converter(False, _make_nullable_int_convert(options.pd.api.types.pandas_dtype(ch_type.base_type)))
         if kind == "f":
-            return _Converter(True, _nullable_float_convert)
+            physical_type = _numeric_buffer_type(ch_type)
+            if isinstance(physical_type, BFloat16):
+                return _Converter(False, _make_bfloat16_alias_convert(as_float=True))
+            if physical_type is not None:
+                return _Converter(False, _nullable_float_buffer_convert)
     return _Converter(False, _make_object_convert(ch_type, context))
 
 

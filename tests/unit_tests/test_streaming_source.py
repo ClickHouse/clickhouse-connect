@@ -2,13 +2,14 @@ import asyncio
 import gc
 import gzip
 import logging
+import queue
 import threading
 import time
 import weakref
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import lz4.frame
 import pytest
@@ -1091,6 +1092,51 @@ def test_read_ahead_tagged_exception_chunk_unchanged():
     read_source.close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["close", "aclose"])
+async def test_read_ahead_close_releases_pending_consumer(asynchronous):
+    entered_get = threading.Event()
+
+    class TrackedQueue(queue.Queue):
+        def get(self, block=True, timeout=None):
+            if block:
+                entered_get.set()
+            return super().get(block, timeout)
+
+    source = ReadBlockedByteSource()
+    read_source = ReadAheadSource(source, maxsize=2)
+    read_source.queue = TrackedQueue(maxsize=2)
+    consumer = read_source.gen
+    results = []
+    worker = threading.Thread(target=lambda: results.append(next(consumer, None)), daemon=True)
+    try:
+        assert next(consumer) == b"early_1"
+        assert next(consumer) == b"early_2"
+        assert source.read_started.wait(1)
+        worker.start()
+        assert entered_get.wait(1)
+        if asynchronous:
+            await read_source.aclose()
+            await read_source.aclose()
+        else:
+            read_source.close()
+            read_source.close()
+        worker.join(1)
+        read_source._thread.join(1)
+        assert not worker.is_alive()
+        assert not read_source._thread.is_alive()
+        assert source.closed
+        assert results == [None]
+    finally:
+        source.release_read.set()
+        read_source._stop_event.set()
+        read_source._drain()
+        read_source.queue.put_nowait(("eof", None))
+        if worker.ident is not None:
+            worker.join(2)
+        read_source.close()
+
+
 def test_read_ahead_close_during_block_terminates_thread():
     # A large producer fills the bounded queue while the consumer reads nothing, so the producer blocks in _put.
     src = MockByteSource([bytes([i % 256]) for i in range(500)])
@@ -1148,6 +1194,113 @@ def test_read_ahead_close_before_consumption_never_starts_thread(chunks):
         _ = closed.gen
 
 
+@pytest.mark.parametrize("async_close", [False, True], ids=["close", "aclose"])
+@pytest.mark.parametrize("pause_at", ["construct", "start"])
+def test_read_ahead_close_during_producer_start(monkeypatch, async_close, pause_at):
+    startup_paused = threading.Event()
+    release_startup = threading.Event()
+    cleanup_ready = threading.Event()
+    reads_after_close = []
+
+    class PausedThread(threading.Thread):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            if self.name == "clickhouse-read-ahead" and pause_at == "construct":
+                startup_paused.set()
+                assert release_startup.wait(2)
+
+        def start(self):
+            if self.name == "clickhouse-read-ahead" and pause_at == "start":
+                startup_paused.set()
+                assert release_startup.wait(2)
+            super().start()
+
+    class TrackedLock:
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def __enter__(self):
+            if not self.lock.acquire(blocking=False):
+                cleanup_ready.set()
+                self.lock.acquire()
+
+        def __exit__(self, *args):
+            self.lock.release()
+
+    class TrackedSource(MockByteSource):
+        @property
+        def gen(self):
+            yield b"first"
+            yield b"second"
+            reads_after_close.append(self.closed)
+            yield b"third"
+
+        def close(self):
+            super().close()
+            cleanup_ready.set()
+
+        async def aclose(self):
+            self.close()
+
+    src = TrackedSource([])
+    read_source = ReadAheadSource(src)
+    read_source._release_lock = TrackedLock()
+    consumer = read_source.gen
+    assert next(consumer) == b"first"
+    monkeypatch.setattr(threading, "Thread", PausedThread)
+
+    def close():
+        if async_close:
+            run_in_new_loop(read_source.aclose())
+        else:
+            read_source.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        consumer_future = executor.submit(next, consumer, None)
+        close_future = None
+        try:
+            assert startup_paused.wait(1)
+            close_future = executor.submit(close)
+            assert cleanup_ready.wait(1)
+        finally:
+            release_startup.set()
+            consumer_future.result(timeout=2)
+            if close_future is not None:
+                close_future.result(timeout=2)
+            if read_source._thread is not None and read_source._thread.is_alive():
+                read_source._thread.join(timeout=1)
+            read_source.close()
+
+    assert src.closed
+    assert not any(reads_after_close)
+    if pause_at == "construct":
+        assert read_source._thread is None
+    else:
+        assert read_source._thread is not None
+        assert not read_source._thread.is_alive()
+
+
+def test_read_ahead_thread_start_failure_does_not_publish_producer(monkeypatch):
+    src = MockByteSource([b"first", b"second", b"third"])
+    read_source = ReadAheadSource(src)
+    consumer = read_source.gen
+    assert next(consumer) == b"first"
+    start_error = RuntimeError("thread start failed")
+
+    def fail_start(self):
+        raise start_error
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+    try:
+        with pytest.raises(RuntimeError, match="thread start failed") as excinfo:
+            next(consumer)
+        assert excinfo.value is start_error
+        assert read_source._thread is None
+    finally:
+        read_source.close()
+    assert src.closed
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("chunks_consumed", [0, 1, 2])
 @pytest.mark.parametrize("cancel_close", [False, True])
@@ -1180,6 +1333,64 @@ async def test_read_ahead_async_close_awaits_source_aclose(chunks_consumed, canc
     assert read_source.source is None
     if thread is not None:
         assert thread.is_alive() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("worker_async_close", [False, True], ids=["close", "aclose"])
+async def test_read_ahead_concurrent_close_releases_source_once(worker_async_close):
+    source_read = threading.Event()
+    competing_read = threading.Event()
+    loop_thread = threading.get_ident()
+
+    class ReleaseLock:
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def __enter__(self):
+            if source_read.is_set():
+                competing_read.set()
+            return self.lock.__enter__()
+
+        def __exit__(self, *args):
+            return self.lock.__exit__(*args)
+
+    class PausedReadAheadSource(ReadAheadSource):
+        @property
+        def source(self):
+            source = self._source
+            if threading.get_ident() != loop_thread and not source_read.is_set():
+                source_read.set()
+                assert competing_read.wait(2)
+            elif source_read.is_set():
+                competing_read.set()
+            return source
+
+        @source.setter
+        def source(self, source):
+            self._source = source
+
+    src = Mock(spec=["close", "aclose"], aclose=AsyncMock())
+    read_source = PausedReadAheadSource(src)
+    read_source._release_lock = ReleaseLock()
+
+    def worker_close():
+        if worker_async_close:
+            run_in_new_loop(read_source.aclose())
+        else:
+            read_source.close()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        close_future = executor.submit(worker_close)
+        try:
+            assert await asyncio.to_thread(source_read.wait, 1)
+            await read_source.aclose()
+            close_future.result(timeout=1)
+        finally:
+            competing_read.set()
+            close_future.result(timeout=2)
+
+    assert read_source.source is None
+    assert src.close.call_count + src.aclose.await_count == 1
 
 
 @pytest.mark.asyncio

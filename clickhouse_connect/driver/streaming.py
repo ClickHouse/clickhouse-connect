@@ -527,9 +527,12 @@ def _read_ahead_producer(
             put(("eof", None))
 
 
-def _read_ahead_consumer(source_queue: queue.Queue[tuple[str, object]]) -> Iterator[bytes]:
-    while True:
-        tag, payload = source_queue.get()
+def _read_ahead_consumer(source_queue: queue.Queue[tuple[str, object]], stop_event: threading.Event) -> Iterator[bytes]:
+    while not stop_event.is_set():
+        try:
+            tag, payload = source_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
         if tag == "data":
             yield cast(bytes, payload)
         elif tag == "error":
@@ -569,13 +572,16 @@ def _read_ahead_stream(
         name="clickhouse-read-ahead",
         daemon=True,
     )
-    owner._thread = thread
+    with owner._release_lock:
+        if stop_event.is_set():
+            return
+        thread.start()
+        owner._thread = thread
     del owner
-    thread.start()
     # Let the producer finalize the iterator when it exits, including during async source cleanup.
     del src_gen
     yield second
-    yield from _read_ahead_consumer(out)
+    yield from _read_ahead_consumer(out, stop_event)
 
 
 def _drain_read_ahead_queue(source_queue: queue.Queue[tuple[str, object]]) -> None:
@@ -637,6 +643,7 @@ class ReadAheadSource(Closable):
         self.exception_tag: str | None = getattr(source, "exception_tag", None)
         self.queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=maxsize)
         self._stop_event = threading.Event()
+        self._release_lock = threading.Lock()
         self._gen_cache: Iterator[bytes] | None = None
         self._thread: threading.Thread | None = None
 
@@ -651,7 +658,7 @@ class ReadAheadSource(Closable):
                 return
 
             self._stop_event.set()
-            source, self.source = self.source, None
+            source = self._take_source()
             if source is None:
                 return
             try:
@@ -679,10 +686,10 @@ class ReadAheadSource(Closable):
     def _drain(self):
         _drain_read_ahead_queue(self.queue)
 
-    def _release_source(self):
-        source, self.source = self.source, None
-        if source is not None:
-            source.close()
+    def _take_source(self) -> ByteSource | None:
+        with self._release_lock:
+            source, self.source = self.source, None
+        return source
 
     def close(self) -> None:
         # Join the producer before closing the source. A queue-blocked producer returns within one put
@@ -690,18 +697,22 @@ class ReadAheadSource(Closable):
         # the source only after the join keeps the transport single-reader: the sync source drains on close,
         # which would race a producer still reading it.
         self._stop_event.set()
-        thread = self._thread
+        with self._release_lock:
+            thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=1.0)
         self._drain()
-        self._release_source()
+        source = self._take_source()
+        if source is not None:
+            source.close()
 
     async def aclose(self) -> None:
         self._stop_event.set()
         cancelled: asyncio.CancelledError | None = None
         cleanup_error: BaseException | None = None
         loop = asyncio.get_running_loop()
-        thread = self._thread
+        with self._release_lock:
+            thread = self._thread
         if thread is not None and thread.is_alive():
             # Join off the event loop so the worst-case wait never blocks it.
             join_future = loop.run_in_executor(None, thread.join, 1.0)
@@ -710,7 +721,7 @@ class ReadAheadSource(Closable):
             except BaseException as ex:  # noqa: BLE001 - source cleanup must still run
                 cleanup_error = ex
         self._drain()
-        source, self.source = self.source, None
+        source = self._take_source()
         if source is not None:
             try:
                 aclose = getattr(source, "aclose", None)

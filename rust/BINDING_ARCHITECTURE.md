@@ -21,12 +21,12 @@ inspects wire bytes.
                            |
                         ColBatch
           Arc-shared, immutable, chunked columnar memory
-                       /          \
-        [Arrow exit]                [Python object exit]
-   __arrow_c_stream__              to_python_rows / columns
-   pointer handoff, no copy        one PyObject per cell
-        |                                 |
-   pyarrow / polars / pandas        list of tuples / lists
+            /                     |                      \
+      [Arrow exit]       [Column buffer exit]      [Python object exit]
+   __arrow_c_stream__      column_buffers          to_python_rows / columns
+   pointer handoff         read-only buffers       one PyObject per cell
+            |                     |                      |
+   Arrow consumers       memoryview / np.frombuffer   tuples / lists
 ```
 
 Three ideas carry the design:
@@ -40,8 +40,11 @@ Three ideas carry the design:
 2. **You pay only at the exit you choose.** The Arrow exit hands consumers
    raw buffer pointers and costs near zero at any row count. The Python
    object exit allocates one object per cell and dominates decode itself.
-   Going to pandas, polars, numpy, or any Arrow consumer, use the Arrow
-   exit. Never round-trip through Python objects to reach a dataframe.
+   The driver uses the private column buffer exit for primitive numeric
+   NumPy/Pandas conversion. It exposes decoded memory without an Arrow
+   Python package. Pandas strings use the Arrow exit when PyArrow is installed.
+   Use these exits for buffer-compatible dataframe columns. Never round-trip
+   those columns through Python objects to reach a dataframe.
 
 3. **The GIL is released wherever Python memory is not touched.** Intake
    copies each fed chunk out of Python-owned memory, then decodes with the
@@ -88,6 +91,158 @@ schema equality across inputs and keeps working column names and types even
 when every chunk is empty.
 
 ## Exits
+
+### Private column buffers
+
+`COLUMN_BUFFER_API_VERSION = 1` identifies an additive capability alongside
+the unchanged binding API 3, first packaged in core 0.2.1. The driver checks
+both versions before it selects either Rust codec mode. Non-nullable
+8-64-bit integer, Float32/64, and Boolean converters consume these buffers directly.
+Extended Pandas output uses the public `IntegerArray` values/mask constructor
+for nullable integers and float64 arrays with NaN for nullable Float32/64.
+Primitive numeric SimpleAggregateFunction aliases retain their existing null-promotion
+rules. BFloat16 converters widen the little-endian words to float32 in bulk.
+Nullable extended Pandas BFloat16 output uses the public `FloatingArray`
+values/mask constructor and preserves the active Pandas NaN policy.
+Interval converters view signed Int64 counts and reuse the
+nullable integer adapter for extended Pandas output. Existing nested alias
+representations and errors are preserved. Scalar Date, Date32, DateTime,
+DateTime64, Time, and Time64 adapters widen physical integers or view Int64
+buffers with the units from driver metadata. They preserve timezone decisions,
+precision validation, and nullable duration output. Outer nullable
+SimpleAggregateFunction aliases of Time64 use this temporal path, so values keep
+their integer ticks and NULLs become NaT. Conversion of nullable scalar
+DateTime64(9), including SimpleAggregateFunction aliases, reads the buffers to
+preserve nanoseconds. NumPy object fields contain numpy.datetime64 scalars in
+UTC without timezone metadata, with None only at SQL NULL positions. This also
+preserves valid NaT scalars separately from SQL NULL. Pandas retains the existing
+all-null and timezone policies.
+Timezone-local values outside the nanosecond range keep the original object
+conversion, including its Pandas-version-dependent range errors.
+Other nullable dates and timestamps keep their Python-object conversion paths.
+Scalar DateTime64 precision validation also covers nullable and alias forms.
+Array(Time/Time64) adapters rebuild nested lists from offsets and duration
+leaves. LowCardinality(Time) adapters gather duration values through each
+chunk's dictionary indices and mark dictionary slot 0 as NaT when the chunk
+contains NULLs. Both read descriptors once
+per column per batch and reconstruct each chunk before joining row outputs.
+They preserve existing duration units, null representations, and nesting.
+Aliases that hide LowCardinality numeric storage gather dictionary buffers
+with the existing dtype and null rules. Raw Float32 and BFloat16 buffers
+preserve signaling-NaN bits that Python float conversion would quiet.
+Other ordinary converters use the Python-object exit. NumPy/Pandas queries don't require an
+Arrow Python package. Extended Pandas strings use the Arrow exit when
+PyArrow is available, with the selected StringDtype storage. That path validates
+all UTF-8 and falls back to object conversion for invalid bytes. Without
+PyArrow, strings use object conversion. Explicit Arrow storage still requires
+PyArrow.
+
+The integer adapter can retain a read-only Rust values buffer and an owned
+Boolean null mask. The existing result assembly preserves writable public
+DataFrames. Converters assemble multiple chunks in order and preserve typed
+empty outputs. Ordinary nullable integer and Boolean object paths stay in use
+where they define the output policy.
+
+`ColBatch.column_buffers(index)` returns a list
+of read-only descriptors, one per decoded chunk. Supported types are
+Int8/16/32/64, UInt8/16/32/64, Float32/64, Bool, BFloat16, Date, Date32,
+DateTime, DateTime64, Time, Time64, and all Interval types, including their
+nullable forms and SimpleAggregateFunction aliases. Array chains ending in
+Time or Time64 are also supported, with optional nullable leaves and
+SimpleAggregateFunction aliases at any level. LowCardinality supports
+Int8/16/32/64, UInt8/16/32/64, Float32/64, Bool, BFloat16, Interval types,
+and Time dictionary values, with an optional nullable inner type and
+SimpleAggregateFunction aliases around the column, inner type, or nullable
+leaf. Other types return `None`.
+Consumers must treat an unrecognized `kind` as unsupported. Invalid indices
+and malformed supported storage raise instead of selecting an object fallback.
+
+Each descriptor contains `kind`, `itemsize`, `byteorder`, `length` in rows,
+`null_count`, the optional buffers `values`, `validity`, and `offsets`, and
+an optional `child` descriptor. Scalar descriptors always carry `values` and
+report `None` for offsets and child. Logical ClickHouse types stay in the batch
+schema. Scalar layouts are:
+
+| ClickHouse type | `kind` | `itemsize` in bytes | `byteorder` |
+|---|---|---|---|
+| Int8/16/32/64, UInt8/16/32/64, Float32/64 | Lowercase type name | Primitive width | Host order, `little` or `big` |
+| Date | `uint16` | 2 | Host order |
+| Date32, Time | `int32` | 4 | Host order |
+| DateTime | `uint32` | 4 | Host order |
+| DateTime64, Time64, Interval types | `int64` | 8 | Host order |
+| BFloat16 | `bfloat16` | 2 | Always `little` |
+| Bool | `bool_bitmap` | 0, one bit per row | `not-applicable` |
+
+Temporal and interval buffers contain raw counts. Their units, precision,
+and timezone come from the schema. BFloat16 exposes raw two-byte words, not
+NumPy float16 values. Bool values contain exactly `ceil(length / 8)` bytes,
+least significant bit first, where 1 means true. Consumers must unpack
+those bits before constructing a NumPy Boolean array. Unused tail bits have
+no meaning.
+
+The buffers expose contiguous read-only bytes through Python's buffer
+protocol, so `memoryview(descriptor.values)` and `np.frombuffer` need no
+Arrow package. Validity contains exactly `ceil(length / 8)` bytes, with one
+bit per row, least significant bit first, where 1 means valid. Unused tail
+bits have no meaning. Ignore values in null rows. Descriptors have no Python
+constructor or writable properties.
+
+Array descriptors report `kind="array"`, `itemsize=0`, and
+`byteorder="not-applicable"`. Their length is the number of arrays, their
+null count is zero, and values and validity are `None`. The offsets buffer
+contains exactly `length + 1` native-endian signed Int64 values. Offsets
+start at zero, never decrease, and count elements in the child descriptor.
+The last offset equals `child.length`. Empty rows repeat an offset. A
+preserved empty chunk has the single offset `[0]` and a typed empty child.
+
+The child describes flattened elements and may itself be an array. For
+example, `Array(Array(Nullable(Time64(9))))` has two offset levels and an
+Int64 leaf with its own validity bitmap. Nullability applies only to the
+leaf. Nullable array nodes and other nested types aren't supported.
+Each chunk has its own offsets starting at zero. Consumers must rebuild
+each chunk's rows before concatenating results.
+
+Dictionary descriptors report `kind="dictionary"`, `itemsize=4`, and host
+byte order. Their `values` buffer contains signed Int32 indices, their
+`validity` describes rows, and their `child` describes the raw dictionary
+values with the scalar layouts above. `offsets` is `None`. The dictionary child has no
+validity, offsets, or further child. Indices and dictionary values keep
+their original chunk-local order. Consumers must gather values separately
+for each chunk before concatenating results.
+
+For a nullable dictionary, index zero denotes null and the corresponding
+row-validity bit is zero. The sentinel dictionary entry remains in the
+child, and its stored value doesn't determine nullness. A valid zero-valued
+value has its own nonzero index. For a nonnullable dictionary, index zero is
+an ordinary valid index. A preserved empty chunk has empty indices and an
+empty typed dictionary, with an empty validity bitmap if nullable.
+
+Each buffer holds an `Arc` to its source chunk. Views and derived slices
+remain valid after the batch or decoder is dropped. A retained view pins
+the whole source chunk, including other columns, but doesn't pin other
+chunks or transport resources. Array offset and child buffers, and dictionary
+index, validity, and value buffers each retain the same source chunk
+independently, without retaining parent descriptors.
+The final view releases that ownership.
+Chunks are never concatenated here. A supported schema with no chunks
+returns `[]`. A preserved empty chunk gets a zero-length descriptor.
+
+Array descriptor construction checks offset count, start, ordering, bounds,
+final child extent, and buffer byte lengths. It also validates each child.
+Each buffer stores a root column index, array depth, and buffer selection.
+Exports re-resolve that selection through immutable storage. They don't
+repeat the offset scan, and scalar exports don't scan array offsets.
+
+Dictionary construction validates index and bitmap counts, initialized
+storage, dictionary value type, and null-slot consistency. Every index must
+be nonnegative and less than the dictionary length, including null rows.
+This scans rows once per descriptor construction. Buffer exports re-resolve
+the index, validity, or dictionary value selection without repeating the
+scan. Adapters should call `column_buffers` once per column per batch and
+reuse the descriptors for both array and dictionary conversion.
+
+The private buffers are read-only. Driver adapters copy where the public
+output contract requires writable arrays.
 
 ### Arrow
 
