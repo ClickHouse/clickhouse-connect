@@ -6,7 +6,8 @@ from sqlalchemy.sql import ColumnElement
 from typing_extensions import assert_type
 
 import clickhouse_connect.cc_sqlalchemy as cc_sa
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import JSON, UInt32
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import JSON, Array, DateTime64, LowCardinality, Nullable, String, UInt32
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     Memory,
     MergeTree,
@@ -51,6 +52,33 @@ after_common_generatives.prewhere(book.c.title != "done")
 materialized = base.cte("ranked", materialized=True)
 assert_type(materialized, sa.CTE)
 assert_type(cc_sa.cte(sa.select(book.c.id), "ranked", materialized=True), sa.CTE)
+
+assert_type(Nullable(String), String)
+assert_type(Nullable(String()), String)
+assert_type(LowCardinality(String), String)
+assert_type(LowCardinality(String()), String)
+assert_type(Nullable(UInt32), UInt32)
+assert_type(LowCardinality(UInt32()), UInt32)
+assert_type(Nullable(DateTime64(6)), DateTime64)
+assert_type(LowCardinality(Nullable(String)), String)
+assert_type(Array(LowCardinality(Nullable(String))), Array)
+
+sa.Column("hostname", LowCardinality(String))
+sa.Column("description", Nullable(String()))
+sa.Column("count", Nullable(UInt32))
+sa.Column("category", LowCardinality(UInt32()))
+sa.Column("optional_hostname", LowCardinality(Nullable(String)))
+
+column_types: list[ChSqlaType] = [Nullable(String)]
+column_types.append(UInt32())
+
+
+def invalid_wrapper_inputs() -> None:
+    Nullable(sa.String)  # type: ignore[type-var]
+    LowCardinality(sa.String())  # type: ignore[arg-type]
+    Nullable("String")  # type: ignore[arg-type]
+    LowCardinality(None)  # type: ignore[arg-type]
+
 
 json_payload = sa.column("payload", JSON())
 configured_json = JSON(

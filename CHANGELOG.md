@@ -11,6 +11,7 @@
 
 ### Bug Fixes
 
+- SQLAlchemy `Nullable()` and `LowCardinality()` now preserve the wrapped type in their return annotations. Column declarations such as `Column("hostname", LowCardinality(String))` now pass strict type checking. Runtime behavior is unchanged. Closes [#1033](https://github.com/ClickHouse/clickhouse-connect/issues/1033).
 - SQLAlchemy `GROUP BY` now uses aliases only for top-level labels that match an expression selected by the current query. Unselected and nested expressions render in full. Selected aliases, including independently rebuilt matching expressions, retain their names. This fixes unknown-identifier errors and incorrect grouping when a label collides with another column. Closes [#1062](https://github.com/ClickHouse/clickhouse-connect/issues/1062).
 - Async `insert_arrow` and `insert_df_arrow` now run DataFrame conversion and Arrow encoding in a dedicated worker owned by the client. This reduces event-loop stalls during large inserts. Closes [#1054](https://github.com/ClickHouse/clickhouse-connect/issues/1054).
 - Closing a Rust codec stream during read-ahead startup no longer lets a producer read from an already closed source. This applies to sync and async cleanup.
@@ -24,6 +25,7 @@
 
 ### Compatibility
 
+- Type checkers now infer `list[String]` for `[Nullable(String)]`. If a collection also holds other ClickHouse types, annotate it as `list[ChSqlaType]` from `clickhouse_connect.cc_sqlalchemy.datatypes.base`.
 - Rust NumPy object columns for nullable scalar `DateTime64(9)` now contain `numpy.datetime64` cells at UTC nanosecond resolution instead of Python `datetime` cells. SQL NULL stays `None`. Use `query_df` to retain named timezone metadata. Pandas datetime output now uses nanoseconds instead of Pandas 3's microseconds, while existing object dtypes from all-null blocks remain.
 - The Rust extra now requires `clickhouse-connect-core>=0.2.1,<0.3`. Rust codec setup checks the column buffer API separately from the binding API and reports upgrade guidance for older core wheels.
 
