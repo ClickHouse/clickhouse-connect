@@ -13,6 +13,8 @@ doc_type: 'reference'
 
 ClickHouse Connect executes Native-format inserts, the `insert` and `insert_df` methods, within an `InsertContext`. The `insert_arrow`, `insert_df_arrow`, and `raw_insert` methods send their payloads directly and don't use one. The `InsertContext` includes all the values sent as arguments to the client `insert` method. In addition, when an `InsertContext` is originally constructed, ClickHouse Connect retrieves the data types for the insert columns required for efficient Native format inserts. By reusing the `InsertContext` for multiple inserts, this "pre-query" is avoided and inserts are executed more quickly and efficiently.
 
+The internal `DESCRIBE TABLE` uses its own server-generated query ID, while the `INSERT` keeps the `query_id` from per-insert settings or client defaults.
+
 An `InsertContext` can be acquired using the client `create_insert_context` method. The method takes the same arguments as the `insert` function, except for `context` itself. Note that only the `data` property of `InsertContext`s should be modified for reuse. This is consistent with its intended purpose of providing a reusable object for repeated inserts of new data to the same table.
 
 ```python

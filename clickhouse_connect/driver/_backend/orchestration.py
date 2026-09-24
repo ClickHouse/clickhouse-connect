@@ -169,7 +169,9 @@ def insert_context_sequence(
     full_table = _qualified_table(table, database)
     column_defs: list[ColumnDef] = []
     if column_types is None and column_type_names is None:
-        describe_result = yield QueryOp(f"DESCRIBE TABLE {full_table}", settings=settings or {})
+        # An empty query_id overrides client defaults and tells the server to generate a new ID.
+        describe_settings = {**(settings or {}), "query_id": ""}
+        describe_result = yield QueryOp(f"DESCRIBE TABLE {full_table}", settings=describe_settings)
         column_defs = [
             ColumnDef(**row)
             for row in _named_rows(describe_result, "DESCRIBE TABLE")

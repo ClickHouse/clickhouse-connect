@@ -217,11 +217,35 @@ def test_insert_context_sequence_describes_table_identically(column_names):
     sync_context = run_sync(insert_context_sequence("target_table", column_names=column_names), sync_backend.execute)
     async_context = run_in_new_loop(run_async(insert_context_sequence("target_table", column_names=column_names), async_backend.execute))
 
-    assert sync_backend.operations == async_backend.operations == [QueryOp("DESCRIBE TABLE `target_table`")]
+    assert sync_backend.operations == async_backend.operations == [QueryOp("DESCRIBE TABLE `target_table`", settings={"query_id": ""})]
     for context in (sync_context, async_context):
         assert context.table == "`target_table`"
         assert context.column_names == ["user_id", "label"]
         assert [t.name for t in context.column_types] == ["UInt32", "String"]
+
+
+@pytest.mark.parametrize(
+    "settings,describe_settings",
+    [
+        (None, {"query_id": ""}),
+        ({}, {"query_id": ""}),
+        ({"max_threads": 13}, {"max_threads": 13, "query_id": ""}),
+        ({"query_id": "insert_1", "max_threads": 13}, {"max_threads": 13, "query_id": ""}),
+    ],
+)
+def test_insert_context_sequence_resets_query_id_for_describe(settings, describe_settings):
+    original_settings = None if settings is None else settings.copy()
+    sync_backend = FakeSyncExecutor([_describe_rows()])
+    async_backend = FakeAsyncExecutor([_describe_rows()])
+
+    sync_context = run_sync(insert_context_sequence("target_table", settings=settings), sync_backend.execute)
+    async_context = run_in_new_loop(run_async(insert_context_sequence("target_table", settings=settings), async_backend.execute))
+
+    expected = [QueryOp("DESCRIBE TABLE `target_table`", settings=describe_settings)]
+    assert sync_backend.operations == async_backend.operations == expected
+    for context in (sync_context, async_context):
+        assert context.settings == (original_settings or {})
+    assert settings == original_settings
 
 
 def test_insert_context_sequence_rejects_empty_column_list():
