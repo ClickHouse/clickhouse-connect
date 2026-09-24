@@ -1,6 +1,8 @@
 urllib3>=1.26
 setuptools>=77.0.3
 certifi
+# Include legacy timezone aliases missing from some system databases.
+tzdata
 aiohttp>=3.9.0
 sqlalchemy[asyncio]>=2.0,<3.0
 alembic>=1.18

@@ -28,12 +28,12 @@ jobs:
     uses: ./.github/workflows/clickhouse-versions.yml
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     name: Ruff
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: Install Ruff
@@ -46,12 +46,12 @@ jobs:
         run: ruff check clickhouse_connect tests examples setup.py
 
   typecheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     name: Mypy
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -62,12 +62,12 @@ jobs:
         run: mypy
 
   public-api-types:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     name: Public API Type Surface
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install into a clean consumer environment
@@ -108,19 +108,19 @@ jobs:
           "$RUNNER_TEMP/consumer/bin/mypy" --strict --follow-imports=silent sqlalchemy_select_smoke.py
 
   bare-import-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [lint, typecheck, public-api-types, clickhouse-versions]
     name: Bare Install Test (no extras)
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Start ClickHouse (${{ needs.clickhouse-versions.outputs.default }}) in Docker
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ needs.clickhouse-versions.outputs.default }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-ci
         run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install only core dependencies (no extras)
@@ -137,7 +137,7 @@ jobs:
         run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [bare-import-test, clickhouse-versions]
     strategy:
       matrix:
@@ -169,14 +169,14 @@ jobs:
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }} C=${{ matrix.use-c }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Start ClickHouse (version - ${{ matrix.clickhouse-version }}) in Docker
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ matrix.clickhouse-version }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-ci
         run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install pip
@@ -215,19 +215,19 @@ jobs:
         run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   pandas-3x-compat-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [bare-import-test, clickhouse-versions]
     name: Pandas 3.x Compatibility Tests
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Start ClickHouse (${{ needs.clickhouse-versions.outputs.default }}) in Docker
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ needs.clickhouse-versions.outputs.default }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-ci
         run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install pip
@@ -256,19 +256,19 @@ jobs:
         run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   sqlalchemy-1x-compat-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [bare-import-test, clickhouse-versions]
     name: SQLAlchemy 1.x Compatibility Tests
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Start ClickHouse (${{ needs.clickhouse-versions.outputs.default }}) in Docker
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ needs.clickhouse-versions.outputs.default }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-ci
         run: docker compose -f docker-compose.yml up -d --wait
       - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Install pip
@@ -300,7 +300,7 @@ jobs:
         run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   check-secret:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [bare-import-test, tests, pandas-3x-compat-test, sqlalchemy-1x-compat-test]
     outputs:
       has_secrets: ${{ steps.has_secrets.outputs.HAS_SECRETS }}
@@ -312,16 +312,16 @@ jobs:
         run: echo "HAS_SECRETS=true" >> $GITHUB_OUTPUT
 
   cloud-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     name: Cloud Tests Py=3.12
     needs: check-secret
     if: needs.check-secret.outputs.has_secrets == 'true'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install dependencies
