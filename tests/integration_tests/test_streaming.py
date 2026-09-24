@@ -1,6 +1,132 @@
+import threading
+
 import pytest
 
+from clickhouse_connect import common
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, StreamFailureError
+from clickhouse_connect.driver.httputil import ResponseSource
+from clickhouse_connect.driver.streaming import StreamingResponseSource
+
+
+@pytest.fixture
+def response_reads(monkeypatch, client_mode):
+    reads = []
+    async_readers = {}
+    source_cls = ResponseSource if client_mode == "sync" else StreamingResponseSource
+    original_init = source_cls.__init__
+    if client_mode == "async":
+        reader_cls = pytest.importorskip("aiohttp").StreamReader
+        original_read = reader_cls.read
+
+        async def read(reader, n=-1):
+            if reader not in async_readers:
+                return await original_read(reader, n)
+            pending, exhausted = async_readers[reader]
+            pending.set()
+            try:
+                chunk = await original_read(reader, n)
+            finally:
+                pending.clear()
+            if not chunk:
+                exhausted.set()
+            return chunk
+
+        monkeypatch.setattr(reader_cls, "read", read)
+
+    def initialize(source, response, *args, **kwargs):
+        pending = threading.Event()
+        exhausted = threading.Event()
+        reads.append((pending, exhausted, response))
+        if client_mode == "sync":
+            original_stream = response.stream
+
+            def stream(*stream_args, **stream_kwargs):
+                iterator = original_stream(*stream_args, **stream_kwargs)
+                while True:
+                    pending.set()
+                    try:
+                        chunk = next(iterator, None)
+                    finally:
+                        pending.clear()
+                    if chunk is None:
+                        exhausted.set()
+                        return
+                    yield chunk
+
+            monkeypatch.setattr(response, "stream", stream)
+        else:
+            async_readers[response.content] = pending, exhausted
+        original_init(source, response, *args, **kwargs)
+
+    monkeypatch.setattr(source_cls, "__init__", initialize)
+    monkeypatch.setattr(common._common_settings["http_buffer_size"], "value", 64 * 1024)
+    return reads
+
+
+@pytest.mark.parametrize("native_codec", ["python", "rust_strict"])
+@pytest.mark.parametrize("compress", [False, "lz4"])
+def test_early_stream_close_reuses_client(client_factory, call, consume_stream, client_mode, response_reads, native_codec, compress):
+    if native_codec == "rust_strict":
+        pytest.importorskip("_ch_core")
+    # Smoke coverage for early close and reuse across codecs. The slow-read test below is the race regression.
+    # Sync clients drain their named session. Async clients cancel and use no session by default.
+    client = client_factory(native_codec=native_codec, compress=compress)
+
+    class StopAfterBlockError(Exception):
+        pass
+
+    def stop(block):
+        assert block[0] == (0,)
+        _, exhausted, response = response_reads[-1]
+        assert not exhausted.is_set(), "The response was already read to EOF"
+        if client_mode == "sync":
+            assert not response._original_response.isclosed(), "The HTTP body was already read to EOF"
+        else:
+            assert not response.content.is_eof(), "The HTTP body was already received in full"
+        raise StopAfterBlockError
+
+    for _ in range(2):
+        stream = call(
+            client.query_row_block_stream,
+            "SELECT number FROM numbers(1000000)",
+            settings={"max_block_size": 1000, "max_threads": 1, "buffer_size": 1},
+        )
+        with pytest.raises(StopAfterBlockError):
+            consume_stream(stream, stop)
+        assert call(client.command, "SELECT 13") == 13
+
+
+@pytest.mark.parametrize("native_codec", ["python", "rust_strict"])
+def test_close_during_slow_stream_read(client_factory, call, consume_stream, client_mode, response_reads, native_codec):
+    if native_codec == "rust_strict":
+        pytest.importorskip("_ch_core")
+    client = client_factory(native_codec=native_codec, compress=False)
+    stream = call(
+        client.query_row_block_stream,
+        "SELECT number, repeat('x', 4096), sleepEachRow(0.0015) FROM numbers(4000)",
+        settings={"max_block_size": 1000, "max_threads": 1, "buffer_size": 1},
+    )
+
+    class StopAfterBlockError(Exception):
+        pass
+
+    def stop(block):
+        assert block[0][0] == 0
+        pending, exhausted, response = response_reads[-1]
+        assert not exhausted.is_set(), "The response was already read to EOF"
+        if client_mode == "sync":
+            assert not response._original_response.isclosed()
+        else:
+            assert not response.content.is_eof()
+        if client_mode == "sync" and native_codec == "rust_strict":
+            assert pending.wait(1), "The read-ahead producer never entered its next transport read"
+        elif client_mode == "async":
+            assert pending.is_set(), "The async producer has no pending transport read"
+        raise StopAfterBlockError
+
+    with pytest.raises(StopAfterBlockError):
+        consume_stream(stream, stop)
+    assert call(client.command, "SELECT 13") == 13
 
 
 def test_row_stream(param_client, call, consume_stream):

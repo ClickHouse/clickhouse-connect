@@ -3,6 +3,7 @@ import sys
 from collections.abc import Iterable
 from typing import Any
 
+from clickhouse_connect.driver.common import _close_async
 from clickhouse_connect.driver.exceptions import StreamCompleteException
 from clickhouse_connect.driver.types import ByteSource
 
@@ -177,3 +178,8 @@ class ResponseBuffer(ByteSource):
         if self.source:
             self.source.close()
             self.source = None
+
+    async def aclose(self) -> None:
+        source, self.source = self.source, None
+        if source:
+            await _close_async(source)
