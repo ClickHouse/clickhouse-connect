@@ -16,7 +16,7 @@ on:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     name: Mintlify checks
     # Run inside the docs image so every dependency (git, python3, mint, node)
     # is present -- nothing is installed, and this repo vendors no scripts.
@@ -24,7 +24,7 @@ jobs:
       image: clickhouse/docs-builder
     steps:
       - name: Checkout clickhouse-connect
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # Fetch the check driver from ClickHouse/ClickHouse rather than vendoring
       # it. The driver shallow/sparse-clones the aggregator docs plus its CI
