@@ -1,5 +1,8 @@
 ## ClickHouse Connect
 
+[![clickhouse-connect on PyPI](https://img.shields.io/pypi/v/clickhouse-connect?label=clickhouse-connect)](https://pypi.org/project/clickhouse-connect/)
+[![clickhouse-connect-core on PyPI](https://img.shields.io/pypi/v/clickhouse-connect-core?label=clickhouse-connect-core)](https://pypi.org/project/clickhouse-connect-core/)
+
 A high performance core database driver for connecting ClickHouse to Python, Pandas, and Superset
 
 * Pandas DataFrames (numpy and arrow-backed). Requires pandas 2.0 or later.
@@ -24,6 +27,13 @@ ClickHouse Connect requires Python 3.10 or higher.
 #### Upgrading from 0.x
 
 The 1.0 release includes breaking changes. If you are upgrading from a 0.15.x or earlier release, see [MIGRATION.md](MIGRATION.md) for a guide to the changes and their replacements.
+
+### Releases
+
+`clickhouse-connect` and the optional `clickhouse-connect-core` Rust binding are versioned independently.
+The badges above show their latest published PyPI versions.
+[GitHub Releases](https://github.com/ClickHouse/clickhouse-connect/releases) track `clickhouse-connect`.
+See the [driver changelog](CHANGELOG.md) and the [core binding changelog](rust/ch-core-py/CHANGELOG.md) for release notes.
 
 ### Superset Connectivity
 
