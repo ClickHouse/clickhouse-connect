@@ -224,6 +224,20 @@ def test_insert_context_sequence_describes_table_identically(column_names):
         assert [t.name for t in context.column_types] == ["UInt32", "String"]
 
 
+def test_insert_context_sequence_keeps_query_id_off_describe():
+    settings = {"query_id": "insert_1", "max_threads": 13}
+    sync_backend = FakeSyncExecutor([_describe_rows()])
+    async_backend = FakeAsyncExecutor([_describe_rows()])
+
+    sync_context = run_sync(insert_context_sequence("target_table", settings=settings), sync_backend.execute)
+    async_context = run_in_new_loop(run_async(insert_context_sequence("target_table", settings=settings), async_backend.execute))
+
+    expected = [QueryOp("DESCRIBE TABLE `target_table`", settings={"max_threads": 13})]
+    assert sync_backend.operations == async_backend.operations == expected
+    for context in (sync_context, async_context):
+        assert context.settings["query_id"] == "insert_1"
+
+
 def test_insert_context_sequence_rejects_empty_column_list():
     with pytest.raises(ValueError, match="Column names must be specified"):
         run_sync(insert_context_sequence("target_table"), FakeSyncExecutor([[]]).execute)

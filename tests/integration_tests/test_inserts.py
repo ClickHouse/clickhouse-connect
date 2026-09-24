@@ -5,13 +5,14 @@ from collections.abc import Callable
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from ipaddress import IPv4Address, IPv6Address
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 from clickhouse_connect import common
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import DataError
+from tests.integration_tests.conftest import TestConfig
 
 HAS_TZSET = hasattr(time_module, "tzset")
 
@@ -559,3 +560,18 @@ def test_insert_table_name_with_unescaped_inner_backtick(param_client: Client, c
         assert call(param_client.command, f"SELECT count() FROM {quoted_table}") == 1
     finally:
         call(param_client.command, f"DROP TABLE IF EXISTS {quoted_table}")
+
+
+def test_insert_query_id_is_not_shared_with_describe(param_client: Client, call, table_context: Callable, test_config: TestConfig):
+    if test_config.cloud:
+        pytest.skip("Skipping query_log test in cloud environment")
+    query_id = f"test_insert_query_id_{uuid4()}"
+    with table_context("test_insert_query_id", ["key UInt32"]):
+        call(param_client.insert, "test_insert_query_id", [[79]], settings={"query_id": query_id})
+        call(param_client.command, "SYSTEM FLUSH LOGS")
+        result = call(
+            param_client.query,
+            "SELECT query_kind FROM system.query_log WHERE query_id = {query_id:String} AND type = 'QueryFinish'",
+            parameters={"query_id": query_id},
+        )
+    assert result.result_set == [("Insert",)]
