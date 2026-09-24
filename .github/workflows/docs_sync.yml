@@ -52,7 +52,7 @@ jobs:
   # Gate: decide whether this event should produce a sync, and why. Kept in its
   # own job so the (large) checkout/clone in `sync` only runs when needed.
   decide:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       run: ${{ steps.gate.outputs.run }}
       reason: ${{ steps.gate.outputs.reason }}
@@ -110,10 +110,10 @@ jobs:
   sync:
     needs: decide
     if: needs.decide.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout docs source
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           # On a release, take the docs as of the released tag; otherwise take
           # the default checkout (post-merge default branch / dispatched ref).

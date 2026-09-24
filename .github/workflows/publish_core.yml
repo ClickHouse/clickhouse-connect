@@ -26,13 +26,13 @@ jobs:
 
   portable_driver_wheel:
     name: Build portable driver for core qualification
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10.2.0
       - name: Build pure Python driver wheel
         env:
           CLICKHOUSE_CONNECT_SKIP_CYTHON: '1'
@@ -50,12 +50,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-latest, arch: x86_64, libc: manylinux, manylinux: 2_28 }
-          - { runner: ubuntu-latest, arch: x86_64, libc: musllinux, manylinux: musllinux_1_2 }
-          - { runner: ubuntu-24.04-arm, arch: aarch64, libc: manylinux, manylinux: 2_28 }
-          - { runner: ubuntu-24.04-arm, arch: aarch64, libc: musllinux, manylinux: musllinux_1_2 }
+          - { runner: ubuntu-26.04, arch: x86_64, libc: manylinux, manylinux: 2_28 }
+          - { runner: ubuntu-26.04, arch: x86_64, libc: musllinux, manylinux: musllinux_1_2 }
+          - { runner: ubuntu-26.04-arm, arch: aarch64, libc: manylinux, manylinux: 2_28 }
+          - { runner: ubuntu-26.04-arm, arch: aarch64, libc: musllinux, manylinux: musllinux_1_2 }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -76,9 +76,9 @@ jobs:
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Build wheels
@@ -100,9 +100,9 @@ jobs:
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Build wheels
@@ -117,7 +117,7 @@ jobs:
 
   build_windows_arm64_wheels:
     name: Build windows arm64 wheels (py${{ matrix.python-version }})
-    runs-on: windows-11-arm
+    runs-on: windows-11-vs2026-arm
     strategy:
       fail-fast: false
       matrix:
@@ -125,9 +125,9 @@ jobs:
         # is cross-compiled in build_windows_arm64_310_wheel below.
         python-version: ['3.11', '3.12', '3.13', '3.14']
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           architecture: arm64
@@ -149,7 +149,7 @@ jobs:
       # the import library synthesized by pyo3's generate-import-lib feature
       PYO3_CROSS_PYTHON_VERSION: '3.10'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -163,9 +163,9 @@ jobs:
 
   build_sdist:
     name: Build sdist
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Check the locked dependency graph
         run: cargo metadata --locked --manifest-path rust/ch-core-py/Cargo.toml --format-version 1 > /dev/null
       - name: Build sdist
@@ -189,12 +189,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-latest, arch: x86_64, libc: manylinux, image: manylinux_2_28_x86_64 }
-          - { runner: ubuntu-latest, arch: x86_64, libc: musllinux, image: musllinux_1_2_x86_64 }
-          - { runner: ubuntu-24.04-arm, arch: aarch64, libc: manylinux, image: manylinux_2_28_aarch64 }
-          - { runner: ubuntu-24.04-arm, arch: aarch64, libc: musllinux, image: musllinux_1_2_aarch64 }
+          - { runner: ubuntu-26.04, arch: x86_64, libc: manylinux, image: manylinux_2_28_x86_64 }
+          - { runner: ubuntu-26.04, arch: x86_64, libc: musllinux, image: musllinux_1_2_x86_64 }
+          - { runner: ubuntu-26.04-arm, arch: aarch64, libc: manylinux, image: manylinux_2_28_aarch64 }
+          - { runner: ubuntu-26.04-arm, arch: aarch64, libc: musllinux, image: musllinux_1_2_aarch64 }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: core-${{ matrix.libc }}-${{ matrix.arch }}
@@ -255,17 +255,17 @@ jobs:
           - { platform: macos-arm64, runner: macos-15, architecture: arm64, artifact: macos }
           - { platform: macos-x64, runner: macos-15-intel, architecture: x64, artifact: macos }
           - { platform: windows-x64, runner: windows-latest, architecture: x64, artifact: windows }
-          - { platform: windows-arm64, runner: windows-11-arm, architecture: arm64, artifact: windows-arm64 }
+          - { platform: windows-arm64, runner: windows-11-vs2026-arm, architecture: arm64, artifact: windows-arm64 }
         exclude:
           # The cross-built CPython 3.10 ARM64 wheel has no native interpreter to test.
           - { platform: windows-arm64, python-version: '3.10' }
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           architecture: ${{ matrix.architecture }}
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10.2.0
       - uses: actions/download-artifact@v8
         with:
           name: core-${{ matrix.artifact }}-${{ matrix.python-version }}
@@ -301,17 +301,17 @@ jobs:
 
   smoke_test:
     name: Wheel smoke test against ClickHouse
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [build_linux_wheels, portable_driver_wheel, clickhouse-versions]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Start ClickHouse (${{ needs.clickhouse-versions.outputs.default }}) in Docker
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ needs.clickhouse-versions.outputs.default }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-core-smoke
         run: docker compose -f docker-compose.yml up -d --wait clickhouse
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Retrieve wheels
@@ -319,7 +319,7 @@ jobs:
         with:
           name: core-manylinux-x86_64
           path: wheelhouse
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10.2.0
       - uses: actions/download-artifact@v8
         with:
           name: qualification-driver
@@ -369,7 +369,7 @@ jobs:
       - qualify_linux_wheels
       - qualify_native_wheels
     name: Publish to TestPyPI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ inputs.publish_type == 'test' }}
     environment:
       name: testpypi
@@ -403,7 +403,7 @@ jobs:
       - qualify_linux_wheels
       - qualify_native_wheels
     name: Publish to PyPI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ inputs.publish_type == 'release' }}
     environment:
       name: pypi

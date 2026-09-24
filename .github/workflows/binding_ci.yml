@@ -62,11 +62,11 @@ jobs:
     uses: ./.github/workflows/clickhouse-versions.yml
 
   rust-checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     name: Cargo fmt + clippy + tests
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       # pinned so new stable clippy lints don't break unrelated PRs, bump deliberately
@@ -87,19 +87,19 @@ jobs:
         run: cargo test --release --locked
 
   binding-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     name: Build binding and run unit tests
     needs: [rust-checks, clickhouse-versions]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Start ClickHouse (${{ needs.clickhouse-versions.outputs.default }}) in Docker
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ needs.clickhouse-versions.outputs.default }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-binding-build
         run: docker compose -f docker-compose.yml up -d --wait clickhouse
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
@@ -114,7 +114,7 @@ jobs:
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
-        run: python setup.py develop
+        run: pip install -e . --no-deps
       - name: Build and install the clickhouse-connect-core wheel
         run: |
           maturin build --release --locked -m rust/ch-core-py/Cargo.toml -o core-wheelhouse
@@ -128,14 +128,14 @@ jobs:
       - name: Build the driver wheel
         run: uv build --wheel --out-dir driver-wheelhouse
       - name: Upload the driver wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: driver-wheelhouse
           path: driver-wheelhouse/*.whl
           if-no-files-found: error
           retention-days: 7
       - name: Upload the core wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: core-wheelhouse
           path: core-wheelhouse/*.whl
@@ -148,7 +148,7 @@ jobs:
         run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   binding-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     name: Rust codec integration tests CH=${{ matrix.clickhouse-version }}
     needs: [binding-build, clickhouse-versions]
     strategy:
@@ -157,14 +157,14 @@ jobs:
         clickhouse-version: ${{ fromJSON(needs.clickhouse-versions.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Start ClickHouse (${{ matrix.clickhouse-version }}) in Docker
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ matrix.clickhouse-version }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-binding-ci
         run: docker compose -f docker-compose.yml up -d --wait clickhouse
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install Test Dependencies
@@ -174,9 +174,9 @@ jobs:
       - name: Build cython extensions
         run: python setup.py build_ext --inplace
       - name: "Add distribution info"  #  This lets SQLAlchemy find entry points
-        run: python setup.py develop
+        run: pip install -e . --no-deps
       - name: Download the core wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: core-wheelhouse
           path: core-wheelhouse
@@ -195,7 +195,7 @@ jobs:
         run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   installed-contract:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     name: Installed Rust contract (${{ matrix.profile }})
     needs: [binding-build, clickhouse-versions]
     strategy:
@@ -215,21 +215,21 @@ jobs:
           - profile: pandas3-arrow
             packages: 'numpy pandas>=3,<4 pyarrow'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Start the oldest supported ClickHouse from the integration matrix
         env:
           CLICKHOUSE_CONNECT_TEST_CH_VERSION: ${{ needs.clickhouse-versions.outputs.default }}
           COMPOSE_PROJECT_NAME: clickhouse-connect-installed-contract
         run: docker compose -f docker-compose.yml up -d --wait clickhouse
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/download-artifact@v4
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/download-artifact@v8
         with:
           name: core-wheelhouse
           path: core-wheelhouse
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: driver-wheelhouse
           path: driver-wheelhouse
@@ -264,17 +264,17 @@ jobs:
 
   binding-freethreaded:
     name: Experimental installed core (Python 3.14t, GIL off)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: rust-checks
     continue-on-error: true
     env:
       PYTHON_GIL: '0'
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14t'
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10.2.0
       - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
         with:
@@ -292,7 +292,7 @@ jobs:
             --output "$RUNNER_TEMP/core-qualification" --allow-source-lz4
       - name: Upload qualification records
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qualification-linux-3.14t
           path: |
