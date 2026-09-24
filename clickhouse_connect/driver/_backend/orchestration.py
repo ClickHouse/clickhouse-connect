@@ -169,8 +169,8 @@ def insert_context_sequence(
     full_table = _qualified_table(table, database)
     column_defs: list[ColumnDef] = []
     if column_types is None and column_type_names is None:
-        # query_id belongs to the INSERT; reusing it can fail the INSERT with QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING.
-        describe_settings = {k: v for k, v in (settings or {}).items() if k != "query_id"}
+        # An empty query_id overrides client defaults and tells the server to generate a new ID.
+        describe_settings = {**(settings or {}), "query_id": ""}
         describe_result = yield QueryOp(f"DESCRIBE TABLE {full_table}", settings=describe_settings)
         column_defs = [
             ColumnDef(**row)

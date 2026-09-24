@@ -562,16 +562,49 @@ def test_insert_table_name_with_unescaped_inner_backtick(param_client: Client, c
         call(param_client.command, f"DROP TABLE IF EXISTS {quoted_table}")
 
 
-def test_insert_query_id_is_not_shared_with_describe(param_client: Client, call, table_context: Callable, test_config: TestConfig):
+@pytest.mark.parametrize("query_id_source", ["insert", "client", "override"])
+@pytest.mark.parametrize("autogenerate_query_id", [True, False])
+def test_insert_query_id_is_not_shared_with_describe(
+    param_client: Client,
+    call,
+    client_factory: Callable,
+    table_context: Callable,
+    test_config: TestConfig,
+    query_id_source: str,
+    autogenerate_query_id: bool,
+):
     if test_config.cloud:
         pytest.skip("Skipping query_log test in cloud environment")
-    query_id = f"test_insert_query_id_{uuid4()}"
-    with table_context("test_insert_query_id", ["key UInt32"]):
-        call(param_client.insert, "test_insert_query_id", [[79]], settings={"query_id": query_id})
-        call(param_client.command, "SYSTEM FLUSH LOGS")
-        result = call(
-            param_client.query,
-            "SELECT query_kind FROM system.query_log WHERE query_id = {query_id:String} AND type = 'QueryFinish'",
-            parameters={"query_id": query_id},
-        )
-    assert result.result_set == [("Insert",)]
+    table_name = f"test_insert_query_id_{uuid4().hex}"
+    default_query_id = f"{table_name}_default"
+    insert_query_id = default_query_id if query_id_source == "client" else f"{table_name}_insert"
+    insert_client = client_factory(autogenerate_query_id=autogenerate_query_id)
+    if query_id_source != "insert":
+        insert_client.set_client_setting("query_id", default_query_id)
+    settings = {"log_comment": table_name, "log_queries": 1}
+    if query_id_source != "client":
+        settings["query_id"] = insert_query_id
+    original_settings = settings.copy()
+
+    with table_context(table_name, ["key UInt32"]):
+        summary = call(insert_client.insert, table_name, [[79]], settings=settings)
+        assert summary.query_id() == insert_query_id
+        assert settings == original_settings
+        assert call(param_client.query, f"SELECT key FROM {table_name}").result_rows == [(79,)]
+        for _ in range(50):
+            call(param_client.command, "SYSTEM FLUSH LOGS")
+            rows = call(
+                param_client.query,
+                "SELECT query_kind, query_id FROM system.query_log "
+                "WHERE log_comment = {log_comment:String} AND type = 'QueryFinish' "
+                "AND query_kind IN ('Describe', 'Insert') ORDER BY query_kind",
+                parameters={"log_comment": table_name},
+            ).result_rows
+            if len(rows) == 2:
+                break
+            time_module.sleep(0.1)
+
+    assert len(rows) == 2, rows
+    assert rows[0][0] == "Describe"
+    assert rows[0][1] and rows[0][1] not in (default_query_id, insert_query_id)
+    assert rows[1] == ("Insert", insert_query_id)

@@ -11,7 +11,7 @@
 
 ### Bug Fixes
 
-- Inserts that resolve column types from the server no longer send the `query_id` from `settings` with the internal `DESCRIBE TABLE`. Sharing it could fail the insert with `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` when the server had not yet released the finished `DESCRIBE`. The `DESCRIBE` now gets its own id. Closes [#1066](https://github.com/ClickHouse/clickhouse-connect/issues/1066).
+- Inserts that resolve column types from the server now give the internal `DESCRIBE TABLE` its own server-generated query ID. The `INSERT` retains the caller's `query_id` from per-call settings or client defaults. This prevents `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` errors when the server hasn't yet released the finished `DESCRIBE`. Closes [#1066](https://github.com/ClickHouse/clickhouse-connect/issues/1066).
 - Closing a synchronous Native-format HTTP response now waits for an active read before draining it, including Rust codec reads that outlast read-ahead shutdown. Cleanup also finishes partially consumed HTTP chunks with the same parser. This prevents concurrent response reads, premature connection closure, and `SESSION_IS_LOCKED` errors on the next query.
 - AsyncClient now awaits response cleanup when a Rust codec stream closes, including when its consumer is cancelled. Cleanup finishes before cancellation is re-raised.
 - SQLAlchemy `Nullable()` and `LowCardinality()` now preserve the wrapped type in their return annotations. Column declarations such as `Column("hostname", LowCardinality(String))` now pass strict type checking. Runtime behavior is unchanged. Closes [#1033](https://github.com/ClickHouse/clickhouse-connect/issues/1033).
