@@ -1,5 +1,8 @@
 # ClickHouse Connect ChangeLog
 
+This changelog covers the `clickhouse-connect` driver. The independently versioned
+`clickhouse-connect-core` Rust binding has a [separate changelog](rust/ch-core-py/CHANGELOG.md).
+
 ## UNRELEASED
 
 ### Improvements
@@ -20,7 +23,6 @@
 - Closing a Rust codec stream during read-ahead startup no longer lets a producer read from an already closed source. This applies to sync and async cleanup.
 - Closing a sync Rust codec stream early now drains its HTTP response before releasing the response iterator. This fixes premature connection closure that could make the next query on the same client fail with `SESSION_IS_LOCKED`.
 - Concurrent sync and async cleanup of a Rust codec stream now releases its response source only once.
-- Core musllinux wheels now compile for musl instead of GNU libc, fixing Rust codec imports on Alpine Linux and other musl-based systems.
 - Cancelling a pending Rust codec stream read now releases the waiting decoder worker. Previously, closing the stream could leave a worker blocked and hang async executor shutdown.
 - Rust codec NumPy and Pandas queries now preserve nanoseconds in nullable scalar `DateTime64(9)` columns, including `SimpleAggregateFunction` aliases. They also reject unsupported scalar `DateTime64` precisions consistently for nullable columns and aliases.
 - Rust codec NumPy and Pandas queries now return correct durations and `NaT` for NULL values in `Nullable(SimpleAggregateFunction(..., Time64))` columns. Previously, columns with NULLs returned floating-point bit patterns interpreted as durations.
@@ -30,7 +32,7 @@
 
 - Type checkers now infer `list[String]` for `[Nullable(String)]`. If a collection also holds other ClickHouse types, annotate it as `list[ChSqlaType]` from `clickhouse_connect.cc_sqlalchemy.datatypes.base`.
 - Rust NumPy object columns for nullable scalar `DateTime64(9)` now contain `numpy.datetime64` cells at UTC nanosecond resolution instead of Python `datetime` cells. SQL NULL stays `None`. Use `query_df` to retain named timezone metadata. Pandas datetime output now uses nanoseconds instead of Pandas 3's microseconds, while existing object dtypes from all-null blocks remain.
-- The Rust extra now requires `clickhouse-connect-core>=0.2.1,<0.3`. Rust codec setup checks the column buffer API separately from the binding API and reports upgrade guidance for older core wheels.
+- The Rust extra now requires `clickhouse-connect-core>=0.2.1,<0.3`. Rust codec setup checks the column buffer API separately from the binding API and reports upgrade guidance for older core wheels. See the [core 0.2.1 release notes](rust/ch-core-py/CHANGELOG.md#021-2026-09-24).
 
 ## 1.9.0, 2026-09-21
 

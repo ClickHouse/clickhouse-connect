@@ -57,7 +57,9 @@ This is a typed library. It ships PEP 561 type information: `clickhouse_connect/
 - Assume a local ClickHouse server is available on `localhost`. If it is needed and unavailable, tell the user rather than guessing around it.
 - For client-level behavior changes, use the shared sync and async integration fixtures in `tests/integration_tests/conftest.py` (`client_mode`, `call`, `param_client`, `client_factory`, `consume_stream`) so tests run against both clients. See `.agents/architecture.md` for when this applies.
 - Reuse existing fixtures and patterns instead of inventing new ones.
-- Update `CHANGELOG.md` in the same PR for any user-facing change (a bug fix users can observe, a new feature, or a behavior change). Do not defer it to release time or leave it only in the PR description. Add the entry under the top-most unreleased version, following the existing format.
+- Update the appropriate changelog in the same PR for any user-facing change (a bug fix users can observe, a new feature, or a behavior change). Do not defer it to release time or leave it only in the PR description. Add the entry under `UNRELEASED`, following the existing format.
+- Use `CHANGELOG.md` for the `clickhouse-connect` driver, including Python-side Rust codec integration and core dependency requirements. Use `rust/ch-core-py/CHANGELOG.md` for `clickhouse-connect-core` binding changes, bundled codec updates, and wheel fixes. If a change affects both packages, describe each package's changes in its own changelog and cross-link where helpful.
+- The packages release independently. Finalize only the changelog for the package being released, using that package's version. Core release dates are the first PyPI upload dates in UTC. Preserve existing released entries. GitHub Releases track `clickhouse-connect` only.
 
 ## Server Behavior Is Authoritative
 
