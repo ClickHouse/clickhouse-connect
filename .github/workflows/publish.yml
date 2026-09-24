@@ -21,7 +21,7 @@ jobs:
     name: Build x86 manylinux wheels on Linux
     runs-on: ubuntu-26.04
     env:
-      CIBW_SKIP: '*-musllinux* pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
+      CIBW_SKIP: '*-musllinux* pp39-* pp311-* cp39-*'
       CIBW_ENABLE: 'pypy pypy-eol'
     steps:
       - uses: actions/checkout@v7
@@ -36,7 +36,7 @@ jobs:
     name: Build x86 musllinux wheels on Linux
     runs-on: ubuntu-26.04
     env:
-      CIBW_SKIP: '*-manylinux* pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
+      CIBW_SKIP: '*-manylinux* pp39-* pp311-* cp39-*'
       CIBW_ENABLE: 'pypy pypy-eol'
     steps:
       - uses: actions/checkout@v7
@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-26.04-arm
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_SKIP: '*-musllinux* cp38-* cp39-* cp313t-*'
+      CIBW_SKIP: '*-musllinux* cp39-*'
     steps:
       - uses: actions/checkout@v7
       - name: Build wheels
@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-26.04-arm
     env:
       CIBW_ARCHS_LINUX: aarch64
-      CIBW_SKIP: '*-manylinux* cp38-* cp39-* cp313t-*'
+      CIBW_SKIP: '*-manylinux* cp39-*'
     steps:
       - uses: actions/checkout@v7
       - name: Build wheels
@@ -99,7 +99,7 @@ jobs:
     env:
       CIBW_ARCHS_MACOS: x86_64 arm64
       CIBW_ENABLE: 'pypy pypy-eol'
-      CIBW_SKIP: 'pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
+      CIBW_SKIP: 'pp39-* pp311-* cp39-*'
     steps:
       - uses: actions/checkout@v7
       - name: Build wheels
@@ -117,7 +117,7 @@ jobs:
     env:
       CIBW_BUILD_VERBOSITY: 2
       CIBW_ENABLE: 'pypy pypy-eol'
-      CIBW_SKIP: 'pp38-* pp39-* pp311-* cp38-* cp39-* cp313t-*'
+      CIBW_SKIP: 'pp39-* pp311-* cp39-*'
     steps:
       - uses: actions/checkout@v7
       - name: Build wheels
@@ -133,7 +133,7 @@ jobs:
     env:
       CIBW_ARCHS_WINDOWS: ARM64
       CIBW_BUILD_VERBOSITY: 2
-      CIBW_SKIP: 'cp38-* cp39-* cp313t-*'
+      CIBW_SKIP: 'cp39-*'
     steps:
       - uses: actions/checkout@v7
       - name: Build wheels

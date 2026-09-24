@@ -4,7 +4,7 @@ requires = ["setuptools>=77.0.3", "cython>=3.1,<4"]
 build-backend = "setuptools.build_meta"
 
 [tool.cibuildwheel]
-skip = "cp38-* cp39-* pp38-* pp39-*"
+skip = "cp39-* pp39-*"
 
 [tool.ruff]
 target-version = "py310"
