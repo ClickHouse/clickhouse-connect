@@ -12,6 +12,7 @@ from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 
 STAMP = datetime(2024, 6, 13, 7, 8, 9, 123456, tzinfo=timezone.utc)
 NAIVE_STAMP = STAMP.replace(tzinfo=None)
+SQLALCHEMY_21 = tuple(int(part) for part in sa.__version__.split(".")[:2]) >= (2, 1)
 
 
 @pytest.fixture(params=[False, True], ids=["client-side", "server-side"])
@@ -138,7 +139,12 @@ def test_datetime64_precompiled_parameter_mode(datetime_engine, compiled_server_
     compiled = statement.compile(dialect=ClickHouseDialect(dbapi=dbapi, server_side_params=compiled_server_side))
 
     with datetime_engine.connect() as conn:
-        assert conn.execute(compiled).scalar_one() == NAIVE_STAMP
+        if SQLALCHEMY_21:
+            # SQLAlchemy 2.1 no longer executes precompiled statement objects.
+            with pytest.raises(sa.exc.ObjectNotExecutableError, match="Not an executable object"):
+                conn.execute(compiled)
+        else:
+            assert conn.execute(compiled).scalar_one() == NAIVE_STAMP
 
 
 @pytest.mark.parametrize("first_type", [DateTime("UTC"), DateTime64(3, "UTC"), DateTime64(6, "UTC")])

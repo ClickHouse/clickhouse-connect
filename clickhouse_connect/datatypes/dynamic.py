@@ -5,7 +5,14 @@ from typing import Any
 from urllib.parse import unquote
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, _TypeArgs
-from clickhouse_connect.datatypes.binary_value import _decode_binary_value
+from clickhouse_connect.datatypes.binary_value import (
+    DATETIME64,
+    DATETIME64_TZ,
+    DATETIME_TZ,
+    SCALAR_TYPE_INDEXES,
+    TIME64,
+    _decode_binary_value,
+)
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.datatypes.string import String
 from clickhouse_connect.driver.binding import _decode_ch_string_literal, _format_identifier, format_str
@@ -364,6 +371,13 @@ _EXTENDED_PAYLOAD_SIZE = {
     0x31: 2,  # BFloat16
 }
 
+# Type indexes routed through the recursive single-value decoder: supported
+# compounds plus the scalars the legacy path leaves as raw bytes.
+_BINARY_DECODER_DISCRIMINATORS = frozenset(
+    {0x1E, 0x1F, 0x20, 0x23, 0x26, 0x27, 0x2B, 0x30, DATETIME_TZ, DATETIME64, DATETIME64_TZ, TIME64}
+    | (SCALAR_TYPE_INDEXES.keys() - STANDARD_DISCRIMINATOR_TYPES.keys())
+)
+
 # Expected payload sizes for fixed-size discriminator types.
 # Used to validate that binary data is actually variant-encoded vs a plain string
 # whose first byte happens to collide with a discriminator value.
@@ -428,11 +442,8 @@ def _decode_variant(
 
     type_name = STANDARD_DISCRIMINATOR_TYPES.get(discriminator)
     if type_name is None:
-        # Compound decoding is opt-in. JSON shared data always stores
-        # <encoded type><serializeBinary value>, so the recursive decoder is
-        # always correct there. A Dynamic SharedVariant may instead hold a
-        # plain string, so that path keeps returning raw bytes until it has
-        # its own reproduction and tests.
+        # JSON shared data decodes all supported binary types. Dynamic routes
+        # additional supported types through its own entry point.
         if not decode_compound:
             return binary_data
         try:
@@ -473,17 +484,9 @@ def decode_shared_data_value(binary_data: bytes, ctx: QueryContext):
 def decode_shared_variant_value(binary_data: bytes, ctx: QueryContext):
     """Decode a value from a Dynamic column's shared variant.
 
-    The shared variant can contain either:
-    - Variant-encoded binary data i.e. from paths promoted from shared data after merge
-    - Plain string bytes i.e. from paths that were already dynamic
-
-    Heuristics for distinguishing the two:
-    1. Supported types (STANDARD_DISCRIMINATOR_TYPES): length-validate then decode.
-    2. Control characters (< 0x20): no real string starts with these, so it's
-       variant-encoded with an unsupported type — return raw bytes.
-    3. Printable range (>= 0x20) with known fixed payload size: length-validate,
-       return raw bytes if it matches.
-    4. Everything else: treat as a plain UTF-8 string.
+    The server writes an encoded type followed by its single-value binary data.
+    Decode supported compound and scalar types when the decoder consumes the whole value.
+    Preserve the legacy scalar and plain UTF-8 string fallbacks otherwise.
     """
     if binary_data is None:
         return None
@@ -500,6 +503,12 @@ def decode_shared_variant_value(binary_data: bytes, ctx: QueryContext):
     discriminator = binary_data[0]
     if discriminator == 255:
         return None
+
+    if discriminator in _BINARY_DECODER_DISCRIMINATORS:
+        try:
+            return _decode_binary_value(binary_data, ctx, format_json=True)
+        except Exception as e:  # noqa: BLE001 - preserve the legacy fallback for undecodable values
+            logger.debug("Shared variant decode failed: %s", e)
 
     # 1. Supported type we can fully decode —> validate length and decode
     if discriminator in STANDARD_DISCRIMINATOR_TYPES:
@@ -530,6 +539,9 @@ class SharedVariant(String):
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any):
         raw_values = source.read_str_col(num_rows, None)
         return [decode_shared_variant_value(v, ctx) for v in raw_values]
+
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        return column
 
 
 class JSON(ClickHouseType):

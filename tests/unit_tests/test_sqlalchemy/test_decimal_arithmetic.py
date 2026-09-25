@@ -2,6 +2,7 @@ import operator
 from decimal import Decimal as PythonDecimal
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy import Float, Integer, Interval, Numeric, TypeDecorator, column, func, select, type_coerce
 from sqlalchemy.exc import ArgumentError
 
@@ -17,6 +18,8 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
 )
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 
+SQLALCHEMY_21 = tuple(int(part) for part in sa.__version__.split(".")[:2]) >= (2, 1)
+
 
 @pytest.mark.parametrize("op", [operator.add, operator.sub, operator.mul, operator.truediv])
 @pytest.mark.parametrize("value", [13, 1.25, PythonDecimal("1.25")], ids=["integer", "float", "decimal"])
@@ -25,8 +28,17 @@ def test_decimal_arithmetic_with_literals(op, value, reverse):
     amount = column("amount", Decimal(38, 9))
     expression = op(value, amount) if reverse else op(amount, value)
 
-    assert expression.type is amount.type
-    assert expression.type.result_processor(ClickHouseDialect(), None) is None
+    if SQLALCHEMY_21 and reverse and isinstance(value, float):
+        # SQLAlchemy 2.1 gives Float its own affinity and promotes this expression to Double.
+        assert type(expression.type) is sa.Double
+        processor = expression.type.result_processor(ClickHouseDialect(), None)
+        assert processor is not None
+        result = processor(PythonDecimal("1.25"))
+        assert type(result) is float
+        assert result == 1.25
+    else:
+        assert expression.type is amount.type
+        assert expression.type.result_processor(ClickHouseDialect(), None) is None
     compiled = select(expression).compile(dialect=ClickHouseDialect())
     assert compiled.params == {"amount_1": value}
 
@@ -86,7 +98,11 @@ def test_decimal_mixed_arithmetic_preserves_numeric_promotion(op, other_type, re
     expression = op(other, amount) if reverse else op(amount, other)
 
     if isinstance(other_type, Float):
-        assert type(expression.type) is Float64
+        if SQLALCHEMY_21 and not reverse:
+            # SQLAlchemy 2.1 retains the left Numeric operand for Numeric + Float.
+            assert expression.type is amount.type
+        else:
+            assert type(expression.type) is Float64
     elif other_type._type_affinity is Integer or reverse:
         assert expression.type is amount.type
     else:

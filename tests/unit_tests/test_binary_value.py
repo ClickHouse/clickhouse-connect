@@ -9,7 +9,7 @@ from clickhouse_connect.datatypes.binary_value import (
     UnsupportedBinaryTypeError,
     _decode_binary_value,
 )
-from clickhouse_connect.datatypes.dynamic import decode_shared_data_value
+from clickhouse_connect.datatypes.dynamic import decode_shared_data_value, decode_shared_variant_value
 from clickhouse_connect.driver.exceptions import StreamCompleteException
 from clickhouse_connect.driver.query import QueryContext
 
@@ -108,9 +108,8 @@ DECODE_CASES = [
         [{"k": "v"}],
         id="array-json-dynamic-path",
     ),
-    # nested JSON with a typed path (a Int32): the value is NOT self
-    # describing. Unreachable via a live server (typed paths normalize away
-    # before reaching shared data), so covered by crafted bytes only.
+    # JSON with a typed path (a Int32): the value is not self describing.
+    # Dynamic shared storage retains these typed paths.
     pytest.param(
         b"\x30\x00\x00\x10\x01\x01a\x09\x00\x00" + b"\x01\x01a" + _i32(13),
         {"a": 13},
@@ -131,6 +130,45 @@ DECODE_CASES = [
 @pytest.mark.parametrize("encoded,expected", DECODE_CASES)
 def test_decode_binary_value(encoded: bytes, expected):
     assert _decode_binary_value(encoded, CTX) == expected
+
+
+@pytest.mark.parametrize("decode", [decode_shared_data_value, decode_shared_variant_value])
+@pytest.mark.parametrize(
+    "encoded, query_formats, expected",
+    [
+        (b"\x27\x15\x01\x02\x01n\x0d\x01n\x4f", {"mAp": "pairs"}, [("n", 13), ("n", 79)]),
+        (b"\x20\x02\x01n\x01\x01s\x15\x0d\x01x", {"tUpLe": "tuple"}, (13, "x")),
+        (b"\x20\x02\x01n\x01\x01s\x15\x0d\x01x", {"Tuple": "json"}, b'{"n":13,"s":"x"}'),
+        (b"\x1f\x02\x01\x15\x0d\x01x", {"Tuple": "json"}, (13, "x")),
+        (b"\x1e\x15\x01\x01x", {"sTrInG": "bytes"}, [b"x"]),
+        (b"\x23\x15\x00\x01x", {"String": "bytes"}, b"x"),
+    ],
+)
+def test_shared_compound_read_formats(decode, encoded, query_formats, expected):
+    assert decode(encoded, QueryContext(query_formats=query_formats)) == expected
+
+
+def test_shared_json_string_format():
+    encoded = b"\x30\x00\x00\x10\x00\x00\x00\x01\x01n\x01\x0d"
+    ctx = QueryContext(query_formats={"jSoN": "string"})
+    assert decode_shared_variant_value(encoded, ctx) == b'{"n":13}'
+    # An enclosing JSON column applies its format after it assembles all paths.
+    assert decode_shared_data_value(encoded, ctx) == {"n": 13}
+
+
+@pytest.mark.parametrize("use_numpy", [False, True])
+@pytest.mark.parametrize(
+    "encoded, expected",
+    [
+        (b"\x1e\x01\x03\x0d\x00\x4f", [13, 0, 79]),
+        (b"\x1f\x01\x0e" + bytes(8), (0.0,)),
+        (b"\x1f\x01\x2d\x00", (False,)),
+    ],
+)
+def test_shared_compound_zero_values(encoded, expected, use_numpy):
+    if use_numpy:
+        pytest.importorskip("numpy")
+    assert decode_shared_variant_value(encoded, QueryContext(use_numpy=use_numpy)) == expected
 
 
 REJECT_CASES = [

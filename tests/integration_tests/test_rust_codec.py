@@ -366,12 +366,8 @@ DYNAMIC_QUERY = """
     ORDER BY id
 """
 
-# Typed SharedVariant decode under rust: date/list/str/int/float/bool.
+# Typed SharedVariant decode: date/list/str/int/float/bool.
 DYNAMIC_SHARED_TYPED = [None, date(2024, 1, 2), [1, 2, 3], "hello", 79, -0.5, True]
-# Known divergence: the python codec's shared-cell heuristic only decodes
-# int/float/str/bool and returns raw wire bytes for Date and Array cells
-# (FINDINGS.md finding 4).
-DYNAMIC_SHARED_PYTHON = [None, b"\x0f\x0cM", b"\x1e\x01\x03\x01\x02\x03", "hello", 79, -0.5, True]
 DYNAMIC_DIRECT = [None, "user_1", 79, -13, 2.5, True, 7]
 
 
@@ -398,8 +394,10 @@ def test_rust_codec_dynamic_decode_parity(client_factory, call, consume_stream):
     assert [row[5] for row in rust_rows] == [{"v": value} for value in DYNAMIC_DIRECT]
 
     assert [row[2] for row in rust_rows] == DYNAMIC_SHARED_TYPED
-    assert [row[2] for row in python_rows] == DYNAMIC_SHARED_PYTHON
+    assert [row[2] for row in python_rows] == DYNAMIC_SHARED_TYPED
 
+    # The python codec yields numpy datetimes in np and df modes where rust yields date.
+    python_shared = [None, np.datetime64("2024-01-02"), [1, 2, 3], "hello", 79, -0.5, True]
     # max_block_size=1 forces one row per block, exercising block-local child unification.
     for settings in (None, {"max_block_size": 1}):
         rust_np = call(rust_client.query_np, DYNAMIC_QUERY, settings=settings)
@@ -408,7 +406,7 @@ def test_rust_codec_dynamic_decode_parity(client_factory, call, consume_stream):
         for name in ("id", "d", "a", "t", "m"):
             assert rust_np[name].tolist() == python_np[name].tolist()
         assert rust_np["s"].tolist() == DYNAMIC_SHARED_TYPED
-        assert python_np["s"].tolist() == DYNAMIC_SHARED_PYTHON
+        assert python_np["s"].tolist() == python_shared
 
         # np-scalar residue (FINDINGS.md finding 4): rust yields python-native
         # scalars in object cells where python yields value-equal numpy scalars.
@@ -421,9 +419,7 @@ def test_rust_codec_dynamic_decode_parity(client_factory, call, consume_stream):
         for name in ("id", "d", "a", "t", "m"):
             assert rust_df[name].tolist() == python_df[name].tolist()
         assert rust_df["s"].tolist() == DYNAMIC_SHARED_TYPED
-        # Known divergence: the python codec's pandas exit stringifies every
-        # non-null shared cell, including the heuristically decoded ones.
-        assert python_df["s"].tolist() == [None, "\x0f\x0cM", "\x1e\x01\x03\x01\x02\x03", "hello", "79", "-0.5", "True"]
+        assert python_df["s"].tolist() == python_shared
 
         # np-scalar residue inside a container cell (FINDINGS.md finding 4).
         assert type(rust_df["a"].tolist()[2][0]) is int

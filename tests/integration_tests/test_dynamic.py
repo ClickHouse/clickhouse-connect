@@ -187,25 +187,237 @@ def test_dynamic(param_client: Client, call, table_context: Callable):
         assert result[2][2] == "777.25"
 
 
-def test_dynamic_shared_variant_unsupported_types(param_client: Client, call, table_context: Callable):
-    with table_context(
-        "dynamic_shared_variant",
-        [
-            "id UInt8",
-            "d Dynamic(max_types=0)",
-        ],
-    ):
-        call(param_client.command, "INSERT INTO dynamic_shared_variant SELECT 1, toDate('2024-01-02')")
-        call(param_client.command, "INSERT INTO dynamic_shared_variant SELECT 2, toDateTime('2024-01-02 03:04:05')")
-        call(param_client.command, "INSERT INTO dynamic_shared_variant SELECT 3, [1, 2, 3]")
-        call(param_client.command, "INSERT INTO dynamic_shared_variant SELECT 4, 'hello'")
+def test_dynamic_shared_variant_table_values(param_client: Client, call, table_context: Callable):
+    expressions = ["toDate('2024-01-02')", "toDateTime('2024-01-02 03:04:05')", "[1, 2, 3]", "'hello'", "toDecimal64(1.5, 2)"]
+    with table_context("dynamic_shared_variant", ["id UInt8", "shared Dynamic(max_types=0)", "regular Dynamic"]):
+        for row_id, expression in enumerate(expressions, 1):
+            call(param_client.command, f"INSERT INTO dynamic_shared_variant SELECT {row_id}, {expression}, {expression}")
 
         result = call(param_client.query, "SELECT * FROM dynamic_shared_variant ORDER BY id").result_set
 
-        assert result[0][1] == b"\x0f\x0cM"
-        assert result[1][1] == b"\x11%}\x93e"
-        assert result[2][1] == b"\x1e\x01\x03\x01\x02\x03"
+        assert [row[1] for row in result[:4]] == [row[2] for row in result[:4]]
+        assert result[0][1] == datetime.date(2024, 1, 2)
+        assert result[2][1] == [1, 2, 3]
         assert result[3][1] == "hello"
+        # Decimal has no single-value decoder and keeps the raw fallback
+        assert isinstance(result[4][1], bytes)
+
+
+@pytest.mark.parametrize(
+    "expression, expected",
+    [
+        ("13::UInt64", 13),
+        ("NULL", None),
+        ("'user_1'", "user_1"),
+        ("unhex('1e01020d4f')", "\x1e\x01\x02\x0d\x4f"),
+        ("[13, 79]", [13, 79]),
+        ("CAST([], 'Array(UInt8)')", []),
+        ("[[13, 79], [], [5]]", [[13, 79], [], [5]]),
+        ("[13::Nullable(UInt8), NULL, 79]", [13, None, 79]),
+        ("('x', ('macro', 20::UInt64))", ("x", ("macro", 20))),
+        ("[('user_1', 13::UInt64), ('user_2', 79::UInt64)]", [("user_1", 13), ("user_2", 79)]),
+        ("tuple()", ()),
+        ("CAST(('user_1', 13), 'Tuple(label String, count UInt64)')", {"label": "user_1", "count": 13}),
+        ("map('user_1', [13, 79])", {"user_1": [13, 79]}),
+        ("CAST('{\"a\":[13,79]}', 'JSON')", {"a": [13, 79]}),
+        ("tuple(toDate('2024-01-02'))", (datetime.date(2024, 1, 2),)),
+    ],
+)
+def test_dynamic_shared_compound_values(param_client: Client, call, expression, expected):
+    shared, regular = call(
+        param_client.query, f"SELECT CAST({expression}, 'Dynamic(max_types=0)'), CAST({expression}, 'Dynamic')"
+    ).first_row
+    assert regular == expected
+    assert shared == expected
+
+
+@pytest.mark.parametrize("formatted", [False, True])
+@pytest.mark.parametrize(
+    "type_name, value, read_format",
+    [
+        ("Date", "2024-01-02", "int"),
+        ("Date32", "1969-12-31", "int"),
+        ("DateTime", "2024-01-02 03:04:05", "int"),
+        ("DateTime('America/New_York')", "2024-01-02 03:04:05", "int"),
+        ("DateTime64(3)", "2024-01-02 03:04:05.125", "int"),
+        ("DateTime64(3, 'America/New_York')", "2024-01-02 03:04:05.125", "int"),
+        ("UUID", "00010203-0405-0607-0809-0a0b0c0d0e0f", "string"),
+        ("IPv4", "4.3.2.1", "string"),
+        ("IPv6", "2001:db8::13", "string"),
+        ("BFloat16", "0", "native"),
+        ("Time", "-01:02:03", "int"),
+        ("Time64(3)", "-01:02:03.125", "int"),
+    ],
+)
+def test_dynamic_shared_scalar_values(param_client: Client, call, test_config: TestConfig, formatted, type_name, value, read_format):
+    base_type = type_name.split("(")[0]
+    settings = {}
+    if base_type in ("Time", "Time64"):
+        if test_config.cloud or "enable_time_time64_type" not in param_client.server_settings:
+            pytest.skip("Time/Time64 require an available, configurable enable_time_time64_type setting")
+        settings["enable_time_time64_type"] = 1
+    shared, regular = call(
+        param_client.query,
+        f"WITH {{value:String}}::{type_name} AS v SELECT CAST(v, 'Dynamic(max_types=0)'), CAST(v, 'Dynamic')",
+        parameters={"value": value},
+        settings=settings,
+        query_formats={base_type.swapcase(): read_format} if formatted else None,
+    ).first_row
+    assert shared == regular
+    assert not isinstance(shared, bytes)
+
+
+@pytest.mark.parametrize("type_name", ["DateTime('America/New_York')", "DateTime64(3, 'America/New_York')"])
+def test_dynamic_shared_scalar_column_timezone(param_client: Client, call, type_name):
+    shared, regular = call(
+        param_client.query,
+        f"WITH '2024-01-02 03:04:05'::{type_name} AS v SELECT CAST(v, 'Dynamic(max_types=0)') AS shared, CAST(v, 'Dynamic') AS regular",
+        column_tzs={"shared": "Asia/Tokyo", "regular": "Asia/Tokyo"},
+    ).first_row
+    assert shared == regular
+    assert shared.utcoffset() == datetime.timedelta(hours=9)
+
+
+@pytest.mark.parametrize("use_extended_dtypes", [True, False])
+@pytest.mark.parametrize(
+    "expression, expected",
+    [
+        ("[13, 0, 79]", [13, 0, 79]),
+        ("tuple(0::UInt8)", (0,)),
+        ("tuple(0.0::Float64)", (0.0,)),
+        ("tuple(false)", (False,)),
+        ("('x', ('macro', 20::UInt64))", ("x", ("macro", 20))),
+        ("map('user_1', [13, 79])", {"user_1": [13, 79]}),
+        ("13::UInt64", 13),
+    ],
+)
+def test_dynamic_shared_values_dataframe(param_client: Client, call, use_extended_dtypes, expression, expected):
+    pytest.importorskip("pandas")
+    frame = call(
+        param_client.query_df,
+        f"SELECT CAST({expression}, 'Dynamic(max_types=0)') AS shared, CAST({expression}, 'Dynamic') AS regular",
+        use_extended_dtypes=use_extended_dtypes,
+    )
+    assert frame.iloc[0, 1] == expected
+    assert frame.iloc[0, 0] == expected
+
+
+def test_json_shared_dynamic_compound_dataframe(param_client: Client, call):
+    pytest.importorskip("pandas")
+    value = {"a": ["template", "x", ["macro", 20], "y"]}
+    frame = call(
+        param_client.query_df,
+        "SELECT {value:String}::JSON(max_dynamic_types=0) AS shared, {value:String}::JSON AS regular",
+        parameters={"value": json.dumps(value)},
+        settings={"input_format_json_infer_array_of_dynamic_from_array_of_different_types": 1},
+    )
+    assert frame.iloc[0, 1] == value
+    assert frame.iloc[0, 0] == value
+
+
+@pytest.mark.parametrize("json_type", ["JSON(max_dynamic_types=0)", "JSON(max_dynamic_paths=0)", "JSON"])
+def test_json_shared_dynamic_compound_values(param_client: Client, call, json_type):
+    value = {"a": ["template", "x", ["macro", 20], "y"], "n": [13, None, 79], "obj": [{"k": "v"}], "empty": []}
+    result = call(
+        param_client.query,
+        f"SELECT {{value:String}}::{json_type}",
+        parameters={"value": json.dumps(value)},
+        settings={"input_format_json_infer_array_of_dynamic_from_array_of_different_types": 1},
+    )
+    assert result.first_row[0] == value
+
+
+@pytest.mark.parametrize("shape", ["scalar", "array", "tuple", "array_tuple"])
+@pytest.mark.parametrize(
+    "expression, query_formats, expected",
+    [
+        ("map('n', 13, 'n', 79)", {"mAp": "pairs"}, [("n", 13), ("n", 79)]),
+        ("CAST(('user_1', 13), 'Tuple(label String, count UInt64)')", {"Tuple": "tuple"}, ("user_1", 13)),
+        (
+            "CAST(('user_1', 13), 'Tuple(label String, count UInt64)')",
+            {"tUpLe": "json"},
+            b'{"label":"user_1","count":13}',
+        ),
+        ("['user_1']", {"sTrInG": "bytes"}, [b"user_1"]),
+        ("[NULL, 'user_1']", {"String": "bytes"}, [None, b"user_1"]),
+        ("CAST('{\"a\":[13,79]}', 'JSON')", {"jSoN": "string"}, b'{"a":[13,79]}'),
+    ],
+)
+def test_dynamic_shared_compound_read_formats(param_client: Client, call, shape, expression, query_formats, expected):
+    if "tuple" in shape:
+        expression = f"tuple({expression})"
+        expected = (expected,)
+    if "array" in shape:
+        expression = f"[{expression}]"
+        expected = [expected]
+    shared, regular = call(
+        param_client.query,
+        f"SELECT CAST({expression}, 'Dynamic(max_types=0)'), CAST({expression}, 'Dynamic')",
+        query_formats=query_formats,
+    ).first_row
+    assert regular == expected
+    assert shared == expected
+
+
+@pytest.mark.parametrize("dynamic", [False, True])
+def test_json_shared_compound_string_format(param_client: Client, call, dynamic):
+    value = {"a": [{"k": [{"n": 13}]}]}
+    expression = "{value:String}::JSON(max_dynamic_paths=0)"
+    if dynamic:
+        expression = f"CAST({expression}, 'Dynamic(max_types=0)')"
+    result = call(
+        param_client.query,
+        f"SELECT {expression}",
+        parameters={"value": json.dumps(value)},
+        query_formats={"JSON": "string"},
+    )
+    assert json.loads(result.first_row[0]) == value
+
+
+@pytest.mark.parametrize("use_none", [True, False])
+@pytest.mark.parametrize(
+    "expression, query_formats, expected_none, expected_default",
+    [
+        ("[13::Nullable(UInt8), NULL, 79]", {}, [13, None, 79], [13, 0, 79]),
+        ("[13::Nullable(UInt8), NULL, 79]", {"UInt8": "string"}, ["13", "None", "79"], ["13", "0", "79"]),
+        ("tuple(NULL::Nullable(String))", {}, (None,), ("",)),
+        ("tuple(NULL::Nullable(String))", {"String": "bytes"}, (None,), (b"",)),
+        ("[NULL::Nullable(Date)]", {}, [None], [datetime.date(1970, 1, 1)]),
+        ("[NULL::Nullable(Date)]", {"Date": "int"}, [None], [0]),
+        ("NULL", {}, None, None),
+    ],
+)
+def test_dynamic_shared_nullable_values(param_client: Client, call, use_none, expression, query_formats, expected_none, expected_default):
+    shared, regular = call(
+        param_client.query,
+        f"SELECT CAST({expression}, 'Dynamic(max_types=0)'), CAST({expression}, 'Dynamic')",
+        use_none=use_none,
+        query_formats=query_formats,
+    ).first_row
+    expected = expected_none if use_none else expected_default
+    assert regular == expected
+    assert shared == expected
+
+
+@pytest.mark.parametrize("use_none", [True, False])
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("value", [{}, {"a": None}, {"a": 79}])
+def test_dynamic_shared_json_typed_nullable_paths(param_client: Client, call, use_none, nested, value):
+    path = "a.n" if nested else "a"
+    payload = {"a": {"n": value["a"]}} if nested and "a" in value else value
+    expression = f"CAST({{value:String}}, 'JSON({path} Nullable(UInt8))')"
+    shared, regular = call(
+        param_client.query,
+        f"SELECT CAST({expression}, 'Dynamic(max_types=0)'), CAST({expression}, 'Dynamic')",
+        parameters={"value": json.dumps(payload)},
+        use_none=use_none,
+    ).first_row
+    expected_value = value.get("a")
+    if expected_value is None and not use_none:
+        expected_value = 0
+    expected = {"a": {"n": expected_value}} if nested else {"a": expected_value}
+    assert regular == expected
+    assert shared == expected
 
 
 def test_basic_json(param_client: Client, call, table_context: Callable):
