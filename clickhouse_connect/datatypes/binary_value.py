@@ -25,22 +25,20 @@ type.
 
 Type indexes without a handler here (Enum, Decimal, FixedString, Interval,
 Variant, AggregateFunction, geo types) raise ``UnsupportedBinaryTypeError`` and
-the caller falls back to returning the raw bytes.  The JSON type normalizes all
-of those away before they can reach shared data (Decimal to Float64, Enum and
-FixedString and UUID and IP addresses to String, Map and named Tuple to nested
-JSON, unnamed Tuple to Array(Dynamic)), so a decoder for them would be
-untestable dead code.  Parameterless indexes are all present regardless since
-each is a single table entry.
+the caller keeps its existing fallback. JSON normalizes these types before they
+reach shared data, but Dynamic can retain unsupported types.
 """
 
 from typing import Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType
+from clickhouse_connect.datatypes.container import Map, Tuple
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import StreamCompleteException
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
+from clickhouse_connect.json_impl import any_to_json
 
 # Binary type index -> ClickHouse type name for parameterless types.  The
 # single-value binary encoding of every entry is identical to its one-row
@@ -283,16 +281,16 @@ def _read_element_count(source: ByteSource, zero_width: bool, limits: _Limits, w
     return count
 
 
-def _read_self_describing(source: ByteSource, ctx: QueryContext, limits: _Limits) -> Any:
+def _read_self_describing(source: ByteSource, ctx: QueryContext, limits: _Limits, format_json: bool) -> Any:
     """Read one ``<encoded type><value>`` pair, as written by SerializationDynamic."""
     node = _read_encoded_type(source)
     if node.kind == "nothing":
         # SerializationDynamic encodes a null value as the bare Nothing type
         return None
-    return _read_binary_value(source, node, ctx, limits)
+    return _read_binary_value(source, node, ctx, limits, format_json)
 
 
-def _read_binary_value(source: ByteSource, node: _Node, ctx: QueryContext, limits: _Limits) -> Any:
+def _read_binary_value(source: ByteSource, node: _Node, ctx: QueryContext, limits: _Limits, format_json: bool) -> Any:
     """Read one value in ISerialization::serializeBinary format."""
     kind = node.kind
 
@@ -301,7 +299,7 @@ def _read_binary_value(source: ByteSource, node: _Node, ctx: QueryContext, limit
         assert ch_type is not None
         read_state = ch_type.read_column_prefix(source, ctx)
         col_data = ch_type.read_column_data(source, 1, ctx, read_state)
-        if not col_data:
+        if len(col_data) == 0:
             raise UnsupportedBinaryTypeError(f"{ch_type.name} read produced no value")
         return col_data[0]
 
@@ -314,35 +312,50 @@ def _read_binary_value(source: ByteSource, node: _Node, ctx: QueryContext, limit
     if kind == "array":
         child = _child_of(node)
         count = _read_element_count(source, child.zero_width, limits, "Array element")
-        return [_read_binary_value(source, child, ctx, limits) for _ in range(count)]
+        return [_read_binary_value(source, child, ctx, limits, format_json) for _ in range(count)]
 
     if kind == "nullable":
+        child = _child_of(node)
         if source.read_byte():
+            if child.ch_type is not None:
+                ch_type = child.ch_type
+                return ch_type._finalize_column([ch_type._active_null(ctx)], ctx)[0]
             return None
-        return _read_binary_value(source, _child_of(node), ctx, limits)
+        return _read_binary_value(source, child, ctx, limits, format_json)
 
     if kind == "map":
         # Serialized as the nested Array(Tuple(K, V))
         key_node, value_node = node.children
         zero_width = key_node.zero_width and value_node.zero_width
         count = _read_element_count(source, zero_width, limits, "Map entry")
-        mapping = {}
-        for _ in range(count):
-            key = _read_binary_value(source, key_node, ctx, limits)
-            mapping[key] = _read_binary_value(source, value_node, ctx, limits)
-        return mapping
+        if Map.read_format(ctx) == "pairs":
+            return [
+                (
+                    _read_binary_value(source, key_node, ctx, limits, format_json),
+                    _read_binary_value(source, value_node, ctx, limits, format_json),
+                )
+                for _ in range(count)
+            ]
+        return {
+            _read_binary_value(source, key_node, ctx, limits, format_json): _read_binary_value(source, value_node, ctx, limits, format_json)
+            for _ in range(count)
+        }
 
     if kind == "tuple":
-        return tuple(_read_binary_value(source, child, ctx, limits) for child in node.children)
+        return tuple([_read_binary_value(source, child, ctx, limits, format_json) for child in node.children])
 
     if kind == "named_tuple":
-        return {name: _read_binary_value(source, child, ctx, limits) for name, child in zip(node.names, node.children)}
+        fmt = Tuple.read_format(ctx)
+        if fmt == "tuple":
+            return tuple([_read_binary_value(source, child, ctx, limits, format_json) for child in node.children])
+        value = {name: _read_binary_value(source, child, ctx, limits, format_json) for name, child in zip(node.names, node.children)}
+        return any_to_json(value) if fmt == "json" else value
 
     if kind == "dynamic":
-        return _read_self_describing(source, ctx, limits)
+        return _read_self_describing(source, ctx, limits, format_json)
 
     if kind == "json":
-        from clickhouse_connect.datatypes.dynamic import _nest_value  # circular import
+        from clickhouse_connect.datatypes.dynamic import JSON, _nest_value  # circular import
 
         typed_paths = node.typed_paths
         obj: dict[str, Any] = {}
@@ -351,21 +364,22 @@ def _read_binary_value(source: ByteSource, node: _Node, ctx: QueryContext, limit
             path_node = typed_paths.get(path)
             if path_node is None:
                 # dynamic path or shared data: value is self describing
-                value = _read_self_describing(source, ctx, limits)
+                value = _read_self_describing(source, ctx, limits, False)
             else:
-                value = _read_binary_value(source, path_node, ctx, limits)
-            if value is not None:
+                value = _read_binary_value(source, path_node, ctx, limits, False)
+            if path_node is not None or value is not None:
                 _nest_value(obj, path, value)
-        return obj
+        return any_to_json(obj) if format_json and JSON.read_format(ctx) == "string" else obj
 
     raise UnsupportedBinaryTypeError(f"Unhandled node kind {kind}")
 
 
-def _decode_binary_value(binary_data: bytes, ctx: QueryContext) -> Any:
+def _decode_binary_value(binary_data: bytes, ctx: QueryContext, *, format_json: bool = False) -> Any:
     """Decode ``<encoded type><serializeBinary value>`` into a Python object.
 
     :param binary_data: The complete encoded value, including the leading type encoding.
     :param ctx: Query context used for scalar column decoding.
+    :param format_json: Apply JSON read formats. An enclosing JSON column handles its own formatting.
     :returns: The decoded Python value.
     :raises UnsupportedBinaryTypeError: If the type encoding is not supported,
         or if the parser does not consume exactly ``binary_data``.
@@ -376,7 +390,7 @@ def _decode_binary_value(binary_data: bytes, ctx: QueryContext) -> Any:
     if node.kind == "nothing":
         # Shared data never stores nulls; a bare Nothing type is corrupt input
         raise UnsupportedBinaryTypeError("Nothing is not a serializable value type")
-    value = _read_binary_value(source, node, ctx, _Limits(len(binary_data)))
+    value = _read_binary_value(source, node, ctx, _Limits(len(binary_data)), format_json)
     try:
         source.read_byte()
     except StreamCompleteException:

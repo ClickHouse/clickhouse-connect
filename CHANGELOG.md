@@ -14,6 +14,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- Values in Dynamic shared storage, including JSON paths that exceed `max_dynamic_types`, now decode to Python objects instead of encoded bytes or strings. This covers supported arrays, tuples, maps, nested JSON, and date, time, UUID and IP address scalars, including nullable defaults and typed JSON null paths. DataFrame results keep the decoded objects. Closes [#1070](https://github.com/ClickHouse/clickhouse-connect/issues/1070).
 - Inserts that resolve column types from the server now give the internal `DESCRIBE TABLE` its own server-generated query ID. The `INSERT` retains the caller's `query_id` from per-call settings or client defaults. This prevents `QUERY_WITH_SAME_ID_IS_ALREADY_RUNNING` errors when the server hasn't yet released the finished `DESCRIBE`. Closes [#1066](https://github.com/ClickHouse/clickhouse-connect/issues/1066).
 - Closing a synchronous Native-format HTTP response now waits for an active read before draining it, including Rust codec reads that outlast read-ahead shutdown. Cleanup also finishes partially consumed HTTP chunks with the same parser. This prevents concurrent response reads, premature connection closure, and `SESSION_IS_LOCKED` errors on the next query.
 - AsyncClient now awaits response cleanup when a Rust codec stream closes, including when its consumer is cancelled. Cleanup finishes before cancellation is re-raised.
