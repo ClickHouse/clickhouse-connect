@@ -6,7 +6,7 @@ from typing import Any, cast
 import sqlalchemy.schema as sa_schema
 from sqlalchemy import String, bindparam, text
 from sqlalchemy.engine.reflection import Inspector
-from sqlalchemy.exc import NoResultFound
+from sqlalchemy.exc import NoResultFound, NoSuchTableError
 from sqlalchemy.sql.elements import TextClause
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
@@ -185,7 +185,10 @@ class ChInspector(Inspector):
         schema = table.schema
         with self._inspection_context() as inspector:
             connection = inspector.bind
-            table_metadata = get_table_metadata(connection, table.name, schema)
+            try:
+                table_metadata = get_table_metadata(connection, table.name, schema)
+            except NoResultFound as ex:
+                raise NoSuchTableError(f"{schema}.{table.name}" if schema else table.name) from ex
             reflected_columns: list[dict[str, Any]]
             if table_metadata.engine == "Dictionary":
                 reflected_columns = get_dictionary_columns(connection, table.name, schema)
@@ -213,4 +216,7 @@ class ChInspector(Inspector):
 
     def get_columns(self, table_name, schema=None, **_kwargs):
         with self._operation_context() as connection:
-            return get_columns(connection, table_name, schema)
+            try:
+                return get_columns(connection, table_name, schema)
+            except NoResultFound as ex:
+                raise NoSuchTableError(f"{schema}.{table_name}" if schema else table_name) from ex
