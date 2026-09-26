@@ -2,7 +2,7 @@ import pytest
 import sqlalchemy as db
 from sqlalchemy import MetaData, Table, inspect, text
 from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.exc import NoResultFound
+from sqlalchemy.exc import NoSuchTableError
 
 from clickhouse_connect import common
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
@@ -146,7 +146,7 @@ def test_direct_inspector_reflection(test_engine: Engine, monkeypatch):
         assert pool_events == ["checkout", "checkin"]
 
         pool_events.clear()
-        with pytest.raises(NoResultFound):
+        with pytest.raises(NoSuchTableError):
             inspector.get_columns("missing_reflection_table", schema="system")
         assert pool_events == ["checkout", "checkin"]
 

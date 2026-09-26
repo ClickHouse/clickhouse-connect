@@ -4,8 +4,10 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
+import sqlalchemy as db
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import NoSuchTableError
 
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 from clickhouse_connect.cc_sqlalchemy.inspector import (
@@ -274,10 +276,45 @@ def test_get_table_names_uses_internal_query_formats(mock_engine):
     with engine.connect() as conn:
         conn.exec_driver_sql("SELECT 1")
         client.query.reset_mock()
-        client.query.return_value = _NamedRowsResult([["my_table"]], ["name"])
+
+        def _side_effect(operation, *args, **kwargs):
+            op = str(operation)
+            if "currentDatabase" in op:
+                return _NamedRowsResult([["default"]], ["currentDatabase()"])
+            if "system.tables" in op:
+                return _NamedRowsResult([["my_view"]], ["name"])
+            return _NamedRowsResult([["my_table"], ["my_view"]], ["name"])
+
+        client.query.side_effect = _side_effect
         names = conn.dialect.get_table_names(conn)
     assert names == ["my_table"]
     assert all(fmt == dict(_INTERNAL_QUERY_FORMATS) for fmt in _query_formats(client))
+
+
+def test_get_view_names_reads_system_tables(mock_engine):
+    engine, client = mock_engine
+    with engine.connect() as conn:
+        conn.exec_driver_sql("SELECT 1")
+        client.query.reset_mock()
+        client.query.return_value = _NamedRowsResult([["mv"], ["v"]], ["name"])
+        names = conn.dialect.get_view_names(conn, schema="db")
+    assert names == ["mv", "v"]
+    (call,) = client.query.call_args_list
+    query = str(call.args[0] if call.args else call.kwargs.get("query"))
+    assert "FROM system.tables" in query and "View'" in query
+    assert all(fmt == dict(_INTERNAL_QUERY_FORMATS) for fmt in _query_formats(client))
+
+
+def test_get_columns_missing_table_raises_no_such_table(mock_engine):
+    engine, client = mock_engine
+    with engine.connect() as conn:
+        conn.exec_driver_sql("SELECT 1")
+        client.query.reset_mock()
+        client.query.return_value = _NamedRowsResult([], ["engine", "engine_full", "comment"])
+        with pytest.raises(NoSuchTableError):
+            conn.dialect.get_columns(conn, "absent", schema="db")
+        with pytest.raises(NoSuchTableError):
+            db.Table("absent", db.MetaData(), schema="db", autoload_with=conn)
 
 
 def test_get_schema_names_uses_internal_query_formats(mock_engine):
