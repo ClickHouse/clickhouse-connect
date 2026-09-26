@@ -55,8 +55,17 @@ def _datetime64_query_signature(ch_type: ClickHouseType | None) -> _DateTime64Qu
 
 def _datetime64_bind_signature(sqla_type: TypeEngine[Any], dialect: Dialect) -> _DateTime64QuerySignature:
     effective_type = sqla_type.dialect_impl(dialect)
+    seen: set[type] = set()
     while isinstance(effective_type, TypeDecorator):
-        effective_type = effective_type.type_engine(dialect).dialect_impl(dialect)
+        impl = effective_type.type_engine(dialect)
+        if type(effective_type) in seen:
+            # A colspecs entry can map a decorator's impl back to the same
+            # decorator (e.g. another library registering a String decorator in
+            # a colspecs dict this dialect shares); stop at the impl type.
+            effective_type = impl
+            break
+        seen.add(type(effective_type))
+        effective_type = impl.dialect_impl(dialect)
     if isinstance(effective_type, ChSqlaType):
         return _datetime64_query_signature(effective_type.ch_type)
     if isinstance(effective_type, ARRAY):
