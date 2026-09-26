@@ -28,6 +28,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - Rust codec NumPy and Pandas queries now preserve nanoseconds in nullable scalar `DateTime64(9)` columns, including `SimpleAggregateFunction` aliases. They also reject unsupported scalar `DateTime64` precisions consistently for nullable columns and aliases.
 - Rust codec NumPy and Pandas queries now return correct durations and `NaT` for NULL values in `Nullable(SimpleAggregateFunction(..., Time64))` columns. Previously, columns with NULLs returned floating-point bit patterns interpreted as durations.
 - Large async external-data uploads now use bounded writes to avoid long event-loop stalls during TLS encryption. Closes [#1057](https://github.com/ClickHouse/clickhouse-connect/issues/1057).
+- SQLAlchemy `Inspector.get_view_names()` now returns the views, materialized views, live views and window views in a database instead of always returning an empty list, and `get_table_names()` no longer includes views. Autoloading a missing table (for example `Table("absent", metadata, autoload_with=conn)`) now raises `NoSuchTableError` instead of `NoResultFound`.
 
 ### Compatibility
 
