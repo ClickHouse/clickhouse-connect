@@ -183,7 +183,8 @@ fn append_aggregate_state(
         data.extend_from_slice(bytes.as_bytes());
         false
     } else if let Ok(bytes) = value.cast::<PyByteArray>() {
-        append_bytearray(bytes, data);
+        append_bytearray(bytes, data)
+            .map_err(|err| agg_state_convert_err(value.py(), name, row, err))?;
         false
     } else {
         let buffer = PyBuffer::<u8>::get(value)

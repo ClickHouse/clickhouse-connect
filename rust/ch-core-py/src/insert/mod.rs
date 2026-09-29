@@ -4,6 +4,8 @@ use std::ffi::{c_int, c_long};
 use std::io::Write as _;
 use std::net::{IpAddr, Ipv4Addr};
 
+#[cfg(Py_GIL_DISABLED)]
+use pyo3::buffer::PyUntypedBuffer;
 use pyo3::buffer::{Element, PyBuffer};
 use pyo3::exceptions::{PyMemoryError, PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::ffi;
@@ -449,12 +451,44 @@ fn is_low_cardinality_inner(ch_type: &ChType) -> bool {
     )
 }
 
-/// Copy a mutable bytearray while excluding resize and byte replacement. The
-/// closure cannot call Python or suspend its critical section; on GIL builds
-/// the critical-section helper is a no-op.
-fn append_bytearray(bytes: &Bound<'_, PyByteArray>, data: &mut Vec<u8>) {
-    pyo3::sync::critical_section::with_critical_section(bytes, || {
-        // SAFETY: the critical section (or GIL) protects the complete copy.
+/// Copy a mutable bytearray. On free-threaded builds the critical section
+/// blocks direct mutation and resizes while CPython copies through a buffer
+/// export, so no Rust slice aliases memory a memoryview may write. The
+/// bytearray buffer hooks re-enter the same critical section as a no-op.
+fn append_bytearray(bytes: &Bound<'_, PyByteArray>, data: &mut Vec<u8>) -> PyResult<()> {
+    #[cfg(not(Py_GIL_DISABLED))]
+    {
+        // SAFETY: the GIL excludes mutation and no Python code runs during the copy.
         data.extend_from_slice(unsafe { bytes.as_bytes() });
-    });
+        Ok(())
+    }
+    #[cfg(Py_GIL_DISABLED)]
+    {
+        let snapshot;
+        let bytes = if bytes.is_exact_instance_of::<PyByteArray>() {
+            bytes
+        } else {
+            // Preserve base storage semantics without calling subclass overrides.
+            snapshot = bytes
+                .py()
+                .get_type::<PyByteArray>()
+                .call_method1(intern!(bytes.py(), "copy"), (bytes,))?
+                .cast_into::<PyByteArray>()?;
+            &snapshot
+        };
+        pyo3::sync::critical_section::with_critical_section(bytes, || {
+            let buffer = PyUntypedBuffer::get(bytes.as_any())?;
+            let start = data.len();
+            let result = buffer.as_typed::<u8>().and_then(|buffer| {
+                data.resize(start + buffer.len_bytes(), 0);
+                buffer.copy_to_slice(bytes.py(), &mut data[start..])
+            });
+            // Drop may run deferred Python finalizers before releasing the export.
+            buffer.release(bytes.py());
+            if result.is_err() {
+                data.truncate(start);
+            }
+            result
+        })
+    }
 }

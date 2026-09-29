@@ -173,8 +173,7 @@ fn append_json_document(
         return Ok(());
     }
     if let Ok(bytes) = value.cast::<PyByteArray>() {
-        append_bytearray(bytes, data);
-        return Ok(());
+        return append_bytearray(bytes, data);
     }
     let type_name = python_type_name(value.as_ptr());
     Err(PyValueError::new_err(if serialized {

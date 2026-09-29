@@ -6,6 +6,7 @@ import subprocess
 import sys
 import sysconfig
 import threading
+import time
 import traceback
 
 import pytest
@@ -141,6 +142,9 @@ def _exercise_concurrent_encoding(type_name, mutation):
             else:
                 assert set(decoded) <= {"user_1", "user_2" * 40}
             counts[index] += 1
+            if not free_threaded:
+                # Release the GIL so the writer gets scheduled.
+                time.sleep(0)
 
     def run(target, *args):
         try:
@@ -155,13 +159,17 @@ def _exercise_concurrent_encoding(type_name, mutation):
     for thread in threads:
         thread.start()
     start.wait(timeout=10)
+    # Time the stress interval from the first pass of every thread.
+    deadline = time.monotonic() + 10
+    while not all(counts) and failures.empty() and time.monotonic() < deadline:
+        time.sleep(0.01)
     stop.wait(1)
     stop.set()
     for thread in threads:
         thread.join(timeout=10)
     assert not any(thread.is_alive() for thread in threads), "Encoding did not stop"
     assert failures.empty(), failures.get()
-    assert counts[0] and sum(counts[1:]), f"Writer or readers made no progress: {counts}"
+    assert all(counts), f"Writer or readers made no progress: {counts}"
     if free_threaded:
         assert not sys._is_gil_enabled(), "Encoding enabled the GIL"
 

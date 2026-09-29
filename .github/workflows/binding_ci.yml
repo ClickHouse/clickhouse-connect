@@ -289,7 +289,6 @@ jobs:
       - name: Run binding tests with the GIL disabled
         run: python -m pytest rust/ch-core-py/tests -n 4
       - name: Qualify with the GIL disabled and without Arrow
-        continue-on-error: true
         run: |
           python .github/scripts/qualify_core_wheel.py \
             --core-wheels core-wheelhouse --driver-wheel driver-wheelhouse/*-py3-none-any.whl \

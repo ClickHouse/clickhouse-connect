@@ -20,6 +20,29 @@ from helpers import (
 
 
 class TestEncodeNativeBlock:
+    @pytest.mark.parametrize(
+        "type_name,first,payload,exported",
+        [
+            ("JSON", '{"value":79}', b'{"value":13}', b'{"value":79}'),
+            ("AggregateFunction(count)", b"\x4f", b"\x0d", b"\x4f"),
+        ],
+    )
+    @pytest.mark.parametrize("buffer_error", [False, True], ids=["different_buffer", "buffer_error"])
+    def test_bytearray_subclass_uses_base_storage(self, type_name, first, payload, exported, buffer_error):
+        class ByteArraySubclass(bytearray):
+            def __buffer__(self, flags):
+                if buffer_error:
+                    raise BufferError("subclass buffer must not be used")
+                return memoryview(exported)
+
+            def copy(self):
+                raise AssertionError("subclass copy must not be used")
+
+        values = [first, ByteArraySubclass(payload)]
+        encoded = _ch_core.encode_native_block(["v"], [type_name], [values], len(values))
+        expected = _ch_core.encode_native_block(["v"], [type_name], [[first, bytearray(payload)]], len(values))
+        assert encoded == expected
+
     def test_indexable_non_sequence_columns_match_native_helper(self):
         names = ["i", "s"]
         type_names = ["Int32", "String"]
