@@ -109,7 +109,7 @@ impl<'py> RawBuffer<'py> {
             )
         };
         if result != 0 {
-            // SAFETY: GIL held; discards the pending TypeError/BufferError.
+            // SAFETY: this thread is attached; discard the pending buffer error.
             unsafe { ffi::PyErr_Clear() };
             return None;
         }
@@ -151,15 +151,39 @@ impl<'py> RawBuffer<'py> {
         }
     }
 
+    #[cfg(not(Py_GIL_DISABLED))]
     fn data(&self) -> *const u8 {
         self.view.buf.cast()
+    }
+
+    /// Copy through CPython's buffer API, as PyBuffer::to_vec does, without
+    /// constructing a Rust slice that borrows mutable exporter storage.
+    #[cfg(Py_GIL_DISABLED)]
+    fn copy_bytes(&self) -> PyResult<Vec<u8>> {
+        let len = usize::try_from(self.view.len)
+            .map_err(|_| PyValueError::new_err("buffer has a negative byte length"))?;
+        let mut bytes = vec![0u8; len];
+        // SAFETY: the live export pins the source storage. The destination
+        // owns exactly len writable bytes and does not alias the source.
+        let result = unsafe {
+            ffi::PyBuffer_ToContiguous(
+                bytes.as_mut_ptr().cast(),
+                &*self.view,
+                self.view.len,
+                b'C' as std::ffi::c_char,
+            )
+        };
+        if result == -1 {
+            return Err(PyErr::fetch(self.py));
+        }
+        Ok(bytes)
     }
 }
 
 impl Drop for RawBuffer<'_> {
     fn drop(&mut self) {
-        // SAFETY: the held Python token proves the GIL, and the view was
-        // filled by a successful PyObject_GetBuffer.
+        // SAFETY: the held Python token proves this thread is attached,
+        // and the view was filled by a successful PyObject_GetBuffer.
         let _ = self.py;
         unsafe { ffi::PyBuffer_Release(&mut *self.view) };
     }
@@ -423,4 +447,14 @@ fn is_low_cardinality_inner(ch_type: &ChType) -> bool {
             | ChType::Ipv4
             | ChType::Ipv6
     )
+}
+
+/// Copy a mutable bytearray while excluding resize and byte replacement. The
+/// closure cannot call Python or suspend its critical section; on GIL builds
+/// the critical-section helper is a no-op.
+fn append_bytearray(bytes: &Bound<'_, PyByteArray>, data: &mut Vec<u8>) {
+    pyo3::sync::critical_section::with_critical_section(bytes, || {
+        // SAFETY: the critical section (or GIL) protects the complete copy.
+        data.extend_from_slice(unsafe { bytes.as_bytes() });
+    });
 }

@@ -92,11 +92,12 @@ fn variant_column_from_seq_with_name<S: FastSeq>(
     dispatch_type_name: Option<&str>,
 ) -> PyResult<Column> {
     let mut builder = VariantBuilder::new(py, name, alternatives, row_count, dispatch_type_name)?;
+    check_not_resized(seq, name, row_count)?;
     for row in 0..row_count {
         // SAFETY: row < row_count, which the caller checked against seq.size().
         // A strong reference protects the value while the builder retains its
         // selected payload in an alternative run.
-        let value = unsafe { Bound::from_borrowed_ptr(py, seq.get(row)) };
+        let value = unsafe { seq.item(row)? }.into_bound(py);
         let ran_python = builder.push_row(&value, row)?;
         if ran_python {
             // Dispatch that ran Python (subclass attribute access or a
@@ -183,7 +184,11 @@ impl<'a, 'py> VariantBuilder<'a, 'py> {
             .getattr("get_from_name")?
             .call1((type_name,))?;
         let python_map = py_variant.getattr("_python_map")?.cast_into::<PyDict>()?;
+        #[cfg(Py_GIL_DISABLED)]
+        let python_map = python_map.copy()?;
         let name_index = py_variant.getattr("_name_index")?.cast_into::<PyDict>()?;
+        #[cfg(Py_GIL_DISABLED)]
+        let name_index = name_index.copy()?;
         let typed_variant_type = py
             .import("clickhouse_connect.datatypes.dynamic")?
             .getattr("TypedVariant")?;

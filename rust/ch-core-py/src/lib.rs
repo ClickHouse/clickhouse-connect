@@ -6,7 +6,7 @@ mod decoder;
 mod insert;
 mod pyval;
 
-#[pymodule]
+#[pymodule(gil_used = false)]
 fn _ch_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     // Binding API contract number checked by clickhouse_connect/driver/rustcodec.py

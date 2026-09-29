@@ -15,14 +15,10 @@ pub(super) fn build_nothing_column(
     check_row_count(name, &column_values, row_count)?;
 
     if let Ok(list) = values.cast_exact::<PyList>() {
-        return Ok(nothing_column_from_seq(&ListSeq(list), row_count, nullable));
+        return nothing_column_from_seq(&ListSeq(list), row_count, nullable);
     }
     if let Ok(tuple) = values.cast_exact::<PyTuple>() {
-        return Ok(nothing_column_from_seq(
-            &TupleSeq(tuple),
-            row_count,
-            nullable,
-        ));
+        return nothing_column_from_seq(&TupleSeq(tuple), row_count, nullable);
     }
 
     let validity = if nullable {
@@ -41,20 +37,20 @@ pub(super) fn nothing_column_from_seq<S: FastSeq>(
     seq: &S,
     row_count: usize,
     nullable: bool,
-) -> Column {
-    // The unsafe seq reads below are in bounds only under this equality.
-    assert_eq!(seq.size(), row_count);
-    let validity = nullable.then(|| {
+) -> PyResult<Column> {
+    let validity = if nullable {
         let mut null_map = Vec::with_capacity(row_count);
         for row in 0..row_count {
-            // SAFETY: row < row_count == seq.size(), the sequence is borrowed
-            // while the GIL is held, and comparing to Py_None runs no Python.
-            let value = unsafe { seq.get(row) };
-            null_map.push(u8::from(value == unsafe { ffi::Py_None() }));
+            // SAFETY: the source length was checked; item retains the
+            // value or returns an error after a concurrent list resize.
+            let item = unsafe { seq.item(row)? };
+            null_map.push(u8::from(item.as_ptr() == unsafe { ffi::Py_None() }));
         }
-        Bitmap::from_ch_null_map(&null_map)
-    });
-    nothing_column(row_count, validity)
+        Some(Bitmap::from_ch_null_map(&null_map))
+    } else {
+        None
+    };
+    Ok(nothing_column(row_count, validity))
 }
 
 fn nothing_column(row_count: usize, validity: Option<Bitmap>) -> Column {
@@ -119,7 +115,7 @@ pub(super) fn aggregate_state_column_from_seq<S: FastSeq>(
         // front and revalidated after any row that ran Python.
         // `from_borrowed_ptr` takes a strong reference, so container mutation
         // during generic buffer conversion cannot invalidate `value`.
-        let value = unsafe { Bound::from_borrowed_ptr(py, seq.get(row)) };
+        let value = unsafe { seq.item(row)? }.into_bound(py);
         let ran_python =
             append_aggregate_state(&value, name, ch_type, row, &mut offsets, &mut data)?;
         if ran_python {
@@ -139,9 +135,13 @@ pub(super) fn aggregate_state_column_from_seq<S: FastSeq>(
 fn aggregate_state_size_hint<S: FastSeq>(_py: Python<'_>, seq: &S, row_count: usize) -> usize {
     let mut total = 0usize;
     for row in 0..row_count {
-        // SAFETY: the GIL is held, row is in bounds, and no Python runs in
-        // this loop, so the borrowed pointer stays valid.
-        let ptr = unsafe { seq.get(row) };
+        // SAFETY: row was checked against the source size. The item is
+        // retained on free-threaded builds, and a raced resize simply skips
+        // this optional reservation hint.
+        let Ok(item) = (unsafe { seq.item(row) }) else {
+            return 0;
+        };
+        let ptr = item.as_ptr();
         if unsafe { ffi::PyBytes_CheckExact(ptr) } == 0 {
             return 0;
         }
@@ -183,9 +183,7 @@ fn append_aggregate_state(
         data.extend_from_slice(bytes.as_bytes());
         false
     } else if let Ok(bytes) = value.cast::<PyByteArray>() {
-        // SAFETY: the GIL is held and extend_from_slice copies the complete
-        // buffer before any Python or PyO3 API can run and invalidate it.
-        data.extend_from_slice(unsafe { bytes.as_bytes() });
+        append_bytearray(bytes, data);
         false
     } else {
         let buffer = PyBuffer::<u8>::get(value)
@@ -242,6 +240,7 @@ pub(super) fn build_low_cardinality_column(
             row_count,
             nullable,
         ),
+        #[cfg(not(Py_GIL_DISABLED))]
         ColumnSource::ObjectArray(seq) => {
             if wide_int_layout(value_type).is_some() {
                 return lc_wide_column(py, name, value_type, &seq, row_count, nullable);
@@ -487,6 +486,10 @@ pub(super) fn lc_string_seq<S: FastSeq>(
     let mut dict_values: Vec<Scalar> = Vec::new();
     let mut ptr_slots: HashMap<usize, i32, std::hash::BuildHasherDefault<PtrHasher>> =
         HashMap::default();
+    // Only exact immutable strings enter this cache. Their owners prevent
+    // address reuse without extending the lifetime of callback objects.
+    #[cfg(Py_GIL_DISABLED)]
+    let mut ptr_owners: Vec<Py<PyString>> = Vec::new();
     let mut content_slots: HashMap<Vec<u8>, i32> = HashMap::new();
     let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
 
@@ -506,7 +509,8 @@ pub(super) fn lc_string_seq<S: FastSeq>(
         // SAFETY: row < row_count, the container size the caller checked and
         // every fallback revalidates; the borrowed pointer is consumed before
         // any Python code can run.
-        let ptr = unsafe { seq.get(row) };
+        let item = unsafe { seq.item(row)? };
+        let ptr = item.as_ptr();
         if ptr == unsafe { ffi::Py_None() } {
             let Some(null_map) = &mut null_map else {
                 return Err(PyValueError::new_err(format!(
@@ -527,8 +531,7 @@ pub(super) fn lc_string_seq<S: FastSeq>(
         let slot = if unsafe { ffi::PyUnicode_CheckExact(ptr) } != 0 {
             // SAFETY: ptr is a valid borrowed reference, verified an exact
             // str; reading its UTF-8 runs no Python code.
-            let obj =
-                unsafe { Bound::from_borrowed_ptr(py, ptr).cast_into_unchecked::<PyString>() };
+            let obj = unsafe { item.into_bound(py).cast_into_unchecked::<PyString>() };
             let bytes = obj.to_str()?.as_bytes();
             let slot = match content_slots.get(bytes) {
                 Some(&slot) => slot,
@@ -539,24 +542,28 @@ pub(super) fn lc_string_seq<S: FastSeq>(
                     slot
                 }
             };
-            // The container still holds this item (no Python ran since the
-            // borrowed read), so its address is stable and unique among the
-            // column's live values.
             if ptr_slots.len() < PTR_CACHE_CAP {
+                #[cfg(Py_GIL_DISABLED)]
+                if S::MUTABLE {
+                    ptr_owners.push(obj.clone().unbind());
+                }
                 ptr_slots.insert(ptr as usize, slot);
             }
             slot
         } else {
             // SAFETY: ptr is valid here; the strong reference keeps the item
             // alive across any Python code the fallback runs.
-            let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+            let obj = item.into_bound(py);
             let scalar = convert_scalar(py, value_type, &obj, name, row)?;
+            drop(obj);
             if S::MUTABLE {
                 // The fallback may have run Python code: a same-size item
                 // replacement can free a cached str whose address the
                 // allocator may reuse, so drop all pointer-identity entries.
                 check_not_resized(seq, name, row_count)?;
                 ptr_slots.clear();
+                #[cfg(Py_GIL_DISABLED)]
+                ptr_owners.clear();
             }
             let Scalar::Bytes(bytes) = scalar else {
                 return Err(PyValueError::new_err("internal scalar type mismatch"));
@@ -606,12 +613,14 @@ pub(super) fn uuid_seq<S: FastSeq>(
     let int_attr = intern!(py, "int");
     let mut data = Vec::with_capacity(16 * row_count);
     let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+    check_not_resized(seq, name, row_count)?;
 
     for row in 0..row_count {
         // SAFETY: row < row_count, the container size the caller checked and
         // every conversion revalidates; the borrowed pointer is consumed
         // before any Python code can run.
-        let ptr = unsafe { seq.get(row) };
+        let item = unsafe { seq.item(row)? };
+        let ptr = item.as_ptr();
         if ptr == unsafe { ffi::Py_None() } {
             let Some(null_map) = &mut null_map else {
                 return Err(PyValueError::new_err(format!(
@@ -627,7 +636,7 @@ pub(super) fn uuid_seq<S: FastSeq>(
         }
         // SAFETY: ptr is valid here; the strong reference keeps the item
         // alive across any Python code the conversion runs.
-        let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        let obj = item.into_bound(py);
         let fast = if unsafe { ffi::Py_TYPE(ptr) }.cast::<ffi::PyObject>() == uuid_type_ptr {
             obj.getattr(int_attr).and_then(|i| i.extract::<u128>()).ok()
         } else {
@@ -645,6 +654,7 @@ pub(super) fn uuid_seq<S: FastSeq>(
                 data.extend_from_slice(&bytes);
             }
         }
+        drop(obj);
         check_not_resized(seq, name, row_count)?;
     }
 
@@ -677,12 +687,14 @@ pub(super) fn ipv4_seq<S: FastSeq>(
     let mut ip_slot = slot_object_offset(&ipv4_type, ip_attr);
     let mut values = Vec::<u32>::with_capacity(row_count);
     let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
+    check_not_resized(seq, name, row_count)?;
 
     for row in 0..row_count {
         // SAFETY: row < row_count, the container size the caller checked and
         // every conversion revalidates; the borrowed pointer is consumed
         // before any Python code can run.
-        let ptr = unsafe { seq.get(row) };
+        let item = unsafe { seq.item(row)? };
+        let ptr = item.as_ptr();
         if ptr == unsafe { ffi::Py_None() } {
             let Some(null_map) = &mut null_map else {
                 return Err(PyValueError::new_err(format!(
@@ -713,16 +725,17 @@ pub(super) fn ipv4_seq<S: FastSeq>(
             }
             // SAFETY: ptr is valid here; the strong reference keeps the item
             // alive across any Python code the conversion runs.
-            let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+            let obj = item.into_bound(py);
             match obj.getattr(ip_attr).and_then(|o| o.extract::<u32>()) {
                 Ok(v) => values.push(v),
                 Err(_) => values.push(ipv4_fallback(py, ch_type, &obj, name, row)?),
             }
-            check_not_resized(seq, name, row_count)?;
+            drop(obj);
             ip_slot = slot_object_offset(&ipv4_type, ip_attr);
+            check_not_resized(seq, name, row_count)?;
             continue;
         }
-        // SAFETY: GIL held; ptr is a valid borrowed item pointer.
+        // SAFETY: item retains ptr and this thread is attached to Python.
         if let Ok(v) = unsafe { <u32 as FastValue>::from_exact(ptr, ch_type, 0) } {
             values.push(v);
             continue;
@@ -730,8 +743,7 @@ pub(super) fn ipv4_seq<S: FastSeq>(
         if unsafe { ffi::PyUnicode_CheckExact(ptr) } != 0 {
             // SAFETY: ptr is a valid borrowed reference, verified an exact
             // str; reading its UTF-8 runs no Python code.
-            let obj =
-                unsafe { Bound::from_borrowed_ptr(py, ptr).cast_into_unchecked::<PyString>() };
+            let obj = unsafe { item.into_bound(py).cast_into_unchecked::<PyString>() };
             let v = obj
                 .to_str()?
                 .parse::<Ipv4Addr>()
@@ -742,10 +754,11 @@ pub(super) fn ipv4_seq<S: FastSeq>(
         }
         // SAFETY: ptr is valid here; the strong reference keeps the item
         // alive across any Python code the fallback runs.
-        let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        let obj = item.into_bound(py);
         values.push(ipv4_fallback(py, ch_type, &obj, name, row)?);
-        check_not_resized(seq, name, row_count)?;
+        drop(obj);
         ip_slot = slot_object_offset(&ipv4_type, ip_attr);
+        check_not_resized(seq, name, row_count)?;
     }
 
     Ok(Column::Ipv4(match null_map {
@@ -759,6 +772,7 @@ pub(super) fn ipv4_seq<S: FastSeq>(
 /// exactly `class`. Lets a loop over exact instances read the slot directly,
 /// like CPython's LOAD_ATTR_SLOT specialization. `None` (patched or exotic
 /// class attribute) means callers must use a normal attribute read.
+#[cfg(not(Py_GIL_DISABLED))]
 fn slot_object_offset(class: &Bound<'_, PyAny>, attr: &Bound<'_, PyString>) -> Option<isize> {
     let descr = class.getattr(attr).ok()?;
     if unsafe { ffi::Py_TYPE(descr.as_ptr()) != std::ptr::addr_of_mut!(ffi::PyMemberDescr_Type) } {
@@ -782,6 +796,12 @@ fn slot_object_offset(class: &Bound<'_, PyAny>, attr: &Bound<'_, PyString>) -> O
         let offset = (*member).offset;
         (offset > 0).then_some(offset)
     }
+}
+
+// Mutable object slots require an owned attribute read without the GIL.
+#[cfg(Py_GIL_DISABLED)]
+fn slot_object_offset(_class: &Bound<'_, PyAny>, _attr: &Bound<'_, PyString>) -> Option<isize> {
+    None
 }
 
 fn ipv4_fallback(
@@ -855,6 +875,10 @@ pub(super) fn enum_seq<C: EnumCode, S: FastSeq>(
     }
     let mut ptr_codes: HashMap<usize, C, std::hash::BuildHasherDefault<PtrHasher>> =
         HashMap::default();
+    // Retain only exact immutable strings, never fallback objects whose
+    // finalizers must run before the next resize validation.
+    #[cfg(Py_GIL_DISABLED)]
+    let mut ptr_owners: Vec<Py<PyString>> = Vec::new();
     let mut codes = Vec::with_capacity(row_count);
     let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
 
@@ -862,7 +886,8 @@ pub(super) fn enum_seq<C: EnumCode, S: FastSeq>(
         // SAFETY: row < row_count, the container size the caller checked and
         // every fallback revalidates; the borrowed pointer is consumed before
         // any Python code can run.
-        let ptr = unsafe { seq.get(row) };
+        let item = unsafe { seq.item(row)? };
+        let ptr = item.as_ptr();
         if ptr == unsafe { ffi::Py_None() } {
             let Some(null_map) = &mut null_map else {
                 return Err(PyValueError::new_err(format!(
@@ -883,8 +908,7 @@ pub(super) fn enum_seq<C: EnumCode, S: FastSeq>(
         if unsafe { ffi::PyUnicode_CheckExact(ptr) } != 0 {
             // SAFETY: ptr is a valid borrowed reference, verified an exact
             // str; reading its UTF-8 runs no Python code.
-            let obj =
-                unsafe { Bound::from_borrowed_ptr(py, ptr).cast_into_unchecked::<PyString>() };
+            let obj = unsafe { item.into_bound(py).cast_into_unchecked::<PyString>() };
             let label = obj.to_str()?;
             let Some(&code) = content_codes.get(label.as_bytes()) else {
                 return Err(PyValueError::new_err(format!(
@@ -892,10 +916,11 @@ pub(super) fn enum_seq<C: EnumCode, S: FastSeq>(
                     C::TYPE_NAME
                 )));
             };
-            // The container still holds this item (no Python ran since the
-            // borrowed read), so its address is stable and unique among the
-            // column's live values.
             if ptr_codes.len() < PTR_CACHE_CAP {
+                #[cfg(Py_GIL_DISABLED)]
+                if S::MUTABLE {
+                    ptr_owners.push(obj.clone().unbind());
+                }
                 ptr_codes.insert(ptr as usize, code);
             }
             codes.push(code);
@@ -903,25 +928,31 @@ pub(super) fn enum_seq<C: EnumCode, S: FastSeq>(
         }
         // SAFETY: ptr is valid here; the strong reference keeps the item
         // alive across any Python code the fallback runs.
-        let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        let obj = item.into_bound(py);
         if null_map.is_some() && is_enum_nan(ch_type, &obj) {
             if let Some(entry) = null_map.as_mut().and_then(|nulls| nulls.last_mut()) {
                 *entry = 1;
             }
             codes.push(C::default());
+            drop(obj);
             if S::MUTABLE {
                 check_not_resized(seq, name, row_count)?;
                 ptr_codes.clear();
+                #[cfg(Py_GIL_DISABLED)]
+                ptr_owners.clear();
             }
             continue;
         }
         let scalar = convert_scalar(py, ch_type, &obj, name, row)?;
         codes.push(C::from_enum_scalar(scalar)?);
+        drop(obj);
         if S::MUTABLE {
             check_not_resized(seq, name, row_count)?;
             // The fallback may have freed a cached str whose address the
             // allocator can reuse, so drop all pointer-identity entries.
             ptr_codes.clear();
+            #[cfg(Py_GIL_DISABLED)]
+            ptr_owners.clear();
         }
     }
 

@@ -123,7 +123,7 @@ def qualify(args: argparse.Namespace) -> None:
     shutil.copy2(repo / "tests/conftest.py", tests / "conftest.py")
     binding = tests / "binding"
     binding.mkdir()
-    for name in ("helpers.py", "test_buffers.py", "test_array_buffers.py", "test_dictionary_buffers.py"):
+    for name in ("helpers.py", "test_buffers.py", "test_array_buffers.py", "test_dictionary_buffers.py", "test_insert_concurrency.py"):
         shutil.copy2(repo / "rust/ch-core-py/tests" / name, binding / name)
     for name in ("test_rustnumpy.py", "test_rustnumpy_buffers.py"):
         shutil.copy2(repo / "tests/unit_tests/test_driver" / name, tests / name)
