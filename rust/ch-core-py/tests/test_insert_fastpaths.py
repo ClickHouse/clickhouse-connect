@@ -171,6 +171,8 @@ class TestEncodeFastPaths:
     @pytest.mark.parametrize(
         "type_name,dtype,values",
         [
+            ("Bool", "bool", [False, True, False]),
+            ("Nullable(Bool)", "bool", [False, True, False]),
             ("Int8", "int8", [-128, 0, 127]),
             ("Int64", "int64", [-(2**63), 0, 2**63 - 1]),
             ("IntervalDay", "int64", [-(2**63), 0, 2**63 - 1]),
@@ -407,3 +409,26 @@ class TestScalarObjectInsertFastPath:
         vals[1] = Evil()
         with pytest.raises(ValueError, match="resized during encoding"):
             self._encode(self._E8, vals, 4)
+
+    @pytest.mark.parametrize(
+        "type_name,values,replacement,code",
+        [
+            ("Int64", [1, None, 3, 4], 0, 7),
+            ("Int256", [1, None, 3, 4], 0, 7),
+            (_E8, ["alpha", None, "beta", "gamma"], "beta", 2),
+        ],
+    )
+    def test_fallback_finalizer_resize_raises(self, type_name, values, replacement, code):
+        # The conversion replaces its own slot, so the encoder holds the last
+        # reference and the finalizer runs when the encoder releases it.
+        class Evil:
+            def __index__(self):
+                values[1] = replacement
+                return code
+
+            def __del__(self):
+                values.clear()
+
+        values[1] = Evil()
+        with pytest.raises(ValueError, match="resized during encoding"):
+            self._encode(type_name, values, 4)

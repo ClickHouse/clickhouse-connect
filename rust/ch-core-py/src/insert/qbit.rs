@@ -84,7 +84,7 @@ trait QBitValue: Copy {
     ///
     /// # Safety
     ///
-    /// Requires the GIL and a valid, non-null object pointer.
+    /// Requires an attached Python thread and a retained, non-null object pointer.
     unsafe fn from_exact(ptr: *mut ffi::PyObject) -> Result<Self, ()>;
 
     fn from_object(value: &Bound<'_, PyAny>) -> Result<Self, ()>;
@@ -313,11 +313,12 @@ fn append_qbit_seq<T: QBitValue, S: FastSeq>(
         // The sequence length is checked above and after every fallback that
         // may execute Python code. The temporary strong reference must drop
         // before that check because its finalizer can also resize `seq`.
-        let ptr = unsafe { seq.get(element) };
+        let item = unsafe { seq.item(element)? };
+        let ptr = item.as_ptr();
         match unsafe { T::from_exact(ptr) } {
             Ok(value) => out.push(value),
             Err(()) => {
-                let value = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+                let value = item.into_bound(py);
                 let converted = T::from_object(&value)
                     .map_err(|_| qbit_element_error(name, row, element, T::TYPE_NAME))?;
                 out.push(converted);
@@ -396,7 +397,8 @@ fn qbit_column_from_seq<T: QBitValue, S: FastSeq>(
         None
     };
     for row in 0..row_count {
-        let ptr = unsafe { seq.get(row) };
+        let item = unsafe { seq.item(row)? };
+        let ptr = item.as_ptr();
         if ptr == unsafe { ffi::Py_None() } {
             let Some(nulls) = &mut null_map else {
                 return Err(PyValueError::new_err(format!(
@@ -410,7 +412,7 @@ fn qbit_column_from_seq<T: QBitValue, S: FastSeq>(
         if let Some(nulls) = &mut null_map {
             nulls.push(0);
         }
-        let value = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        let value = item.into_bound(py);
         append_qbit_vector(py, name, row, &value, dimension, &mut values)?;
         // Dropping the row can run a finalizer that resizes `seq`, so it must
         // happen before the next unchecked list read is declared safe.
