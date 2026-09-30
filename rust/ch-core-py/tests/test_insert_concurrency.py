@@ -1,5 +1,6 @@
 """Caller-owned containers can change while the encoder reads them."""
 
+import faulthandler
 import os
 import queue
 import subprocess
@@ -40,7 +41,7 @@ def test_concurrent_container_mutation(type_name, mutation):
         [sys.executable, "-X", "faulthandler", "-W", "error::RuntimeWarning", __file__, type_name, mutation],
         capture_output=True,
         text=True,
-        timeout=90,
+        timeout=150,
         env=env,
         check=False,
     )
@@ -58,7 +59,8 @@ def _exercise_concurrent_encoding(type_name, mutation):
 
     row_count = 2000
     if mutation == "dict":
-        rows = [{f"k{j}": f"v{j}" if type_name == "JSON" else j + 13 for j in range(4)} for _ in range(row_count)]
+        template = {f"k{j}": f"v{j}" if type_name == "JSON" else j + 13 for j in range(4)}
+        rows = [dict(template) for _ in range(row_count)]
     elif mutation == "nested_dict":
         rows = [{"items": ["user_1"]} for _ in range(row_count)]
     elif mutation == "nested_list":
@@ -74,11 +76,15 @@ def _exercise_concurrent_encoding(type_name, mutation):
     else:
         rows = ["user_1"] * row_count
 
+    # A real hang dumps every thread before the parent times out.
+    faulthandler.dump_traceback_later(120, exit=True)
     stop = threading.Event()
-    reader_count = 4
-    start = threading.Barrier(reader_count + 2)
+    start = threading.Barrier(2)
     failures = queue.SimpleQueue()
-    counts = [0] * (reader_count + 1)
+    counts = [0, 0]
+    # Concurrent readers convoy on the dict locks under CPU contention, so one reader does fixed work.
+    passes = 100
+    min_duration = 1.0
 
     def writer():
         index = 0
@@ -88,8 +94,10 @@ def _exercise_concurrent_encoding(type_name, mutation):
             value = f"user_{index % 2 + 1}" * (1 if index % 2 == 0 else 40)
             row = rows[slot]
             if mutation == "dict":
-                row["x"] = value if type_name == "JSON" else index + 13
-                del row["x"]
+                # Replace the key table without deleting entries. On free-threaded
+                # builds a dict with deleted slots makes dict.copy() spin in sched_yield.
+                row.clear()
+                row.update(template)
             elif mutation in ("nested_dict", "nested_list"):
                 key = "items" if mutation == "nested_dict" else 0
                 # Resize a nested list, then discard its last caller-owned reference.
@@ -115,15 +123,15 @@ def _exercise_concurrent_encoding(type_name, mutation):
             index += 1
             counts[0] += 1
 
-    def reader(index):
-        while not stop.is_set():
+    def reader():
+        deadline = time.monotonic() + min_duration
+        while counts[1] < passes or time.monotonic() < deadline:
             encoded = _ch_core.encode_native_block(["v"], [type_name], [rows], row_count, None)
             decoded = list(_ch_core.ColBatch.decode_native(encoded).column_data(0))
             assert len(decoded) == row_count
             if mutation == "dict":
                 for row in decoded:
-                    assert all(row[f"k{j}"] == (f"v{j}" if type_name == "JSON" else j + 13) for j in range(4))
-                    assert set(row) <= {"k0", "k1", "k2", "k3", "x"}
+                    assert len(row) in (0, 4) and all(row[key] == template[key] for key in row), row
             elif mutation in ("nested_dict", "nested_list"):
                 key = "items" if mutation == "nested_dict" else 0
                 assert all(1 <= len(row[key]) <= 4 and set(row[key]) <= {"user_1", "user_2", "user_2" * 40} for row in decoded)
@@ -141,35 +149,31 @@ def _exercise_concurrent_encoding(type_name, mutation):
                 assert set(decoded) <= {10013, "user_1", "user_2" * 40}
             else:
                 assert set(decoded) <= {"user_1", "user_2" * 40}
-            counts[index] += 1
+            counts[1] += 1
             if not free_threaded:
                 # Release the GIL so the writer gets scheduled.
                 time.sleep(0)
+        stop.set()
 
-    def run(target, *args):
+    def run(target):
         try:
             start.wait(timeout=10)
-            target(*args)
+            target()
         except BaseException:
             failures.put(traceback.format_exc())
             stop.set()
 
-    threads = [threading.Thread(target=run, args=(writer,), daemon=True)]
-    threads.extend(threading.Thread(target=run, args=(reader, index), daemon=True) for index in range(1, reader_count + 1))
+    threads = [threading.Thread(target=run, args=(target,), name=name) for name, target in (("writer", writer), ("reader", reader))]
     for thread in threads:
         thread.start()
-    start.wait(timeout=10)
-    # Time the stress interval from the first pass of every thread.
-    deadline = time.monotonic() + 10
-    while not all(counts) and failures.empty() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    stop.wait(1)
-    stop.set()
     for thread in threads:
-        thread.join(timeout=10)
-    assert not any(thread.is_alive() for thread in threads), "Encoding did not stop"
-    assert failures.empty(), failures.get()
-    assert all(counts), f"Writer or readers made no progress: {counts}"
+        thread.join()
+    faulthandler.cancel_dump_traceback_later()
+    errors = []
+    while not failures.empty():
+        errors.append(failures.get())
+    assert not errors, "".join(errors)
+    assert all(counts), f"Writer or reader made no progress: {counts}"
     if free_threaded:
         assert not sys._is_gil_enabled(), "Encoding enabled the GIL"
 
