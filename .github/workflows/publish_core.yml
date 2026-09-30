@@ -61,7 +61,9 @@ jobs:
         with:
           target: ${{ matrix.arch }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release --locked -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i 3.10 3.11 3.12 3.13 3.14
+          args: --release --locked -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i 3.10 3.11 3.12 3.13 3.14 python3.14t
+      - name: Check the free-threaded wheel tag
+        run: ls wheelhouse/clickhouse_connect_core-*-cp314-cp314t-*.whl
       - uses: actions/upload-artifact@v7
         with:
           name: core-${{ matrix.libc }}-${{ matrix.arch }}
@@ -74,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14', '3.14t']
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
@@ -86,6 +88,15 @@ jobs:
         with:
           target: universal2-apple-darwin
           args: --release --locked -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python${{ matrix.python-version }}
+      - name: Check the wheel ABI tag
+        shell: bash
+        env:
+          BUILD_PYTHON: ${{ matrix.python-version }}
+        run: |
+          version="${BUILD_PYTHON%t}"
+          abi="cp${version/./}"
+          if [ "$BUILD_PYTHON" != "$version" ]; then abi="${abi}t"; fi
+          ls wheelhouse/clickhouse_connect_core-*-cp${version/./}-$abi-*.whl
       - uses: actions/upload-artifact@v7
         with:
           name: core-macos-${{ matrix.python-version }}
@@ -98,7 +109,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14', '3.14t']
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
@@ -109,6 +120,15 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           args: --release --locked -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python
+      - name: Check the wheel ABI tag
+        shell: bash
+        env:
+          BUILD_PYTHON: ${{ matrix.python-version }}
+        run: |
+          version="${BUILD_PYTHON%t}"
+          abi="cp${version/./}"
+          if [ "$BUILD_PYTHON" != "$version" ]; then abi="${abi}t"; fi
+          ls wheelhouse/clickhouse_connect_core-*-cp${version/./}-$abi-*.whl
       - uses: actions/upload-artifact@v7
         with:
           name: core-windows-${{ matrix.python-version }}
@@ -123,7 +143,7 @@ jobs:
       matrix:
         # CPython ships native windows ARM64 builds from 3.11. The 3.10 wheel
         # is cross-compiled in build_windows_arm64_310_wheel below.
-        python-version: ['3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.11', '3.12', '3.13', '3.14', '3.14t']
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
@@ -135,6 +155,15 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           args: --release --locked -m ${{ env.MATURIN_MANIFEST }} -o wheelhouse -i python
+      - name: Check the wheel ABI tag
+        shell: bash
+        env:
+          BUILD_PYTHON: ${{ matrix.python-version }}
+        run: |
+          version="${BUILD_PYTHON%t}"
+          abi="cp${version/./}"
+          if [ "$BUILD_PYTHON" != "$version" ]; then abi="${abi}t"; fi
+          ls wheelhouse/clickhouse_connect_core-*-cp${version/./}-$abi-*.whl
       - uses: actions/upload-artifact@v7
         with:
           name: core-windows-arm64-${{ matrix.python-version }}
@@ -214,19 +243,20 @@ jobs:
             "quay.io/pypa/$QUALIFICATION_IMAGE" bash -euc '
               /opt/python/cp312-cp312/bin/python -m pip install --only-binary=:all: uv
               status=0
-              for version in 310 311 312 313 314; do
+              for tag in cp310-cp310 cp311-cp311 cp312-cp312 cp313-cp313 cp314-cp314 cp314-cp314t; do
                 arrow=()
                 source=()
-                if [ "$QUALIFICATION_LIBC" = musllinux ]; then
+                # lz4 publishes no musllinux or free-threaded wheels.
+                if [ "$QUALIFICATION_LIBC" = musllinux ] || [ "${tag%t}" != "$tag" ]; then
                   source=(--allow-source-lz4)
                 fi
-                if [ "$QUALIFICATION_LIBC" = manylinux ] && [ "$version" = 312 ]; then
+                if [ "$QUALIFICATION_LIBC" = manylinux ] && [ "$tag" = cp312-cp312 ]; then
                   arrow=(--arrow)
                 fi
-                /opt/python/cp$version-cp$version/bin/python /work/.github/scripts/qualify_core_wheel.py \
+                /opt/python/$tag/bin/python /work/.github/scripts/qualify_core_wheel.py \
                   --uv /opt/python/cp312-cp312/bin/uv \
                   --core-wheels /work/core-wheelhouse --driver-wheel /work/qualification-driver/*.whl \
-                  --output /results/cp$version "${arrow[@]}" "${source[@]}" || status=1
+                  --output /results/$tag "${arrow[@]}" "${source[@]}" || status=1
               done
               exit "$status"
             '
@@ -249,7 +279,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14', '3.14t']
         platform: [macos-arm64, macos-x64, windows-x64, windows-arm64]
         include:
           - { platform: macos-arm64, runner: macos-15, architecture: arm64, artifact: macos }
@@ -281,12 +311,17 @@ jobs:
           QUALIFICATION_PYTHON: ${{ matrix.python-version }}
         run: |
           arrow=()
+          source=()
           if [ "$QUALIFICATION_PLATFORM" != windows-arm64 ] && [ "$QUALIFICATION_PYTHON" = 3.12 ]; then
             arrow=(--arrow)
           fi
+          # lz4 publishes no free-threaded wheels.
+          if [ "${QUALIFICATION_PYTHON%t}" != "$QUALIFICATION_PYTHON" ]; then
+            source=(--allow-source-lz4)
+          fi
           python .github/scripts/qualify_core_wheel.py \
             --core-wheels core-wheelhouse --driver-wheel qualification-driver/*.whl \
-            --output "$RUNNER_TEMP/core-qualification" "${arrow[@]}"
+            --output "$RUNNER_TEMP/core-qualification" "${arrow[@]}" "${source[@]}"
       - name: Upload qualification records
         if: always()
         uses: actions/upload-artifact@v7

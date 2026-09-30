@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import zipfile
 from pathlib import Path
 
 
@@ -87,6 +88,19 @@ def check_install(profile: str, output: Path, allow_source_lz4: bool = False) ->
     print(json.dumps(result, indent=2), flush=True)
 
 
+def check_provenance(record: Path, wheels: list[Path]) -> None:
+    installed = json.loads(record.read_text(encoding="utf-8"))["core_files"]
+    assert installed, "No installed core files recorded"
+    sources = []
+    for wheel in wheels:
+        with zipfile.ZipFile(wheel) as archive:
+            members = {hashlib.sha256(archive.read(name)).hexdigest() for name in archive.namelist()}
+        if all(digest in members for digest in installed.values()):
+            sources.append(wheel.name)
+    assert len(sources) == 1, f"Installed core files {installed} match supplied wheels {sources}"
+    print("installed core wheel:", sources[0], flush=True)
+
+
 def qualify(args: argparse.Namespace) -> None:
     repo = Path(__file__).resolve().parents[2]
     output = args.output.resolve()
@@ -112,7 +126,8 @@ def qualify(args: argparse.Namespace) -> None:
     assert driver.name.endswith("-py3-none-any.whl"), "Platform qualification uses the portable driver wheel"
     manifest = {wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest() for wheel in [driver, *wheels]}
     (output / "wheel-sha256.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    run(*install, "--no-deps", "--no-index", "--find-links", str(args.core_wheels.resolve()), "clickhouse-connect-core")
+    # uv can reuse cached contents for a same-version wheel installed by name.
+    run(*install, "--no-cache", "--no-deps", "--no-index", "--find-links", str(args.core_wheels.resolve()), "clickhouse-connect-core")
     if args.allow_source_lz4:
         # lz4 has no musllinux or free-threaded wheels. Keep other installs binary-only.
         run(args.uv, "pip", "install", "--python", python, "--no-deps", "--no-binary=lz4", "lz4>=4.4.5")
@@ -123,7 +138,7 @@ def qualify(args: argparse.Namespace) -> None:
     shutil.copy2(repo / "tests/conftest.py", tests / "conftest.py")
     binding = tests / "binding"
     binding.mkdir()
-    for name in ("helpers.py", "test_buffers.py", "test_array_buffers.py", "test_dictionary_buffers.py"):
+    for name in ("helpers.py", "test_buffers.py", "test_array_buffers.py", "test_dictionary_buffers.py", "test_insert_concurrency.py"):
         shutil.copy2(repo / "rust/ch-core-py/tests" / name, binding / name)
     for name in ("test_rustnumpy.py", "test_rustnumpy_buffers.py"):
         shutil.copy2(repo / "tests/unit_tests/test_driver" / name, tests / name)
@@ -136,7 +151,9 @@ def qualify(args: argparse.Namespace) -> None:
         if packages:
             run(*install, *packages)
         run(python, str(checker), "--check-installed", profile, "--output", str(output / f"{profile}.json"), *source_flags)
-        if profile != "bare":
+        if profile == "bare":
+            check_provenance(output / "bare.json", wheels)
+        else:
             run(python, "-m", "pytest", str(tests), "-q", f"--junitxml={output / (profile + '.xml')}")
 
 

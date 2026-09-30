@@ -52,6 +52,7 @@ pub(super) fn build_json_text_column(
             py,
             name,
             &ListRows {
+                #[cfg(not(Py_GIL_DISABLED))]
                 py,
                 list,
                 name,
@@ -111,7 +112,7 @@ pub(super) fn json_text_column_from_rows<'py, R: RowAccess<'py>>(
                 append_json_document(&value, name, row, &mut data, false)?;
             } else {
                 let row_start = data.len();
-                if write_json_value(value.as_ptr(), &mut data, 0).is_err() {
+                if write_json_value(py, value.as_ptr(), &mut data, 0).is_err() {
                     data.truncate(row_start);
                     let serializer = match &mut serializer {
                         Some(serializer) => &*serializer,
@@ -132,6 +133,11 @@ pub(super) fn json_text_column_from_rows<'py, R: RowAccess<'py>>(
                         .map_err(|err| json_serialize_err(py, name, row, err))?;
                     rows.validate()?;
                     append_json_document(&encoded, name, row, &mut data, true)?;
+                    // Serializer results and input rows can have finalizers.
+                    // Release both before declaring the next row read safe.
+                    drop(encoded);
+                    drop(value);
+                    rows.validate()?;
                 }
             }
         }
@@ -167,10 +173,7 @@ fn append_json_document(
         return Ok(());
     }
     if let Ok(bytes) = value.cast::<PyByteArray>() {
-        // SAFETY: the GIL is held and the complete bytearray is copied before
-        // any Python API can run and resize it.
-        data.extend_from_slice(unsafe { bytes.as_bytes() });
-        return Ok(());
+        return append_bytearray(bytes, data);
     }
     let type_name = python_type_name(value.as_ptr());
     Err(PyValueError::new_err(if serialized {
@@ -202,10 +205,13 @@ const JSON_NATIVE_MAX_DEPTH: usize = 128;
 
 /// Write one Python value as JSON text using exact-type C-API fast paths.
 /// Exact None/bool/int/float/str/dict/list/tuple traversal runs no user
-/// Python, so the source column cannot mutate mid-row; anything else
+/// Python. Free-threaded builds snapshot mutable containers at each level
+/// before recursion, retaining their entries even if another thread mutates
+/// the source. Anything else
 /// (subclasses, ints past i64, non-finite floats, non-str dict keys, depth
 /// past the cap) is `JsonUnsupported` and goes through the Python serializer.
 fn write_json_value(
+    _py: Python<'_>,
     value: *mut ffi::PyObject,
     data: &mut Vec<u8>,
     depth: usize,
@@ -213,9 +219,9 @@ fn write_json_value(
     if depth > JSON_NATIVE_MAX_DEPTH {
         return Err(JsonUnsupported);
     }
-    // SAFETY: value is live, the GIL is held for the whole traversal, and the
-    // borrowed container items read below stay valid because no user Python
-    // runs on this path.
+    // SAFETY: the caller retains value. Borrowed entries remain alive in
+    // their immutable container or private snapshot on free-threaded builds;
+    // the GIL excludes concurrent mutation on ordinary builds.
     unsafe {
         if value == ffi::Py_None() {
             data.extend_from_slice(b"null");
@@ -258,6 +264,13 @@ fn write_json_value(
             return Ok(());
         }
         if ffi::PyDict_CheckExact(value) != 0 {
+            #[cfg(Py_GIL_DISABLED)]
+            let snapshot = Bound::from_borrowed_ptr(_py, value)
+                .cast_unchecked::<PyDict>()
+                .copy()
+                .map_err(|_| JsonUnsupported)?;
+            #[cfg(Py_GIL_DISABLED)]
+            let value = snapshot.as_ptr();
             data.push(b'{');
             let mut pos: ffi::Py_ssize_t = 0;
             let mut key: *mut ffi::PyObject = std::ptr::null_mut();
@@ -273,21 +286,32 @@ fn write_json_value(
                 first = false;
                 write_json_string(json_utf8(key)?, data);
                 data.push(b':');
-                write_json_value(item, data, depth + 1)?;
+                write_json_value(_py, item, data, depth + 1)?;
             }
             data.push(b'}');
             return Ok(());
         }
         if ffi::PyList_CheckExact(value) != 0 {
-            data.push(b'[');
-            for index in 0..ffi::PyList_GET_SIZE(value) {
-                if index > 0 {
-                    data.push(b',');
-                }
-                write_json_value(ffi::PyList_GET_ITEM(value, index), data, depth + 1)?;
+            #[cfg(Py_GIL_DISABLED)]
+            {
+                // Unlike PyList::to_tuple, the fallible constructor returns
+                // allocation failures through the serializer fallback.
+                let snapshot = Bound::from_owned_ptr_or_err(_py, ffi::PyList_AsTuple(value))
+                    .map_err(|_| JsonUnsupported)?;
+                return write_json_value(_py, snapshot.as_ptr(), data, depth);
             }
-            data.push(b']');
-            return Ok(());
+            #[cfg(not(Py_GIL_DISABLED))]
+            {
+                data.push(b'[');
+                for index in 0..ffi::PyList_GET_SIZE(value) {
+                    if index > 0 {
+                        data.push(b',');
+                    }
+                    write_json_value(_py, ffi::PyList_GET_ITEM(value, index), data, depth + 1)?;
+                }
+                data.push(b']');
+                return Ok(());
+            }
         }
         if ffi::PyTuple_CheckExact(value) != 0 {
             data.push(b'[');
@@ -295,7 +319,7 @@ fn write_json_value(
                 if index > 0 {
                     data.push(b',');
                 }
-                write_json_value(ffi::PyTuple_GET_ITEM(value, index), data, depth + 1)?;
+                write_json_value(_py, ffi::PyTuple_GET_ITEM(value, index), data, depth + 1)?;
             }
             data.push(b']');
             return Ok(());

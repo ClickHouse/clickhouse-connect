@@ -469,6 +469,33 @@ class TestArrayInsertFastPath:
         with pytest.raises(ValueError, match="resized during encoding"):
             self._encode("Array(Int64)", rows, 4)
 
+    @pytest.mark.parametrize(
+        "type_name,rows,replacement",
+        [
+            ("Array(Int64)", [[1], None, [3], [4]], [0]),
+            ("Tuple(Int64)", [[1], None, [3], [4]], [0]),
+            ("Map(String, Int64)", [{"a": 1}, None, {"a": 3}, {"a": 4}], {"a": 0}),
+        ],
+    )
+    def test_outer_list_finalizer_resize_raises(self, type_name, rows, replacement):
+        # The row fallback replaces its own slot, so the encoder holds the
+        # last reference and the finalizer runs when the encoder releases it.
+        class Evil:
+            def __iter__(self):
+                rows[1] = replacement
+                return iter([7])
+
+            def items(self):
+                rows[1] = replacement
+                return [("a", 7)]
+
+            def __del__(self):
+                rows.clear()
+
+        rows[1] = Evil()
+        with pytest.raises(ValueError, match="resized during encoding"):
+            _ch_core.encode_native_block(["v"], [type_name], [rows], 4)
+
     def test_outer_list_resized_during_element_fallback_encodes_snapshot(self):
         # Element conversion runs Python that clears the outer list after the
         # flatten pass; the flat run holds strong references, so the original

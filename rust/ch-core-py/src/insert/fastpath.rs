@@ -99,6 +99,7 @@ fn value_column(
             row_count,
             nullable,
         ),
+        #[cfg(not(Py_GIL_DISABLED))]
         ColumnSource::ObjectArray(seq) => {
             if let Some(column) = try_fast_column_seq(py, name, ch_type, &seq, row_count, nullable)?
             {
@@ -307,7 +308,8 @@ fn decimal_column_from_seq<S: FastSeq>(
     for row in 0..row_count {
         // SAFETY: row < row_count, the container size the caller checked and
         // every row revalidates below.
-        let ptr = unsafe { seq.get(row) };
+        let item = unsafe { seq.item(row)? };
+        let ptr = item.as_ptr();
         if ptr == unsafe { ffi::Py_None() } {
             let Some(null_map) = &mut null_map else {
                 return Err(PyValueError::new_err(format!(
@@ -322,11 +324,12 @@ fn decimal_column_from_seq<S: FastSeq>(
         }
         // SAFETY: taking a strong reference keeps the current item alive
         // across the Python code its stringification runs.
-        let value = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        let value = item.into_bound(py);
         let text = decimal_text(&value, name, row)?;
         let start = row * width;
         decimal_wire_into(&text, &mut data[start..start + width], precision, scale)
             .map_err(|err| decimal_err(err, &text, width, precision, name, row))?;
+        drop(value);
         check_not_resized(seq, name, row_count)?;
     }
     Ok(finish_decimal_column(
@@ -429,6 +432,7 @@ fn checked_container_len(values: &Bound<'_, PyAny>, name: &str) -> PyResult<usiz
 pub(super) enum ColumnSource<'py> {
     List(Bound<'py, PyList>),
     Tuple(Bound<'py, PyTuple>),
+    #[cfg(not(Py_GIL_DISABLED))]
     ObjectArray(ObjectArraySeq<'py>),
     Values(ColumnValues<'py>),
 }
@@ -452,6 +456,10 @@ impl<'py> ColumnSource<'py> {
         if let Ok(tuple) = values.cast_exact::<PyTuple>() {
             return Ok(Self::Tuple(tuple.clone()));
         }
+        // A buffer export pins an object array's storage but cannot retain
+        // the Python objects replaced by another thread. Free-threaded builds
+        // use checked owned reads through ColumnValues instead.
+        #[cfg(not(Py_GIL_DISABLED))]
         if let Some(seq) = ObjectArraySeq::matching(values, row_count) {
             return Ok(Self::ObjectArray(seq));
         }
@@ -462,12 +470,14 @@ impl<'py> ColumnSource<'py> {
 /// Borrowed view over the object-pointer buffer of a 1-D C-contiguous
 /// `dtype=object` ndarray. The buffer export pins the array length, so reads
 /// stay in bounds for the whole build; a NULL slot reads as None.
+#[cfg(not(Py_GIL_DISABLED))]
 pub(super) struct ObjectArraySeq<'py> {
     py: Python<'py>,
     view: RawBuffer<'py>,
     len: usize,
 }
 
+#[cfg(not(Py_GIL_DISABLED))]
 impl<'py> ObjectArraySeq<'py> {
     fn matching(values: &Bound<'py, PyAny>, row_count: usize) -> Option<Self> {
         let view = RawBuffer::matching(
@@ -484,6 +494,7 @@ impl<'py> ObjectArraySeq<'py> {
     }
 }
 
+#[cfg(not(Py_GIL_DISABLED))]
 impl FastSeq for ObjectArraySeq<'_> {
     // The exported buffer cannot be resized, but Python code run from a
     // fallback can still replace items in place, so the pointer-identity
@@ -491,17 +502,17 @@ impl FastSeq for ObjectArraySeq<'_> {
     const MUTABLE: bool = true;
 
     #[inline]
-    unsafe fn get(&self, index: usize) -> *mut ffi::PyObject {
+    unsafe fn item(&self, index: usize) -> PyResult<SeqItem<'_>> {
         debug_assert!(index < self.len);
         // SAFETY: the trait contract requires index < size(); each slot holds
         // a pointer the array owns, read fresh so in-place replacement by
         // earlier fallbacks is observed.
         let ptr = *self.view.data().cast::<*mut ffi::PyObject>().add(index);
-        if ptr.is_null() {
+        Ok(SeqItem::borrowed(if ptr.is_null() {
             ffi::Py_None()
         } else {
             ptr
-        }
+        }))
     }
 
     fn size(&self) -> usize {
@@ -509,6 +520,7 @@ impl FastSeq for ObjectArraySeq<'_> {
     }
 }
 
+#[cfg(not(Py_GIL_DISABLED))]
 impl<'py> RowAccess<'py> for ObjectArraySeq<'py> {
     fn value(&self, row: usize) -> PyResult<Bound<'py, PyAny>> {
         if row >= self.len {
@@ -520,7 +532,7 @@ impl<'py> RowAccess<'py> for ObjectArraySeq<'py> {
         // SAFETY: row is in bounds for the exported buffer; the array slot
         // holds a strong reference and from_borrowed_ptr takes its own before
         // any Python code can run.
-        Ok(unsafe { Bound::from_borrowed_ptr(self.py, self.get(row)) })
+        Ok(unsafe { self.item(row)? }.into_bound(self.py))
     }
 }
 
@@ -544,6 +556,7 @@ impl<'py> RowAccess<'py> for ColumnValues<'py> {
 /// serializer can execute arbitrary code, so the list size is revalidated
 /// before the next unchecked item read.
 pub(super) struct ListRows<'a, 'py> {
+    #[cfg(not(Py_GIL_DISABLED))]
     pub(super) py: Python<'py>,
     pub(super) list: &'a Bound<'py, PyList>,
     pub(super) name: &'a str,
@@ -552,8 +565,12 @@ pub(super) struct ListRows<'a, 'py> {
 
 impl<'py> RowAccess<'py> for ListRows<'_, 'py> {
     fn value(&self, row: usize) -> PyResult<Bound<'py, PyAny>> {
+        #[cfg(Py_GIL_DISABLED)]
+        return self.list.get_item(row);
         // SAFETY: callers iterate below `expected`, which `validate` confirms
-        // after every operation that may execute Python.
+        // after every operation that may execute Python, and the GIL excludes
+        // concurrent mutation.
+        #[cfg(not(Py_GIL_DISABLED))]
         Ok(unsafe {
             Bound::from_borrowed_ptr(
                 self.py,
@@ -640,7 +657,7 @@ pub(super) trait FastValue: Copy {
     ///
     /// # Safety
     ///
-    /// Requires the GIL; `ptr` must be a valid, non-null object pointer.
+    /// Requires an attached Python thread and a retained, non-null `ptr`.
     unsafe fn from_exact(
         ptr: *mut ffi::PyObject,
         ch_type: &ChType,
@@ -689,7 +706,7 @@ pub(super) fn checked_f64_to_bfloat16(value: f64) -> Result<[u8; 2], ()> {
 ///
 /// # Safety
 ///
-/// Requires the GIL; `ptr` must be a valid, non-null object pointer.
+/// Requires an attached Python thread and a retained, non-null `ptr`.
 #[inline]
 pub(super) unsafe fn exact_long_as_i64(ptr: *mut ffi::PyObject) -> Result<i64, ()> {
     if ffi::PyLong_CheckExact(ptr) == 0 {
@@ -999,11 +1016,65 @@ pub(super) trait FastSeq {
 
     /// # Safety
     ///
-    /// Requires the GIL and `index < size()`. The returned pointer is
-    /// borrowed and must be consumed before any Python code runs.
-    unsafe fn get(&self, index: usize) -> *mut ffi::PyObject;
+    /// Requires an attached Python thread. Borrowed reads from immutable
+    /// sources and GIL builds require `index < size()`. Mutable free-threaded
+    /// sources use checked owned reads and return an error if a concurrent
+    /// resize removes the requested index. A borrowed item must be consumed
+    /// or converted to an owned Bound before Python code can run or the
+    /// source can change, and its source must remain alive until then.
+    unsafe fn item(&self, index: usize) -> PyResult<SeqItem<'_>>;
 
     fn size(&self) -> usize;
+}
+
+/// An item borrowed from a stable source, or owned after a checked mutable
+/// container read. GIL builds keep the pointer-only representation and avoid
+/// adding reference counting to the existing exact-type fast paths.
+pub(super) struct SeqItem<'a> {
+    ptr: *mut ffi::PyObject,
+    #[cfg(Py_GIL_DISABLED)]
+    owner: Option<Bound<'a, PyAny>>,
+    marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> SeqItem<'a> {
+    /// The source must retain ptr for this item's lifetime. For a mutable
+    /// GIL-protected source, consume the item or call into_bound before any
+    /// operation that can run Python or replace the source item.
+    unsafe fn borrowed(ptr: *mut ffi::PyObject) -> Self {
+        Self {
+            ptr,
+            #[cfg(Py_GIL_DISABLED)]
+            owner: None,
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    #[cfg(Py_GIL_DISABLED)]
+    fn owned(owner: Bound<'a, PyAny>) -> Self {
+        Self {
+            ptr: owner.as_ptr(),
+            owner: Some(owner),
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    #[inline]
+    pub(super) fn as_ptr(&self) -> *mut ffi::PyObject {
+        self.ptr
+    }
+
+    /// Transfer a checked read's reference to the fallback, so its finalizer
+    /// runs at the same point as on the borrowed GIL path.
+    #[inline]
+    pub(super) fn into_bound<'py>(self, py: Python<'py>) -> Bound<'py, PyAny> {
+        #[cfg(Py_GIL_DISABLED)]
+        if let Some(owner) = self.owner {
+            return owner.unbind().into_bound(py);
+        }
+        // SAFETY: the sequence retains the borrowed item through this call.
+        unsafe { Bound::from_borrowed_ptr(py, self.ptr) }
+    }
 }
 
 pub(super) struct ListSeq<'a, 'py>(pub(super) &'a Bound<'py, PyList>);
@@ -1012,8 +1083,14 @@ impl FastSeq for ListSeq<'_, '_> {
     const MUTABLE: bool = true;
 
     #[inline]
-    unsafe fn get(&self, index: usize) -> *mut ffi::PyObject {
-        ffi::PyList_GET_ITEM(self.0.as_ptr(), index as ffi::Py_ssize_t)
+    unsafe fn item(&self, index: usize) -> PyResult<SeqItem<'_>> {
+        #[cfg(Py_GIL_DISABLED)]
+        return self.0.get_item(index).map(SeqItem::owned);
+        #[cfg(not(Py_GIL_DISABLED))]
+        Ok(SeqItem::borrowed(ffi::PyList_GET_ITEM(
+            self.0.as_ptr(),
+            index as ffi::Py_ssize_t,
+        )))
     }
 
     fn size(&self) -> usize {
@@ -1027,8 +1104,11 @@ impl FastSeq for TupleSeq<'_, '_> {
     const MUTABLE: bool = false;
 
     #[inline]
-    unsafe fn get(&self, index: usize) -> *mut ffi::PyObject {
-        ffi::PyTuple_GET_ITEM(self.0.as_ptr(), index as ffi::Py_ssize_t)
+    unsafe fn item(&self, index: usize) -> PyResult<SeqItem<'_>> {
+        Ok(SeqItem::borrowed(ffi::PyTuple_GET_ITEM(
+            self.0.as_ptr(),
+            index as ffi::Py_ssize_t,
+        )))
     }
 
     fn size(&self) -> usize {
@@ -1045,10 +1125,10 @@ impl FastSeq for PtrSeq<'_> {
     const MUTABLE: bool = false;
 
     #[inline]
-    unsafe fn get(&self, index: usize) -> *mut ffi::PyObject {
+    unsafe fn item(&self, index: usize) -> PyResult<SeqItem<'_>> {
         debug_assert!(index < self.0.len());
         // SAFETY: the trait contract requires index < size().
-        *self.0.get_unchecked(index)
+        Ok(SeqItem::borrowed(*self.0.get_unchecked(index)))
     }
 
     fn size(&self) -> usize {
@@ -1082,7 +1162,8 @@ fn seq_values<T: FastValue, S: FastSeq>(
         // SAFETY: row < row_count, the container size the caller checked and
         // every fallback revalidates; the borrowed pointer is consumed before
         // any Python code can run.
-        let ptr = unsafe { seq.get(row) };
+        let item = unsafe { seq.item(row)? };
+        let ptr = item.as_ptr();
         if ptr == unsafe { ffi::Py_None() } {
             let Some(null_map) = &mut null_map else {
                 return Err(PyValueError::new_err(format!(
@@ -1096,13 +1177,13 @@ fn seq_values<T: FastValue, S: FastSeq>(
         if let Some(null_map) = &mut null_map {
             null_map.push(0);
         }
-        // SAFETY: GIL held; ptr is a valid borrowed item pointer.
+        // SAFETY: item retains ptr and this thread is attached to Python.
         match unsafe { T::from_exact(ptr, ch_type, fast_limit) } {
             Ok(value) => values.push(value),
             Err(()) => {
                 // SAFETY: ptr is valid here; taking a strong reference keeps
                 // the item alive across any Python code the fallback runs.
-                let obj = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+                let obj = item.into_bound(py);
                 if let Some(probe) = time_probe.as_mut() {
                     if let Some(hit) = probe.probe(&obj, name, row)? {
                         match hit {
@@ -1122,12 +1203,14 @@ fn seq_values<T: FastValue, S: FastSeq>(
                                 values.push(T::from_scalar(scalar)?);
                             }
                         }
+                        drop(obj);
                         check_not_resized(seq, name, row_count)?;
                         continue;
                     }
                 }
                 let scalar = convert_scalar(py, ch_type, &obj, name, row)?;
                 values.push(T::from_scalar(scalar)?);
+                drop(obj);
                 check_not_resized(seq, name, row_count)?;
             }
         }
@@ -1159,7 +1242,8 @@ fn wide_column_from_seq<S: FastSeq>(
     for row in 0..row_count {
         // SAFETY: row < row_count, the caller-validated size. A conversion
         // that executes Python is followed by the resize check below.
-        let ptr = unsafe { seq.get(row) };
+        let item = unsafe { seq.item(row)? };
+        let ptr = item.as_ptr();
         if ptr == unsafe { ffi::Py_None() } {
             let Some(null_map) = &mut null_map else {
                 return Err(PyValueError::new_err(format!(
@@ -1174,19 +1258,15 @@ fn wide_column_from_seq<S: FastSeq>(
         }
         let start = row * width;
         let slice = &mut data[start..start + width];
-        // SAFETY: the borrowed ptr stays valid without a strong ref only
-        // because the GIL is held across this whole loop (the module keeps
-        // pyo3's default gil_used = true) and the fast try never executes
-        // Python, so nothing can mutate the container or drop the item under
-        // it. A future free-threading (gil_used = false) opt-in invalidates
-        // this and requires a strong ref before the fast try.
+        // SAFETY: item retains the value on free-threaded builds; GIL
+        // builds borrow it while the fast conversion runs no Python code.
         let outcome = unsafe { wide_int_fast_into(ptr, slice, signed, name, row, type_name)? };
         if outcome == WideFast::Done {
             continue;
         }
         // SAFETY: taking a strong reference keeps the current item alive if
         // its conversion mutates the source list.
-        let value = unsafe { Bound::from_borrowed_ptr(py, ptr) };
+        let value = item.into_bound(py);
         wide_int_slow_into(
             py,
             &value,
@@ -1197,6 +1277,7 @@ fn wide_column_from_seq<S: FastSeq>(
             row,
             type_name,
         )?;
+        drop(value);
         check_not_resized(seq, name, row_count)?;
     }
     let validity = null_map.map(|nulls| Bitmap::from_ch_null_map(&nulls));
@@ -1290,7 +1371,7 @@ fn try_buffer_column(
     }
 
     match ch_type {
-        ChType::Bool => Ok(bool_buffer_column(values, row_count, nullable)),
+        ChType::Bool => bool_buffer_column(values, row_count, nullable),
         ChType::Int8 => buf::<i8>(py, name, values, row_count, nullable),
         ChType::Int16 => buf::<i16>(py, name, values, row_count, nullable),
         ChType::Int32 => buf::<i32>(py, name, values, row_count, nullable),
@@ -1314,17 +1395,24 @@ fn bool_buffer_column(
     values: &Bound<'_, PyAny>,
     row_count: usize,
     nullable: bool,
-) -> Option<Column> {
-    let buffer = RawBuffer::matching(values, b'?', 1, row_count)?;
+) -> PyResult<Option<Column>> {
+    let Some(buffer) = RawBuffer::matching(values, b'?', 1, row_count) else {
+        return Ok(None);
+    };
+    #[cfg(Py_GIL_DISABLED)]
+    let owned = buffer.copy_bytes()?;
+    #[cfg(Py_GIL_DISABLED)]
+    let bytes = owned.as_slice();
     // SAFETY: `matching` validated a C-contiguous buffer of row_count 1-byte
-    // items, and no Python code runs while the slice is read.
+    // items, and the GIL excludes Python mutation while the slice is read.
+    #[cfg(not(Py_GIL_DISABLED))]
     let bytes = unsafe { std::slice::from_raw_parts(buffer.data(), row_count) };
-    Some(Column::Bool(if nullable {
+    Ok(Some(Column::Bool(if nullable {
         // A buffer holds no Python objects, so a nullable column is all-valid.
         BoolColumn::from_wire_bytes_nullable(bytes, Bitmap::all_valid(row_count))
     } else {
         BoolColumn::from_wire_bytes(bytes)
-    }))
+    })))
 }
 
 /// Reinterprets a `Vec` of a `#[repr(transparent)]` wrapper as its inner type,
@@ -1376,6 +1464,8 @@ pub(super) const PTR_CACHE_CAP: usize = 1 << 16;
 
 /// Error if a mutable container changed size after a conversion that may have
 /// run Python code, before the next borrowed read could go out of bounds.
+/// Drop temporary owned Python values before this check: their finalizers can
+/// also resize the source, even when the conversion itself preserved its size.
 #[inline]
 pub(super) fn check_not_resized<S: FastSeq>(seq: &S, name: &str, row_count: usize) -> PyResult<()> {
     if S::MUTABLE && seq.size() != row_count {
