@@ -55,8 +55,9 @@ fn array_column_from_seq<S: FastSeq>(
         // SAFETY: row < row_count, the container size the caller checked and
         // every fallback revalidates; the strong reference keeps the row
         // alive across any Python code the fallback runs.
-        let value = unsafe { Bound::from_borrowed_ptr(py, seq.get(row)) };
+        let value = unsafe { seq.item(row)? }.into_bound(py);
         flatten_array_row(py, name, inner, &value, row, &mut flat)?;
+        drop(value);
         check_not_resized(seq, name, row_count)?;
         offsets.push(flat.end_offset(name, "Array element")?);
     }
@@ -154,12 +155,12 @@ fn flatten_array_row(
 ) -> PyResult<()> {
     if let Ok(list) = value.cast_exact::<PyList>() {
         // SAFETY: copying exact-list items runs no Python code.
-        unsafe { flat.extend_from_seq(&ListSeq(list)) };
+        unsafe { flat.extend_from_seq(&ListSeq(list))? };
         return Ok(());
     }
     if let Ok(tuple) = value.cast_exact::<PyTuple>() {
         // SAFETY: copying exact-tuple items runs no Python code.
-        unsafe { flat.extend_from_seq(&TupleSeq(tuple)) };
+        unsafe { flat.extend_from_seq(&TupleSeq(tuple))? };
         return Ok(());
     }
     if value.is_none() {
@@ -200,7 +201,7 @@ fn flatten_array_row(
         })?;
     // SAFETY: items is an owned exact list; copying its items runs no Python
     // code and the strong references outlive the temporary list.
-    unsafe { flat.extend_from_seq(&ListSeq(&items)) };
+    unsafe { flat.extend_from_seq(&ListSeq(&items))? };
     Ok(())
 }
 
@@ -217,16 +218,18 @@ impl FlatRefs {
     ///
     /// # Safety
     ///
-    /// Requires the GIL; `seq` must allow borrowed reads with no Python code
-    /// running during the copy (an exact list or tuple).
-    unsafe fn extend_from_seq<S: FastSeq>(&mut self, seq: &S) {
+    /// Requires an attached Python thread and a sequence that retains each
+    /// item until the copy takes its own reference. Mutable free-threaded
+    /// reads are checked and owned; GIL and immutable reads are borrowed.
+    unsafe fn extend_from_seq<S: FastSeq>(&mut self, seq: &S) -> PyResult<()> {
         let len = seq.size();
         self.ptrs.reserve(len);
         for index in 0..len {
-            let item = seq.get(index);
-            ffi::Py_INCREF(item);
-            self.ptrs.push(item);
+            let item = seq.item(index)?;
+            ffi::Py_INCREF(item.as_ptr());
+            self.ptrs.push(item.as_ptr());
         }
+        Ok(())
     }
 
     /// Append each byte of `bytes` as an owned Python int element.
@@ -274,8 +277,8 @@ impl FlatRefs {
 
 impl Drop for FlatRefs {
     fn drop(&mut self) {
-        // SAFETY: FlatRefs is only built and dropped inside a frame that holds
-        // a `Python` token, so the GIL is held here.
+        // SAFETY: FlatRefs owns each pointer and is only built and dropped
+        // inside a frame that holds a Python token, so this thread is attached.
         for &ptr in &self.ptrs {
             unsafe { ffi::Py_DECREF(ptr) };
         }
@@ -307,7 +310,7 @@ pub(super) fn build_element_column(
         return build_element_column(py, name, &delegate, ptrs);
     }
     match ch_type {
-        ChType::Nothing => Ok(nothing_column_from_seq(&seq, row_count, false)),
+        ChType::Nothing => nothing_column_from_seq(&seq, row_count, false),
         ChType::AggregateFunction { .. } => {
             aggregate_state_column_from_seq(py, name, ch_type, &seq, row_count)
         }
@@ -339,7 +342,7 @@ pub(super) fn build_element_column(
                 return tuple_column_from_seq(py, name, elements, &seq, row_count, true);
             }
             if matches!(inner.as_ref(), ChType::Nothing) {
-                return Ok(nothing_column_from_seq(&seq, row_count, true));
+                return nothing_column_from_seq(&seq, row_count, true);
             }
             if matches!(inner.as_ref(), ChType::Json { .. }) {
                 return json_text_column_from_rows(
@@ -465,8 +468,9 @@ fn tuple_column_from_seq<S: FastSeq>(
         // SAFETY: row < row_count, the container size the caller checked and
         // every fallback revalidates; the strong reference keeps the row
         // alive across any Python code the row read runs.
-        let value = unsafe { Bound::from_borrowed_ptr(py, seq.get(row)) };
+        let value = unsafe { seq.item(row)? }.into_bound(py);
         builder.push_row(&value, row)?;
+        drop(value);
         check_not_resized(seq, name, row_count)?;
     }
     builder.finish()
@@ -655,8 +659,9 @@ impl<'a, 'py> TupleBuilder<'a, 'py> {
     ///
     /// # Safety
     ///
-    /// Requires the GIL; `seq` must allow borrowed reads with no Python code
-    /// running during the copy (an exact list or tuple).
+    /// Requires an attached Python thread and a sequence that retains each
+    /// item until the copy takes its own reference. Mutable free-threaded
+    /// reads are checked and owned; GIL and immutable reads are borrowed.
     unsafe fn push_positional_seq<S: FastSeq>(&mut self, seq: &S, row: usize) -> PyResult<()> {
         let got = seq.size();
         if got != self.elements.len() {
@@ -667,9 +672,9 @@ impl<'a, 'py> TupleBuilder<'a, 'py> {
             )));
         }
         for (index, flat) in self.flats.iter_mut().enumerate() {
-            let item = seq.get(index);
-            ffi::Py_INCREF(item);
-            flat.ptrs.push(item);
+            let item = seq.item(index)?;
+            ffi::Py_INCREF(item.as_ptr());
+            flat.ptrs.push(item.as_ptr());
         }
         Ok(())
     }
@@ -738,8 +743,9 @@ fn map_column_from_seq<S: FastSeq>(
         // SAFETY: row < row_count, the container size the caller checked and
         // every fallback revalidates; the strong reference keeps the row
         // alive across any Python code the row read runs.
-        let value = unsafe { Bound::from_borrowed_ptr(py, seq.get(row)) };
+        let value = unsafe { seq.item(row)? }.into_bound(py);
         builder.push_row(&value, row)?;
+        drop(value);
         check_not_resized(seq, name, row_count)?;
     }
     builder.finish()
@@ -787,6 +793,10 @@ impl<'a, 'py> MapBuilder<'a, 'py> {
             )));
         }
         if let Ok(dict) = value.cast_exact::<PyDict>() {
+            // PyDict iteration can panic on a concurrent resize. The private
+            // shallow copy retains every entry through the flattening pass.
+            #[cfg(Py_GIL_DISABLED)]
+            let dict = dict.copy()?;
             for (key, val) in dict.iter() {
                 self.keys.push_ref(&key);
                 self.values.push_ref(&val);

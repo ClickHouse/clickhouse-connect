@@ -7,6 +7,22 @@ Driver integration changes and core version requirements belong in the [driver c
 
 ## UNRELEASED
 
+## 0.2.2, 2026-09-29
+
+### Improvements
+
+- Added free-threaded CPython 3.14t wheels for Linux, macOS, and Windows. Installing the codec on a free-threaded interpreter no longer builds it from the sdist.
+- Declared free-threaded Python support explicitly. Importing the core extension doesn't re-enable the GIL.
+
+### Bug Fixes
+
+- Fixed crashes, panics, and incorrect insert values when another thread mutates Python input containers on free-threaded Python builds. Closes [#1075](https://github.com/ClickHouse/clickhouse-connect/issues/1075).
+- Fixed insert crashes when a converted value's finalizer resizes the input list.
+
+### Compatibility
+
+- Binding API 3, column-buffer API 1, and the bundled `ch-core-rs` 0.2.0 are unchanged. Existing `clickhouse-connect` 1.9.0 installations can upgrade the core independently.
+
 ## 0.2.1, 2026-09-24
 
 [PyPI release](https://pypi.org/project/clickhouse-connect-core/0.2.1/) | [Source](https://github.com/ClickHouse/clickhouse-connect/tree/5864cd3559244e1c730343389e996e4e80f08745/rust/ch-core-py)
