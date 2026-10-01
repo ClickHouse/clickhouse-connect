@@ -32,6 +32,7 @@ from clickhouse_connect.driver.binding import (
     _needs_trailing_semicolon_lexer,
     _qualified_table,
     _query_is_insert,
+    _query_is_read_only,
     _strip_trailing_semicolons,
     bind_query,
     str_query_value,
@@ -578,6 +579,7 @@ class Client(ABC):
             database=self.database if use_database else None,
             settings=self._validate_settings(settings or {}),
             retries=self.query_retries,
+            retryable=_query_is_read_only(final_query),
         )
         return final_query, bind_params, runtime
 

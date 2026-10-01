@@ -1,10 +1,14 @@
+from unittest.mock import Mock
+
 import pytest
 
+from clickhouse_connect.driver import binding
 from clickhouse_connect.driver.binding import (
     MAX_URL_BIND_PARAM_LENGTH,
     _binding_keeps_query_structure,
     _contains_insert_bareword,
     _query_is_insert,
+    _query_is_read_only,
     _strip_trailing_semicolons,
     bind_query,
     finalize_query,
@@ -255,3 +259,121 @@ def test_contains_insert_bareword(query, expected):
 )
 def test_query_is_insert_ignores_non_sql_tokens(query, expected):
     assert _query_is_insert(query) is expected
+
+
+@pytest.mark.parametrize("prefix", ["", "-- $hint$\n/* outer /* $nested$ */ comment */ "])
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT 13",
+        "sElEcT 13; -- done\n /* comment */ ;",
+        "/* outer /* nested */ comment */ SELECT 13",
+        "-- note\n// another\n#! comment\nSELECT 13",
+        "(SELECT 13 UNION ALL SELECT 79)",
+        "WITH 13 AS value SELECT value",
+        "WITH (13 + 79) AS value, [13, 79] AS values SELECT value, values",
+        "WITH source AS (SELECT 13 AS value) SELECT * FROM source",
+        "WITH RECURSIVE source AS (SELECT 13 AS value) SELECT * FROM source",
+        "WITH 13 AS insert SELECT insert",
+        "WITH select + 13 AS value SELECT value FROM source",
+        "WITH 13 AS `select` SELECT `select`",
+        "WITH 13 AS 13value SELECT 13value",
+        "WITH 13 AS $value SELECT $value",
+        "WITH 13 AS \u201cvalue\u201d SELECT \u201cvalue\u201d",
+        "WITH 13 AS {alias:Identifier} SELECT {alias:Identifier}",
+        "SELECT 'PARALLEL WITH INSERT INTO t SELECT 79; INTO OUTFILE'",
+        "SELECT 'escaped\\' quote; PARALLEL WITH INSERT'",
+        "SELECT $$PARALLEL WITH INSERT INTO t SELECT 79;$$",
+        "SELECT $doc$INTO OUTFILE; PARALLEL WITH INSERT$doc$",
+        'SELECT `PARALLEL WITH INSERT`, "INTO OUTFILE" FROM source',
+        "SELECT {PARALLEL:UInt32}, {WITH:UInt32}",
+        "SELECT 13 /* PARALLEL WITH INSERT */;",
+        "SHOW TABLES",
+        "SHOW CREATE TABLE source",
+        "DESCRIBE TABLE source",
+        "DESC SELECT 13",
+        "EXISTS TABLE source",
+        "EXPLAIN SELECT 13",
+        "EXPLAIN PLAN SELECT 13",
+        "EXPLAIN PIPELINE SELECT 13",
+        "EXPLAIN AST SELECT 13",
+        "EXPLAIN SYNTAX SELECT 13",
+        "EXPLAIN QUERY TREE SELECT 13",
+        "EXPLAIN ESTIMATE SELECT 13",
+        "EXPLAIN indexes = 1 SELECT 13",
+        "EXPLAIN PLAN indexes = 1, actions = 1 SELECT 13",
+        "EXPLAIN PIPELINE graph = 1 SELECT 13",
+        "EXPLAIN QUERY TREE run_passes = 0 WITH 13 AS value SELECT value",
+        "EXPLAIN (SELECT 13)",
+        "EXPLAIN PLAN (SELECT 13)",
+        "EXPLAIN indexes = 1 (SELECT 13)",
+        b"SELECT '\xff'",
+    ],
+)
+def test_read_only_query_retry_eligibility(query, prefix):
+    assert _query_is_read_only(prefix.encode() + query if isinstance(query, bytes) else prefix + query)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "",
+        "-- comment",
+        "INSERT INTO target SELECT 13",
+        "INSERT INTO target VALUES (13)",
+        "WITH source AS (SELECT 13 AS value) INSERT INTO target SELECT * FROM source",
+        "WITH 13 AS select INSERT INTO target SELECT 13",
+        "WITH select + 13 AS value INSERT INTO target SELECT value FROM source",
+        "WITH {SELECT:UInt32} AS value INSERT INTO target SELECT value",
+        "CREATE TABLE target AS SELECT 13",
+        "DROP TABLE target",
+        "ALTER TABLE target UPDATE value = 79 WHERE value = 13",
+        "DELETE FROM target WHERE value = 13",
+        "TRUNCATE TABLE target",
+        "EXCHANGE TABLES target AND source",
+        "RENAME TABLE source TO target",
+        "SYSTEM FLUSH LOGS",
+        "SET max_threads = 13",
+        "USE default",
+        "CHECK TABLE target",
+        "GRANT SELECT ON source TO user_1",
+        "OPTIMIZE TABLE target",
+        "BACKUP TABLE source TO Disk('backups', 'data')",
+        "UNKNOWN STATEMENT SELECT 13",
+        "SELECT 13; INSERT INTO target SELECT 79",
+        "SELECT 13; SELECT 79",
+        "SELECT 13 PARALLEL WITH INSERT INTO target SELECT 79",
+        "SELECT 13 PARALLEL /* comment */ WITH CREATE TABLE target (value UInt32) ENGINE = Memory",
+        "SHOW TABLES PARALLEL WITH TRUNCATE TABLE target",
+        "WITH 13 AS value SELECT value PARALLEL WITH INSERT INTO target SELECT 79",
+        "SELECT 13 INTO OUTFILE 'result.csv'",
+        "SHOW TABLES INTO /* comment */ OUTFILE 'result.csv'",
+        "EXPLAIN PIPELINE INSERT INTO target SELECT 13",
+        "EXPLAIN PLAN indexes = 1 INSERT INTO target SELECT 13",
+        "SELECT 'unterminated PARALLEL WITH INSERT INTO target SELECT 79",
+        "SELECT 13 /* unterminated PARALLEL WITH INSERT INTO target SELECT 79",
+        "SELECT (13; INSERT INTO target SELECT 79",
+        "SELECT 13) PARALLEL WITH INSERT INTO target SELECT 79",
+    ],
+)
+def test_write_or_unknown_query_is_not_retryable(query):
+    assert not _query_is_read_only(query)
+
+
+@pytest.mark.parametrize("as_bytes", [False, True])
+@pytest.mark.parametrize(
+    "query",
+    [
+        "INSERT INTO target FORMAT JSONEachRow\n" + '{"value":"$payload$13$payload$"}\n' * 13,
+        "/* $hint$ */ INSERT INTO target VALUES " + ", ".join(["('$payload$13$payload$')"] * 13),
+        "-- $hint$\nUNKNOWN STATEMENT " + "$payload$13$payload$ " * 13,
+    ],
+    ids=["json_data", "values_data", "unknown"],
+)
+def test_retry_classifier_skips_heredoc_scan_for_non_read_statements(monkeypatch, query, as_bytes):
+    scanner = Mock(wraps=binding._heredoc_start_re)
+    monkeypatch.setattr(binding, "_heredoc_start_re", scanner)
+
+    assert not _query_is_read_only(query.encode() if as_bytes else query)
+
+    scanner.finditer.assert_not_called()

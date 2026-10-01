@@ -22,6 +22,8 @@ from urllib3.poolmanager import PoolManager
 from urllib3.response import HTTPResponse
 
 from clickhouse_connect.driver._backend.httpcommon import (
+    _read_request_retryable,
+    _request_is_read_only,
     auth_failed_ex_code,
     build_http_error,
     columns_only_meta,
@@ -146,13 +148,15 @@ class HttpSyncBackend:
             read_format=self.read_format,
             prepped_query=prepped_query,
         )
+        fields = _plan_fields(plan)
         if plan.columns_only:
             response = self.request(
                 plan.body if plan.body is not None else b"",
                 plan.params,
                 plan.headers,
                 retries=runtime.retries,
-                fields=_plan_fields(plan),
+                retryable=_read_request_retryable(runtime.retryable, plan.body, plan.params, self.params, fields),
+                fields=fields,
             )
             return QueryExecution(columns=columns_only_meta(json.loads(response.data)))
         response = self.request(
@@ -161,7 +165,8 @@ class HttpSyncBackend:
             dict_copy(plan.headers, context.transport_settings),
             stream=True,
             retries=runtime.retries,
-            fields=_plan_fields(plan),
+            retryable=_read_request_retryable(runtime.retryable, plan.body, plan.params, self.params, fields),
+            fields=fields,
             server_wait=not context.streaming,
         )
         return QueryExecution(
@@ -195,6 +200,7 @@ class HttpSyncBackend:
             error_handler=error_handler,
             server_wait=False,
             retry_body=retry_body,
+            retryable=runtime.retryable,
         )
         logger.debug("Context insert response code: %d, content: %s", response.status, response.data)
         return summary_from_headers(response.headers)
@@ -211,7 +217,7 @@ class HttpSyncBackend:
     ) -> dict[str, Any]:
         """Send a raw insert payload, returning the response summary."""
         plan = plan_raw_insert_request(table, column_names, insert_block, fmt, compression, runtime, transport_settings)
-        response = self.request(plan.body, plan.params, plan.headers, server_wait=False)
+        response = self.request(plan.body, plan.params, plan.headers, server_wait=False, retryable=runtime.retryable)
         logger.debug("Raw insert response code: %d, content: %s", response.status, response.data)
         return summary_from_headers(response.headers)
 
@@ -225,12 +231,14 @@ class HttpSyncBackend:
     ) -> bytes:
         """Execute an already-bound raw query, returning the response body."""
         plan = plan_raw_query_request(final_query, bind_params, external_data, runtime, self.form_encode_query_params, transport_settings)
+        fields = _plan_fields(plan)
         response = self.request(
             plan.body if plan.body is not None else b"",
             plan.params,
             plan.headers,
-            fields=_plan_fields(plan),
+            fields=fields,
             retries=runtime.retries,
+            retryable=_read_request_retryable(runtime.retryable, plan.body, plan.params, self.params, fields),
         )
         return response.data
 
@@ -244,14 +252,16 @@ class HttpSyncBackend:
     ) -> HTTPResponse:
         """Execute an already-bound raw query, returning the streaming response."""
         plan = plan_raw_query_request(final_query, bind_params, external_data, runtime, self.form_encode_query_params, transport_settings)
+        fields = _plan_fields(plan)
         return self.request(
             plan.body if plan.body is not None else b"",
             plan.params,
             plan.headers,
-            fields=_plan_fields(plan),
+            fields=fields,
             stream=True,
             server_wait=False,
             retries=runtime.retries,
+            retryable=_read_request_retryable(runtime.retryable, plan.body, plan.params, self.params, fields),
         )
 
     def execute_command(
@@ -265,7 +275,15 @@ class HttpSyncBackend:
     ) -> CommandExecution:
         """Execute an already-bound command, returning its body and summary."""
         plan = plan_command_request(bound_cmd, bind_params, data, external_data, runtime, transport_settings)
-        response = self.request(plan.payload, plan.params, plan.headers, plan.method, fields=plan.form_files, server_wait=False)
+        response = self.request(
+            plan.payload,
+            plan.params,
+            plan.headers,
+            plan.method,
+            fields=plan.form_files,
+            server_wait=False,
+            retryable=_read_request_retryable(runtime.retryable, plan.payload, plan.params, self.params, plan.form_files),
+        )
         return CommandExecution(
             body=response.data or b"",
             summary=summary_from_headers(response.headers),
@@ -284,6 +302,7 @@ class HttpSyncBackend:
         fields: dict[str, tuple] | None = None,
         error_handler: Callable | None = None,
         retry_body: Callable[[], Any] | None = None,
+        retryable: bool | None = None,
     ) -> HTTPResponse:
         if isinstance(data, str):
             data = data.encode()
@@ -302,6 +321,8 @@ class HttpSyncBackend:
             final_params["http_headers_progress_interval_ms"] = self.progress_interval
         final_params = dict_copy(self.params, final_params)
         final_params = dict_copy(final_params, params)
+        if retryable is None:
+            retryable = _request_is_read_only(data, final_params, fields)
 
         if self.autogenerate_query_id and "query_id" not in final_params:
             final_params["query_id"] = str(uuid.uuid4())
@@ -331,16 +352,10 @@ class HttpSyncBackend:
             try:
                 response: HTTPResponse = cast(HTTPResponse, cast(PoolManager, self.http).request(method, url, **kwargs))
             except HTTPError as ex:
-                # Always allow at least one retry on a clean connection error so a single stale
-                # keep-alive socket doesn't surface to the caller, and additionally honor the
-                # retries budget when it is larger (e.g. query_retries for reads), so that
-                # bursts of stale pooled connections can be drained before giving up.
+                # A remote close can occur after execution. Only replay eligible operations.
                 max_attempts = max(2, retries + 1)
                 remote_close = isinstance(ex.__context__, _REMOTE_CLOSE_ERRORS) or isinstance(ex.__cause__, _REMOTE_CLOSE_ERRORS)
-                if remote_close and attempts < max_attempts:
-                    # The server closed the connection, probably because the Keep Alive has expired.
-                    # We should be safe to retry, as ClickHouse should not have processed anything on
-                    # a connection that it killed.
+                if retryable and remote_close and attempts < max_attempts:
                     body = kwargs.get("body")
                     if retry_body is not None:
                         kwargs["body"] = retry_body()
@@ -363,7 +378,7 @@ class HttpSyncBackend:
             if 200 <= response.status < 300 and not response.headers.get(ex_header):
                 return response
             if response.status in retryable_http_statuses:
-                if attempts > retries:
+                if not retryable or attempts > retries:
                     self.error_handler(response, True)
                 logger.debug("Retrying requests with status code %d", response.status)
             elif self.token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:

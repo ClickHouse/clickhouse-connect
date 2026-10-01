@@ -371,6 +371,141 @@ def _query_is_insert(query: str) -> bool:
     return False
 
 
+def _query_is_read_only(query: str | bytes) -> bool:
+    """Recognize read statements eligible for HTTP retries. Unknown SQL fails closed."""
+    if isinstance(query, bytes):
+        query = query.decode("utf-8", errors="surrogateescape")
+    # Reject non-read prefixes before scanning inline insert data for heredocs.
+    index = 0
+    while index < len(query):
+        token, token_end = _next_sql_token(query, index, {})
+        if token == _SQL_TOKEN_TRIVIA:
+            index = token_end
+            continue
+        if token != _SQL_TOKEN_OPEN_PAREN and (
+            token != _SQL_TOKEN_WORD
+            or query[index:token_end].upper() not in ("SELECT", "SHOW", "DESCRIBE", "DESC", "EXISTS", "WITH", "EXPLAIN")
+        ):
+            return False
+        break
+    else:
+        return False
+
+    heredoc_ends = {match.group(1): match.start() for match in _heredoc_start_re.finditer(query)} if "$" in query else {}
+    state = "start"
+    depth = 0
+    statement_depth = 0
+    previous_word = ""
+    terminated = False
+    while index < len(query):
+        token, token_end = _next_sql_token(query, index, heredoc_ends)
+        value = query[index:token_end]
+        index = token_end
+        if token == _SQL_TOKEN_TRIVIA:
+            continue
+        if token == _SQL_TOKEN_INVALID:
+            return False
+        if token == _SQL_TOKEN_SEMICOLON:
+            if depth:
+                return False
+            terminated = True
+            continue
+        if terminated:
+            return False
+        word = value.upper() if token == _SQL_TOKEN_WORD else ""
+        if (previous_word == "PARALLEL" and word == "WITH") or (previous_word == "INTO" and word == "OUTFILE"):
+            return False
+        previous_word = word
+
+        if token == _SQL_TOKEN_OPEN_PAREN:
+            depth += 1
+            if state in ("start", "explain", "explain_query", "explain_end"):
+                statement_depth = depth
+            elif state == "with_value" and depth == statement_depth + 1:
+                state = "with_subquery"
+            continue
+        if token == _SQL_TOKEN_CLOSE_PAREN:
+            depth -= 1
+            if depth < 0:
+                return False
+            if state == "with_subquery" and depth == statement_depth:
+                state = "with_end"
+            continue
+        if depth != statement_depth:
+            continue
+
+        if state == "start":
+            if word in ("SELECT", "SHOW", "DESCRIBE", "DESC", "EXISTS"):
+                state = "read"
+            elif word == "WITH":
+                state = "with_expression"
+            elif word == "EXPLAIN":
+                state = "explain"
+            else:
+                return False
+        elif state == "explain":
+            if word in ("AST", "SYNTAX", "PLAN", "PIPELINE", "ESTIMATE"):
+                state = "explain_query"
+            elif word == "QUERY":
+                state = "explain_tree"
+            elif word == "SELECT":
+                state = "read"
+            elif word == "WITH":
+                state = "with_expression"
+            else:
+                if not word:
+                    return False
+                state = "explain_equals"
+        elif state == "explain_tree":
+            if word != "TREE":
+                return False
+            state = "explain_query"
+        elif state == "explain_query":
+            if word == "SELECT":
+                state = "read"
+            elif word == "WITH":
+                state = "with_expression"
+            else:
+                if not word:
+                    return False
+                state = "explain_equals"
+        elif state == "explain_equals":
+            if value != "=":
+                return False
+            state = "explain_value"
+        elif state == "explain_value":
+            if value not in ("+", "-"):
+                state = "explain_end"
+        elif state == "explain_end":
+            if word == "SELECT":
+                state = "read"
+            elif word == "WITH":
+                state = "with_expression"
+            elif value == ",":
+                state = "explain_query"
+            else:
+                return False
+        elif state == "with_expression":
+            if word == "AS":
+                state = "with_value"
+        elif state == "with_value":
+            state = "with_end"
+        elif state == "with_end":
+            if word == "SELECT":
+                state = "read"
+            elif value == ",":
+                state = "with_expression"
+            else:
+                return False
+        if state == "read":
+            # A read can only introduce another operation through these suffixes.
+            upper_query = query.upper()
+            if ";" not in upper_query and "PARALLEL" not in upper_query and "INTO" not in upper_query:
+                return True
+            state = "read_suffix"
+    return state == "read_suffix" and depth == 0
+
+
 def _external_bind_matches(query: str, marker_keys: set[str]) -> tuple[list[re.Match[str]], dict[str, set[int]]]:
     matches = []
     raw_markers: dict[str, set[int]] = {}
