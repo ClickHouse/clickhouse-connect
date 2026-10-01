@@ -413,7 +413,11 @@ def _query_is_read_only(query: str | bytes) -> bool:
         if terminated:
             return False
         word = value.upper() if token == _SQL_TOKEN_WORD else ""
-        if (previous_word == "PARALLEL" and word == "WITH") or (previous_word == "INTO" and word == "OUTFILE"):
+        if (
+            (previous_word == "PARALLEL" and word == "WITH")
+            or (previous_word == "INTO" and word == "OUTFILE")
+            or (previous_word == "INSERT" and word == "INTO")
+        ):
             return False
         previous_word = word
 

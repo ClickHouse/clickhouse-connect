@@ -331,7 +331,7 @@ async def test_cancelled_explicit_rotation_does_not_retry_request_from_closed_se
         retry_calls += 1
         return {"request": "replayed sibling"}
 
-    sibling_task = asyncio.create_task(backend.request({"request": "sibling"}, {}, retry_body=retry_body))
+    sibling_task = asyncio.create_task(backend.request({"request": "sibling"}, {}, retry_body=retry_body, retryable=True))
     await asyncio.wait_for(old_session.request_started.wait(), timeout=1)
 
     rotation_task = asyncio.create_task(backend.close_connections())

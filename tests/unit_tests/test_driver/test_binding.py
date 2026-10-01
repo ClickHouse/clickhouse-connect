@@ -288,6 +288,12 @@ def test_query_is_insert_ignores_non_sql_tokens(query, expected):
         'SELECT `PARALLEL WITH INSERT`, "INTO OUTFILE" FROM source',
         "SELECT {PARALLEL:UInt32}, {WITH:UInt32}",
         "SELECT 13 /* PARALLEL WITH INSERT */;",
+        "SELECT insert, into FROM t",
+        "SELECT value FROM t WHERE value LIKE 'INSERT INTO%'",
+        "SELECT 'INSERT INTO target SELECT 13'",
+        "SELECT `INSERT INTO` FROM t",
+        "SELECT $doc$INSERT INTO target SELECT 13$doc$",
+        "SELECT 13 /* INSERT INTO target SELECT 79 */",
         "SHOW TABLES",
         "SHOW CREATE TABLE source",
         "DESCRIBE TABLE source",
@@ -314,6 +320,7 @@ def test_read_only_query_retry_eligibility(query, prefix):
     assert _query_is_read_only(prefix.encode() + query if isinstance(query, bytes) else prefix + query)
 
 
+@pytest.mark.parametrize("as_bytes", [False, True])
 @pytest.mark.parametrize(
     "query",
     [
@@ -325,6 +332,10 @@ def test_read_only_query_retry_eligibility(query, prefix):
         "WITH 13 AS select INSERT INTO target SELECT 13",
         "WITH select + 13 AS value INSERT INTO target SELECT value FROM source",
         "WITH {SELECT:UInt32} AS value INSERT INTO target SELECT value",
+        "WITH as + select AS value INSERT INTO target SELECT value",
+        "WITH 13 AS as, 79 AS select, as + select AS value INSERT INTO target SELECT value",
+        "EXPLAIN WITH as + select AS value INSERT INTO target SELECT value",
+        "EXPLAIN WITH 13 AS as, 79 AS select, as + select AS value INSERT INTO target SELECT value",
         "CREATE TABLE target AS SELECT 13",
         "DROP TABLE target",
         "ALTER TABLE target UPDATE value = 79 WHERE value = 13",
@@ -356,8 +367,8 @@ def test_read_only_query_retry_eligibility(query, prefix):
         "SELECT 13) PARALLEL WITH INSERT INTO target SELECT 79",
     ],
 )
-def test_write_or_unknown_query_is_not_retryable(query):
-    assert not _query_is_read_only(query)
+def test_write_or_unknown_query_is_not_retryable(query, as_bytes):
+    assert not _query_is_read_only(query.encode() if as_bytes else query)
 
 
 @pytest.mark.parametrize("as_bytes", [False, True])
