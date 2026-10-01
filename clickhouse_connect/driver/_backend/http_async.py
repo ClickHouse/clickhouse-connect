@@ -25,6 +25,8 @@ from aiohttp.helpers import ceil_timeout
 
 from clickhouse_connect import common
 from clickhouse_connect.driver._backend.httpcommon import (
+    _read_request_retryable,
+    _request_is_read_only,
     auth_failed_ex_code,
     build_http_error,
     columns_only_meta,
@@ -431,7 +433,14 @@ class HttpAsyncBackend:
         )
         files = _plan_files(plan)
         if plan.columns_only:
-            response = await self.request(plan.body, plan.params, plan.headers, files=files, retries=runtime.retries)
+            response = await self.request(
+                plan.body,
+                plan.params,
+                plan.headers,
+                files=files,
+                retries=runtime.retries,
+                retryable=_read_request_retryable(runtime.retryable, plan.body, plan.params, self.client_settings, files),
+            )
             try:
                 body = await response.read()
                 encoding = response.headers.get("Content-Encoding")
@@ -459,6 +468,7 @@ class HttpAsyncBackend:
             server_wait=not context.streaming,
             stream=True,
             retries=runtime.retries,
+            retryable=_read_request_retryable(runtime.retryable, plan.body, plan.params, self.client_settings, files),
         )
         try:
             source = await start_streaming_response(
@@ -489,7 +499,14 @@ class HttpAsyncBackend:
     ) -> dict[str, Any]:
         """Send a built insert payload, returning the response summary."""
         plan = plan_data_insert_request(context, runtime)
-        response = await self.request(body, plan.params, headers=plan.headers, server_wait=False, retry_body=retry_body)
+        response = await self.request(
+            body,
+            plan.params,
+            headers=plan.headers,
+            server_wait=False,
+            retry_body=retry_body,
+            retryable=runtime.retryable,
+        )
         try:
             logger.debug("Context insert response code: %d", response.status)
             return summary_from_headers(response.headers)
@@ -509,7 +526,7 @@ class HttpAsyncBackend:
     ) -> dict[str, Any]:
         """Send a raw insert payload, returning the response summary."""
         plan = plan_raw_insert_request(table, column_names, insert_block, fmt, compression, runtime, transport_settings)
-        response = await self.request(plan.body, plan.params, plan.headers, server_wait=False)
+        response = await self.request(plan.body, plan.params, plan.headers, server_wait=False, retryable=runtime.retryable)
         try:
             logger.debug("Raw insert response code: %d", response.status)
             return summary_from_headers(response.headers)
@@ -527,7 +544,15 @@ class HttpAsyncBackend:
     ) -> bytes:
         """Execute an already-bound raw query, returning the decompressed response body."""
         plan = plan_raw_query_request(final_query, bind_params, external_data, runtime, self.form_encode_query_params, transport_settings)
-        response = await self.request(plan.body, plan.params, headers=plan.headers, files=_plan_raw_files(plan), retries=runtime.retries)
+        files = _plan_raw_files(plan)
+        response = await self.request(
+            plan.body,
+            plan.params,
+            headers=plan.headers,
+            files=files,
+            retries=runtime.retries,
+            retryable=_read_request_retryable(runtime.retryable, plan.body, plan.params, self.client_settings, files),
+        )
         try:
             response_data = await response.read()
             encoding = response.headers.get("Content-Encoding")
@@ -548,14 +573,16 @@ class HttpAsyncBackend:
     ) -> aiohttp.ClientResponse:
         """Execute an already-bound raw query, returning the streaming response."""
         plan = plan_raw_query_request(final_query, bind_params, external_data, runtime, self.form_encode_query_params, transport_settings)
+        files = _plan_raw_files(plan)
         return await self.request(
             plan.body,
             plan.params,
             headers=plan.headers,
-            files=_plan_raw_files(plan),
+            files=files,
             stream=True,
             server_wait=False,
             retries=runtime.retries,
+            retryable=_read_request_retryable(runtime.retryable, plan.body, plan.params, self.client_settings, files),
         )
 
     async def execute_command(
@@ -569,7 +596,15 @@ class HttpAsyncBackend:
     ) -> CommandExecution:
         """Execute an already-bound command, returning its decompressed body and summary."""
         plan = plan_command_request(bound_cmd, bind_params, data, external_data, runtime, transport_settings)
-        response = await self.request(plan.payload, plan.params, plan.headers, files=plan.form_files, method=plan.method, server_wait=False)
+        response = await self.request(
+            plan.payload,
+            plan.params,
+            plan.headers,
+            files=plan.form_files,
+            method=plan.method,
+            server_wait=False,
+            retryable=_read_request_retryable(runtime.retryable, plan.payload, plan.params, self.client_settings, plan.form_files),
+        )
         try:
             body = await response.read()
             encoding = response.headers.get("Content-Encoding")
@@ -593,6 +628,7 @@ class HttpAsyncBackend:
         server_wait=True,
         retries: int = 0,
         retry_body: Callable[[], Awaitable[Any]] | None = None,
+        retryable: bool | None = None,
     ) -> aiohttp.ClientResponse:
         lease = self.session_lease
         if lease is None or lease.session.closed:
@@ -612,6 +648,8 @@ class HttpAsyncBackend:
                 await self._rotate_connections(background=True)
 
         final_params = dict_copy(self.client_settings, params)
+        if retryable is None:
+            retryable = _request_is_read_only(data, final_params, files)
         if server_wait:
             final_params.setdefault("wait_end_of_query", "1")
         if self.send_progress:
@@ -697,7 +735,7 @@ class HttpAsyncBackend:
                     return response
 
                 if response.status in retryable_http_statuses:
-                    if attempts > retries:
+                    if not retryable or attempts > retries:
                         await self.error_handler(response, retried=True)
                     else:
                         logger.debug("Retrying request with status code %s (attempt %s/%s)", response.status, attempts, retries + 1)
@@ -732,11 +770,8 @@ class HttpAsyncBackend:
                         logger.debug("Retrying after connection timeout (attempt 1/2)")
                         await asyncio.sleep(0.1)
                         continue
-                elif not session.closed and _is_retryable_async_remote_close(e):
-                    # Always allow at least one retry on a clean connection error so a single stale
-                    # keep-alive socket doesn't surface to the caller, and additionally honor the
-                    # retries budget when it is larger (e.g. query_retries for reads), so that
-                    # bursts of stale pooled connections can be drained before giving up.
+                elif retryable and not session.closed and _is_retryable_async_remote_close(e):
+                    # A remote close can occur after execution. Only replay eligible operations.
                     max_attempts = max(2, retries + 1)
                     if attempts < max_attempts:
                         if retry_body is not None:

@@ -135,6 +135,8 @@ with engine.connect() as conn:
 
 Errors raised by the driver through a SQLAlchemy connection use the DB-API classes exported from `clickhouse_connect.dbapi`. They are the same class objects as the corresponding classes in `clickhouse_connect.driver.exceptions`, so SQLAlchemy wraps them in the matching `sqlalchemy.exc.DBAPIError` subclass. `StreamFailureError` is an `OperationalError` and is wrapped as `sqlalchemy.exc.OperationalError`.
 
+SQL execution follows the driver's [HTTP retry policy](/integrations/language-clients/python/driver-api#http-retries). Native bulk inserts use the [insert retry policy](/integrations/language-clients/python/advanced-inserting#insert-retries-and-deduplication).
+
 If caller cancellation can interrupt an explicit `AsyncConnection.invalidate()`, run invalidation in an owned task and wait for that task before propagating cancellation. This lets SQLAlchemy finish its connection-record bookkeeping:
 
 ```python

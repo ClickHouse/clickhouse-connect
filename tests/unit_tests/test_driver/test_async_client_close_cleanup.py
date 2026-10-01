@@ -331,7 +331,7 @@ async def test_cancelled_explicit_rotation_does_not_retry_request_from_closed_se
         retry_calls += 1
         return {"request": "replayed sibling"}
 
-    sibling_task = asyncio.create_task(backend.request({"request": "sibling"}, {}, retry_body=retry_body))
+    sibling_task = asyncio.create_task(backend.request({"request": "sibling"}, {}, retry_body=retry_body, retryable=True))
     await asyncio.wait_for(old_session.request_started.wait(), timeout=1)
 
     rotation_task = asyncio.create_task(backend.close_connections())
@@ -357,13 +357,14 @@ class _StaleOnceSession(_RequestSession):
 
 
 @pytest.mark.asyncio
-async def test_remote_close_on_open_session_still_retries(monkeypatch):
+@pytest.mark.parametrize("data, params", [(b"SELECT 13", {}), ({}, {"query": "SELECT 13"})])
+async def test_remote_close_on_open_session_still_retries(monkeypatch, data, params):
     backend = _build_backend()
     session = _StaleOnceSession("active")
     backend.session_lease = SessionLease(session)
     monkeypatch.setattr(common, "get_setting", lambda name: None)
 
-    response = await backend.request({"request": "query"}, {})
+    response = await backend.request(data, params)
 
     assert response.origin == "active"
     assert len(session.request_data) == 2
