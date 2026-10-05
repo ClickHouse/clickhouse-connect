@@ -3,6 +3,7 @@ from types import MappingProxyType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import sqlalchemy as sa
 from alembic.autogenerate import render
 from alembic.autogenerate.api import AutogenContext, render_python_code
 from alembic.ddl.impl import DefaultImpl
@@ -1007,7 +1008,7 @@ def test_positional_engine_autogenerate_render():
     )
 
     rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(table))
-    assert "clickhouse_engine=MergeTree(order_by='id')" in rendered
+    assert "clickhousedb_engine=MergeTree(order_by='id')" in rendered
     assert "nullable=True" not in rendered
 
 
@@ -1029,11 +1030,11 @@ def test_dictionary_autogenerate_render():
     )
 
     rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(dictionary))
-    assert "clickhouse_table_type='dictionary'" in rendered
-    assert "clickhouse_dictionary_source=" in rendered
-    assert "clickhouse_dictionary_layout='FLAT'" in rendered
-    assert "clickhouse_dictionary_lifetime='MIN 0 MAX 10'" in rendered
-    assert "clickhouse_dictionary_primary_key='id'" in rendered
+    assert "clickhousedb_table_type='dictionary'" in rendered
+    assert "clickhousedb_dictionary_source=" in rendered
+    assert "clickhousedb_dictionary_layout='FLAT'" in rendered
+    assert "clickhousedb_dictionary_lifetime='MIN 0 MAX 10'" in rendered
+    assert "clickhousedb_dictionary_primary_key='id'" in rendered
     assert "nullable=True" not in rendered
 
 
@@ -1069,11 +1070,51 @@ def test_dictionary_drop_autogenerate_render():
 
     rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(dictionary).reverse())
     assert "op.drop_table('dim_lookup'" in rendered
-    assert "clickhouse_table_type='dictionary'" in rendered
-    assert "clickhouse_dictionary_source=" in rendered
-    assert "clickhouse_dictionary_layout='FLAT'" in rendered
-    assert "clickhouse_dictionary_lifetime='MIN 0 MAX 10'" in rendered
-    assert "clickhouse_dictionary_primary_key='id'" in rendered
+    assert "clickhousedb_table_type='dictionary'" in rendered
+    assert "clickhousedb_dictionary_source=" in rendered
+    assert "clickhousedb_dictionary_layout='FLAT'" in rendered
+    assert "clickhousedb_dictionary_lifetime='MIN 0 MAX 10'" in rendered
+    assert "clickhousedb_dictionary_primary_key='id'" in rendered
+
+
+@pytest.mark.parametrize("prefix", ["clickhouse", "clickhousedb"])
+@pytest.mark.parametrize("operation", ["create", "add", "drop"])
+def test_schema_options_render_canonical_and_execute_offline(prefix, operation):
+    table = Table(
+        "events",
+        MetaData(),
+        Column("id", Integer, **{prefix + "_codec": "ZSTD(3)"}),
+        **{prefix + "_engine": engines.Memory()},
+    )
+    create_op = ops.CreateTableOp.from_table(table)
+    migration_op = {
+        "create": create_op,
+        "add": ops.AddColumnOp("events", table.c.id),
+        "drop": create_op.reverse(),
+    }[operation]
+    context = MigrationContext.configure(dialect=ClickHouseDialect())
+    autogen_context = AutogenContext(
+        context,
+        opts={"sqlalchemy_module_prefix": "sa.", "alembic_module_prefix": "op.", "user_module_prefix": None},
+    )
+    rendered = render.render_op_text(autogen_context, migration_op)
+    assert "clickhouse_engine" not in rendered
+    assert "clickhouse_codec" not in rendered
+    if operation in ("create", "drop"):
+        assert "clickhousedb_engine=Memory()" in rendered
+    if operation in ("create", "add"):
+        assert "clickhousedb_codec='ZSTD(3)'" in rendered
+
+    buffer = StringIO()
+    offline = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"as_sql": True, "output_buffer": buffer})
+    exec(rendered, {"sa": sa, "op": Operations(offline), "Memory": engines.Memory})
+    sql = buffer.getvalue().strip()
+    if operation == "create":
+        assert sql == "CREATE TABLE `events` (`id` INTEGER CODEC(ZSTD(3))) Engine Memory;"
+    elif operation == "add":
+        assert sql == "ALTER TABLE `events` ADD COLUMN `id` INTEGER CODEC(ZSTD(3));"
+    else:
+        assert sql == "DROP TABLE `events`;"
 
 
 def test_include_object():
@@ -1172,7 +1213,7 @@ def test_non_clickhouse_create_table_render_keeps_nullable():
     rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(table))
     assert "sa.Column('id', sa.Integer(), nullable=False)" in rendered
     assert "sa.Column('name', sa.String(length=32), nullable=True)" in rendered
-    assert "clickhouse_engine" not in rendered
+    assert "clickhousedb_engine" not in rendered
 
 
 def test_non_clickhouse_drop_table_render_is_unmodified():

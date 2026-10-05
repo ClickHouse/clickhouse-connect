@@ -482,7 +482,7 @@ def test_alembic_autogenerate_positional_engine_live(test_engine: Engine, test_d
         assert revision is not None
         assert not isinstance(revision, list)
         contents = Path(revision.path).read_text(encoding="utf-8")
-        assert "clickhouse_engine=MergeTree(order_by='id', settings={'index_granularity': 1024})" in contents
+        assert "clickhousedb_engine=MergeTree(order_by='id', settings={'index_granularity': 1024})" in contents
         command.upgrade(config, "head")
 
     with test_engine.begin() as conn:
@@ -501,12 +501,12 @@ def test_alembic_autogenerate_positional_engine_live(test_engine: Engine, test_d
     [
         (
             lambda amount: Memory({"settings": {"max_rows_to_keep": 13}}),
-            "clickhouse_engine=Memory(settings={'max_rows_to_keep': 13})",
+            "clickhousedb_engine=Memory(settings={'max_rows_to_keep': 13})",
             ("Memory", "max_rows_to_keep = 13"),
         ),
         (
             lambda amount: SummingMergeTree("id", columns=[amount, "n_tx"]),
-            "clickhouse_engine=SummingMergeTree(order_by='id', columns='(`net amount`, `n_tx`)')",
+            "clickhousedb_engine=SummingMergeTree(order_by='id', columns='(`net amount`, `n_tx`)')",
             ("SummingMergeTree", "`net amount`", "n_tx", "ORDER BY id"),
         ),
     ],
@@ -803,11 +803,11 @@ def test_alembic_autogenerate_dictionary_round_trip_live(test_engine: Engine, te
         config = _alembic_config(tmp_path, conn, metadata, frozenset({dictionary_name}))
         first_revision = command.revision(config, message="create dictionary", autogenerate=True)
         contents = Path(first_revision.path).read_text(encoding="utf-8")
-        assert "clickhouse_table_type='dictionary'" in contents
-        assert "clickhouse_dictionary_source=" in contents
-        assert "clickhouse_dictionary_layout='FLAT'" in contents
-        assert "clickhouse_dictionary_lifetime='MIN 0 MAX 10'" in contents
-        assert "clickhouse_dictionary_primary_key='id'" in contents
+        assert "clickhousedb_table_type='dictionary'" in contents
+        assert "clickhousedb_dictionary_source=" in contents
+        assert "clickhousedb_dictionary_layout='FLAT'" in contents
+        assert "clickhousedb_dictionary_lifetime='MIN 0 MAX 10'" in contents
+        assert "clickhousedb_dictionary_primary_key='id'" in contents
 
         command.upgrade(config, "head")
 
@@ -846,7 +846,7 @@ def test_alembic_dictionary_downgrade_uses_drop_dictionary_live(test_engine: Eng
         revision = command.revision(config, message="create dictionary", autogenerate=True)
         contents = Path(revision.path).read_text(encoding="utf-8")
         assert "op.drop_table" in contents
-        assert "clickhouse_table_type='dictionary'" in contents
+        assert "clickhousedb_table_type='dictionary'" in contents
         command.upgrade(config, "head")
         command.downgrade(config, "base")
 

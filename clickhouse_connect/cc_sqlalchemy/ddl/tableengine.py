@@ -205,8 +205,8 @@ class TableEngine(SchemaItem):
 
     def _set_parent(self, parent, **_kwargs):
         parent.engine = self
-        if parent.kwargs.get("clickhouse_engine") is None and parent.kwargs.get("clickhousedb_engine") is None:
-            parent.kwargs["clickhouse_engine"] = self
+        if dict(parent.kwargs).get("clickhouse_engine") is None and parent.kwargs.get("clickhousedb_engine") is None:
+            parent.kwargs["clickhousedb_engine"] = self
 
 
 class Memory(TableEngine):
