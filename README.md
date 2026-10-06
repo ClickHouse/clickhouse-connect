@@ -51,6 +51,12 @@ ClickHouse Connect includes a lightweight SQLAlchemy dialect implementation focu
 and **SQLAlchemy Core**. The synchronous dialect supports SQLAlchemy 1.4 and 2.x. SQLAlchemy 1.4 compatibility is
 maintained because Apache Superset currently requires `sqlalchemy>=1.4,<2`.
 
+Use `clickhousedb://` or `clickhousedb+connect://` for synchronous connections. When
+`clickhouse-sqlalchemy` is also installed, importing our dialect preserves its
+`clickhouse://` registration.
+See the [migration guide](clickhouse_connect/cc_sqlalchemy/MIGRATING_FROM_CLICKHOUSE_SQLALCHEMY.md)
+for URL and schema-option compatibility.
+
 Async SQLAlchemy usage is available with SQLAlchemy 2.0.44 and later. Install
 `clickhouse-connect[sqlalchemy-async]` and use `clickhousedb+async://` with `create_async_engine()`. Results are
 buffered. Server-side cursors are not supported. Always await the async engine's `dispose()` method during shutdown

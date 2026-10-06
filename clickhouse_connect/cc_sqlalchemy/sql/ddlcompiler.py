@@ -37,13 +37,18 @@ class ClickHouseDDLHelper:
     def get_option(cls, obj: Any, name: str) -> Any:
         kwargs = getattr(obj, "kwargs", None)
         if kwargs is not None:
+            # Legacy defaults may belong to another dialect.
+            alias_kwargs = dict(kwargs)
             for prefix in cls.dialect_names:
+                source = alias_kwargs if prefix == "clickhouse" else kwargs
                 key = f"{prefix}_{name}"
-                if key in kwargs and kwargs[key] is not None:
-                    return kwargs[key]
+                if source.get(key) is not None:
+                    return source[key]
         dialect_options = getattr(obj, "dialect_options", None)
         if dialect_options:
             for prefix in cls.dialect_names:
+                if prefix == "clickhouse":
+                    continue
                 options = dialect_options.get(prefix)
                 if options and options.get(name) is not None:
                     return options.get(name)

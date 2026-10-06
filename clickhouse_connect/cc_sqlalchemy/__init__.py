@@ -3,6 +3,7 @@ from sqlalchemy.dialects import registry
 
 from clickhouse_connect import driver_name
 from clickhouse_connect.cc_sqlalchemy import types
+from clickhouse_connect.cc_sqlalchemy._compat import register_clickhouse_alias
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import schema_types
 from clickhouse_connect.cc_sqlalchemy.ddl import tableengine as engines
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
@@ -10,13 +11,15 @@ from clickhouse_connect.cc_sqlalchemy.sql import ClickHouseSelect, cte, final, s
 from clickhouse_connect.cc_sqlalchemy.sql.clauses import ArrayJoin, ClickHouseJoin, Lambda, array_join, ch_join, json_subcolumn
 from clickhouse_connect.dbapi.cursor import Cursor
 
-registry.register("clickhouse", "clickhouse_connect.cc_sqlalchemy.dialect", "ClickHouseDialect")
+registry.register("clickhousedb", "clickhouse_connect.cc_sqlalchemy.dialect", "ClickHouseDialect")
+registry.register("clickhousedb.connect", "clickhouse_connect.cc_sqlalchemy.dialect", "ClickHouseDialect")
 registry.register("clickhouse.connect", "clickhouse_connect.cc_sqlalchemy.dialect", "ClickHouseDialect")
 registry.register("clickhouse.async", "clickhouse_connect.cc_sqlalchemy.asyncio", "ClickHouseAsyncDialect")
 registry.register("clickhousedb.async", "clickhouse_connect.cc_sqlalchemy.asyncio", "ClickHouseAsyncDialect")
 
 dialect_name = driver_name
 ischema_names = schema_types
+register_clickhouse_alias()
 
 CH_DIALECT = dialect_name
 ClickhouseDictionary = Dictionary
