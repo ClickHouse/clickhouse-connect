@@ -5,6 +5,8 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+## 1.10.0, 2026-10-07
+
 ### Improvements
 
 - The DB-API `Connection` and `Cursor` now support the context manager protocol, so `with connect(...) as connection:` and `with connection.cursor() as cursor:` work. Both call `close()` when the block exits, including when it raises. Connection contexts don't manage transactions. The DB-API `commit` and `rollback` remain no-ops.
