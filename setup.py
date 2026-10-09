@@ -81,7 +81,7 @@ def run_setup():
         url="https://github.com/ClickHouse/clickhouse-connect",
         packages=find_packages(exclude=["tests*"]),
         package_data={"clickhouse_connect": ["py.typed"]},
-        python_requires=">=3.10,<3.15",
+        python_requires=">=3.10,<3.16",
         license_expression="Apache-2.0",
         install_requires=[
             "certifi",
@@ -121,6 +121,7 @@ def run_setup():
             "Programming Language :: Python :: 3.12",
             "Programming Language :: Python :: 3.13",
             "Programming Language :: Python :: 3.14",
+            "Programming Language :: Python :: 3.15",
         ],
         ext_modules=c_modules,
     )
