@@ -14,7 +14,7 @@ on:
 
 env:
   # Keep wheel selection aligned with setup.py's Python support range.
-  CIBW_PROJECT_REQUIRES_PYTHON: '>=3.10,<3.15'
+  CIBW_PROJECT_REQUIRES_PYTHON: '>=3.10,<3.16'
 
 jobs:
   build_x86_manylinux_wheels:

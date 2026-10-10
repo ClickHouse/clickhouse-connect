@@ -147,6 +147,7 @@ jobs:
           - '3.12'
           - '3.13'
           - '3.14'
+          - '3.15'
         clickhouse-version: ${{ fromJSON(needs.clickhouse-versions.outputs.matrix) }}
         use-c:
           - '1'
@@ -163,9 +164,13 @@ jobs:
             clickhouse-version: ${{ needs.clickhouse-versions.outputs.default }}
             use-c: '1'
             python-gil: '0'
+          - python-version: '3.15t'
+            clickhouse-version: ${{ needs.clickhouse-versions.outputs.default }}
+            use-c: '1'
+            python-gil: '0'
 
-    # The free-threaded job is non-blocking while support is experimental
-    continue-on-error: ${{ matrix.python-version == '3.14t' }}
+    # The free-threaded jobs are non-blocking while support is experimental
+    continue-on-error: ${{ endsWith(matrix.python-version, 't') }}
     name: Local Tests Py=${{ matrix.python-version }} CH=${{ matrix.clickhouse-version }} C=${{ matrix.use-c }}
     steps:
       - name: Checkout
@@ -183,9 +188,11 @@ jobs:
         run:  python -m pip install --upgrade pip
       - name: Install Test Dependencies
         # polars ships no free-threaded wheels and its sdist needs a long Rust nightly
-        # build, so it is excluded on 3.14t and its tests skip
+        # build, so it is excluded on free-threaded builds and its tests skip
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          if [ "${{ matrix.python-version }}" = "3.14t" ]; then
+          if [[ "$PYTHON_VERSION" == *t ]]; then
             grep -v '^polars' tests/test_requirements.txt > /tmp/test_requirements.txt
             pip install -r /tmp/test_requirements.txt
           else
