@@ -15,6 +15,7 @@ from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, _pla
 from clickhouse_connect.driver._backend.http_sync import HttpSyncBackend, _plan_fields
 from clickhouse_connect.driver._backend.httpcommon import (
     QueryRequestPlan,
+    accepted_encoding,
     apply_http_server_settings,
     columns_only_meta,
     plan_command_request,
@@ -575,6 +576,108 @@ def test_fractional_timeout_produces_integer_progress_interval():
     apply_http_server_settings(client, transport, None, 19.25)
 
     assert transport.progress_interval == "14250"
+
+
+def make_transport(compression=None):
+    return SimpleNamespace(
+        compression=compression,
+        progress_interval=None,
+        send_comp_setting=False,
+        send_progress=None,
+    )
+
+
+def make_apply_client(writable=True, initial_settings=None):
+    client = Mock()
+    client._initial_settings = initial_settings
+    client._setting_status.return_value = SimpleNamespace(is_set=True, is_writable=writable)
+    return client
+
+
+class TestAcceptedEncoding:
+    """accepted_encoding mirrors the server's chooseHTTPCompressionMethod:
+    first preference match with a positive q-value wins, the wildcard covers
+    unlisted codings, and q=0 disables a coding."""
+
+    @pytest.mark.parametrize(
+        ("accept_encoding", "expected"),
+        [
+            ("lz4", "lz4"),
+            ("lz4,zstd", "zstd"),
+            ("lz4,zstd,gzip,deflate", "zstd"),
+            ("zstd", "zstd"),
+            ("lz4,gzip,deflate", "lz4"),
+            ("gzip,deflate", "gzip"),
+            ("deflate", "deflate"),
+            ("*", "zstd"),
+            ("*,lz4;q=0", "zstd"),
+            ("gzip;q=0, lz4", "lz4"),
+            ("lz4;q=0", None),
+            ("br", "br"),
+            ("br,lz4", "br"),
+            ("", None),
+            (None, None),
+            ("identity", None),
+        ],
+    )
+    def test_server_negotiation_outcomes(self, accept_encoding, expected):
+        assert accepted_encoding(accept_encoding) == expected
+
+
+class TestLz4CompressionLevelDefault:
+    """When lz4 wins Accept-Encoding negotiation, apply_http_server_settings
+    defaults http_zlib_compression_level to 1 (fast LZ4) so the server does
+    not pay LZ4HC prices at its default level 3. The default is skipped when
+    the user supplied the setting, when the server reports it readonly, or
+    when a better codec wins negotiation (level 1 would weaken zstd)."""
+
+    def test_lz4_accept_defaults_level_to_one(self):
+        client = make_apply_client()
+        transport = make_transport()
+        apply_http_server_settings(client, transport, "lz4", 20)
+        assert transport.compression == "lz4"
+        client.set_client_setting.assert_called_once_with("http_zlib_compression_level", "1")
+
+    def test_negotiated_lz4_without_zstd_defaults_level_to_one(self):
+        # compress=True advertises every codec the client has; without zstd/br
+        # installed the server still picks lz4 over gzip/deflate.
+        client = make_apply_client()
+        transport = make_transport()
+        apply_http_server_settings(client, transport, "lz4,gzip,deflate", 20)
+        client.set_client_setting.assert_called_once_with("http_zlib_compression_level", "1")
+
+    def test_zstd_wins_no_level_default(self):
+        client = make_apply_client()
+        transport = make_transport()
+        apply_http_server_settings(client, transport, "lz4,zstd,gzip,deflate", 20)
+        client.set_client_setting.assert_not_called()
+
+    def test_no_compression_no_level_default(self):
+        client = make_apply_client()
+        transport = make_transport()
+        apply_http_server_settings(client, transport, None, 20)
+        client.set_client_setting.assert_not_called()
+
+    def test_user_supplied_level_is_not_overridden(self):
+        client = make_apply_client(initial_settings={"http_zlib_compression_level": "6"})
+        transport = make_transport()
+        apply_http_server_settings(client, transport, "lz4", 20)
+        client.set_client_setting.assert_not_called()
+
+    def test_readonly_level_setting_not_sent(self):
+        client = make_apply_client(writable=False)
+        transport = make_transport()
+        apply_http_server_settings(client, transport, "lz4", 20)
+        client.set_client_setting.assert_not_called()
+
+    def test_wildcard_accept_encoding_not_marked_lz4(self):
+        # '*' makes the server pick zstd (its top preference) even when lz4 is
+        # explicitly listed later in the header, so no level default is sent:
+        # forcing level 1 would weaken zstd compression.
+        client = make_apply_client()
+        transport = make_transport()
+        apply_http_server_settings(client, transport, "*,lz4,gzip,deflate", 20)
+        client.set_client_setting.assert_not_called()
 
 
 class TestBackendContracts:

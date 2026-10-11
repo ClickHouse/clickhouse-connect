@@ -186,6 +186,48 @@ def negotiate_compression(compress: bool | str) -> tuple[str | None, str | None]
     return None, None
 
 
+_HTTP_COMPRESSION_PREFERENCE = ("zstd", "br", "lz4", "gzip", "deflate")
+
+
+def accepted_encoding(accept_encoding: str | None) -> str | None:
+    """Determine the response encoding the ClickHouse server will choose for an
+    Accept-Encoding header value, mirroring its chooseHTTPCompressionMethod.
+
+    The server walks its preference order (zstd, br, lz4, gzip, deflate) and
+    returns the first coding the client listed with a positive q-value (or that
+    the ``*`` wildcard covers), so the client can predict the winner locally.
+    """
+    if not accept_encoding:
+        return None
+    codings: dict[str, float] = {}
+    wildcard: float | None = None
+    for token in accept_encoding.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        parts = token.split(";")
+        coding = parts[0].strip().lower()
+        q_value = 1.0
+        for part in parts[1:]:
+            part = part.strip().lower()
+            if part.startswith("q="):
+                try:
+                    q_value = float(part[2:])
+                except ValueError:
+                    q_value = 1.0
+        if coding == "*":
+            wildcard = q_value
+        else:
+            codings[coding] = q_value
+    for encoding in _HTTP_COMPRESSION_PREFERENCE:
+        if encoding in codings:
+            if codings[encoding] > 0.0:
+                return encoding
+        elif wildcard is not None and wildcard > 0.0:
+            return encoding
+    return None
+
+
 def decompress_response(data: bytes, encoding: str | None) -> bytes:
     """Decompress a fully-read response body based on its Content-Encoding header."""
     if not encoding or encoding == "identity":
@@ -253,6 +295,21 @@ def apply_http_server_settings(
     transport.send_comp_setting = not comp_setting.is_set and comp_setting.is_writable
     if comp_setting.is_set or comp_setting.is_writable:
         transport.compression = compression
+    # The server compresses lz4 HTTP responses with LZ4HC from compression
+    # level 2, and its default http_zlib_compression_level is 3, so an lz4
+    # response spends several times longer compressing than fast LZ4 for a few
+    # percent smaller payload. Default to level 1 (fast lz4) only when lz4 is
+    # the encoding the server will actually choose, and only if the user has
+    # not supplied the setting themselves (client defaults must not override
+    # constructor, per-query, or set_client_setting values).
+    level_setting = client._setting_status("http_zlib_compression_level")
+    if (
+        transport.compression
+        and accepted_encoding(transport.compression) == "lz4"
+        and level_setting.is_writable
+        and "http_zlib_compression_level" not in (client._initial_settings or {})
+    ):
+        client.set_client_setting("http_zlib_compression_level", "1")
     send_setting = client._setting_status("send_progress_in_http_headers")
     transport.send_progress = not send_setting.is_set and send_setting.is_writable
     if (send_setting.is_set or send_setting.is_writable) and client._setting_status("http_headers_progress_interval_ms").is_writable:

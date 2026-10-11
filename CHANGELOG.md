@@ -5,6 +5,9 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- HTTP clients now default `http_zlib_compression_level` to `1` when `lz4` is the response encoding the server will actually choose. The server compresses `lz4` responses with high-compression LZ4 from level 2 and its default level is `3`, so `compress="lz4"` responses (and any environment where zstd is unavailable, so the server negotiates `lz4` from the advertised list) spent up to ~2x longer on the server than fast LZ4 for a few percent smaller payload. The default is not sent when the user supplied the setting, when the server reports it readonly, or when a stronger codec (zstd/br) wins Accept-Encoding negotiation, since level `1` would weaken those. Closes [#1088](https://github.com/ClickHouse/clickhouse-connect/issues/1088).
 ## 1.10.0, 2026-10-07
 
 ### Improvements
