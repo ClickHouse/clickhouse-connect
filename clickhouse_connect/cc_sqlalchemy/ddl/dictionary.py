@@ -10,19 +10,19 @@ def _pop_dictionary_kwargs(kwargs):
 
 def _apply_dictionary_metadata(table, popped):
     """Set dialect-prefixed kwargs on the table after construction."""
-    table.kwargs["clickhouse_table_type"] = "dictionary"
+    table.kwargs["clickhousedb_table_type"] = "dictionary"
     if popped.get("source") is not None:
         table.source = popped["source"]
-        table.kwargs["clickhouse_dictionary_source"] = popped["source"]
+        table.kwargs["clickhousedb_dictionary_source"] = popped["source"]
     if popped.get("layout") is not None:
         table.layout = popped["layout"]
-        table.kwargs["clickhouse_dictionary_layout"] = popped["layout"]
+        table.kwargs["clickhousedb_dictionary_layout"] = popped["layout"]
     if popped.get("lifetime") is not None:
         table.lifetime = popped["lifetime"]
-        table.kwargs["clickhouse_dictionary_lifetime"] = popped["lifetime"]
+        table.kwargs["clickhousedb_dictionary_lifetime"] = popped["lifetime"]
     if popped.get("primary_key") is not None:
         table.primary_key_def = popped["primary_key"]
-        table.kwargs["clickhouse_dictionary_primary_key"] = popped["primary_key"]
+        table.kwargs["clickhousedb_dictionary_primary_key"] = popped["primary_key"]
 
 
 class Dictionary(Table):

@@ -10,6 +10,7 @@ from sqlalchemy.sql.sqltypes import TupleType
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy import dialect_name, ischema_names
+from clickhouse_connect.cc_sqlalchemy._schema import COLUMN_OPTIONS, TABLE_OPTIONS
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import (
     _datetime64_bind_signature,
     _datetime64_query_value,
@@ -59,28 +60,8 @@ class ClickHouseDialect(DefaultDialect):
     ischema_names = ischema_names
     inspector = ChInspector
     construct_arguments = [
-        (
-            sa_schema.Table,
-            {
-                "engine": None,
-                "table_type": None,
-                "dictionary_source": None,
-                "dictionary_layout": None,
-                "dictionary_lifetime": None,
-                "dictionary_primary_key": None,
-            },
-        ),
-        (
-            sa_schema.Column,
-            {
-                "materialized": None,
-                "alias": None,
-                "codec": None,
-                "ttl": None,
-                "after": None,
-                "settings": None,
-            },
-        ),
+        (sa_schema.Table, dict.fromkeys(TABLE_OPTIONS)),
+        (sa_schema.Column, dict.fromkeys(COLUMN_OPTIONS)),
     ]
 
     def __init__(self, server_side_params: bool = False, **kwargs):

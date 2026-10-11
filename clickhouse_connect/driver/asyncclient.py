@@ -32,6 +32,7 @@ from clickhouse_connect.driver._backend.http_async import (
     release_lease,
 )
 from clickhouse_connect.driver._backend.httpcommon import (
+    _request_is_read_only,
     add_integration_tag,
     apply_http_server_settings,
     auth_failed_ex_code,  # noqa: F401  (compatibility re-export)
@@ -47,6 +48,7 @@ from clickhouse_connect.driver._backend.operations import CommandOp, Operation, 
 from clickhouse_connect.driver._backend.orchestration import init_sequence, insert_context_sequence, run_async
 from clickhouse_connect.driver.binding import (
     _qualified_table,
+    _query_is_read_only,
     bind_query,
     use_form_encoding,  # noqa: F401  (compatibility re-export)
 )
@@ -507,6 +509,7 @@ class AsyncClient(Client):
             protocol_version=self.protocol_version,
             settings=self._validate_settings(context.settings),
             retries=self.query_retries,
+            retryable=_query_is_read_only(context.final_query),
         )
         execution = await self._backend.execute_query(context, runtime, self._prep_query(context))
         if execution.columns is not None:
@@ -798,6 +801,7 @@ class AsyncClient(Client):
         runtime = QueryRuntime(
             database=self.database if use_database else None,
             settings=self._validate_settings(settings or {}),
+            retryable=_request_is_read_only(data, {"query": bound_cmd}),
         )
         execution = await self._backend.execute_command(bound_cmd, bind_params, data, external_data, runtime, transport_settings)
         if execution.body:
@@ -1298,7 +1302,7 @@ class AsyncClient(Client):
             active_source.start_producer()
             return active_source.async_generator()
 
-        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(context.settings))
+        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(context.settings), retryable=True)
         caught: BaseException | None = None
         try:
             try:
@@ -1386,7 +1390,7 @@ class AsyncClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(settings or {}))
+        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(settings or {}), retryable=True)
         summary = await self._backend.execute_raw_insert(
             table, column_names, insert_block, fmt if fmt else self._write_format, compression, runtime, transport_settings
         )

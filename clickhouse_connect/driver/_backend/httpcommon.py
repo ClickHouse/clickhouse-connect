@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 from clickhouse_connect import common
 from clickhouse_connect.driver._backend.models import QueryRuntime
-from clickhouse_connect.driver.binding import _query_has_trailing_limit_zero, quote_identifier, use_form_encoding
+from clickhouse_connect.driver.binding import _query_has_trailing_limit_zero, _query_is_read_only, quote_identifier, use_form_encoding
 from clickhouse_connect.driver.common import ShowClickHouseErrors, coerce_bool, dict_copy
 from clickhouse_connect.driver.compression import _zstd_decompress, available_compression
 from clickhouse_connect.driver.exceptions import (
@@ -48,6 +48,40 @@ ex_header = "X-ClickHouse-Exception-Code"
 ex_tag_header = "X-ClickHouse-Exception-Tag"
 auth_failed_ex_code = "516"  # ClickHouse AUTHENTICATION_FAILED
 retryable_http_statuses = (429, 503, 504)
+
+
+def _request_is_read_only(data: Any, params: Mapping[str, Any], fields: Mapping[str, Any] | None = None) -> bool:
+    """Classify SQL for callers of the legacy raw-request interface."""
+    query = params.get("query", "")
+    if fields:
+        form_query = fields.get("query", "")
+        if isinstance(form_query, tuple):
+            form_query = form_query[1] if form_query[0] is None else ""
+        if form_query:
+            if query:
+                return False
+            query = form_query
+    elif data is not None and not (isinstance(data, dict) and not data):
+        if not isinstance(data, (str, bytes, bytearray)):
+            return False
+        if isinstance(data, (bytes, bytearray)):
+            data = data.decode("utf-8", errors="surrogateescape")
+        query = f"{query}\n{data}" if query else data
+    return isinstance(query, (str, bytes)) and _query_is_read_only(query)
+
+
+def _read_request_retryable(
+    retryable: bool,
+    data: Any,
+    params: Mapping[str, Any],
+    client_params: Mapping[str, Any],
+    fields: Mapping[str, Any] | None = None,
+) -> bool:
+    """Recheck read eligibility when HTTP fields can replace or prefix the SQL."""
+    if retryable and (fields or params.get("query") or client_params.get("query")):
+        return _request_is_read_only(data, {**client_params, **params}, fields)
+    return retryable
+
 
 # A removed comment leaves a space behind, so the gap before the 0 is not always a single space
 columns_only_re = re.compile(r"LIMIT\s+0\s*(?:;\s*)*$", re.IGNORECASE)

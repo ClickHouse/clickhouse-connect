@@ -371,11 +371,14 @@ class QueryResult(Closable):
     @property
     def result_rows(self) -> Matrix:
         if self._result_rows is None:
-            result = []
-            with self.row_block_stream as stream:
-                for block in stream:
-                    result.extend(block)
-            self._result_rows = result
+            if self._result_columns is not None:
+                self._result_rows = list(zip(*self._result_columns))
+            else:
+                result = []
+                with self.row_block_stream as stream:
+                    for block in stream:
+                        result.extend(block)
+                self._result_rows = result
         return self._result_rows
 
     @property

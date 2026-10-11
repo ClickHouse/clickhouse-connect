@@ -9,6 +9,7 @@ from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.sql.elements import TextClause
 
+from clickhouse_connect.cc_sqlalchemy._schema import COLUMN_OPTIONS, TABLE_OPTIONS, canonical_schema_kwargs
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import build_engine
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
@@ -197,19 +198,19 @@ class ChInspector(Inspector):
                 if (include_columns and name not in include_columns) or (exclude_columns and name in exclude_columns):
                     continue
                 col_type = col.pop("type")
-                col_args = {key: value for key, value in col.items() if value is not None}
+                col_args = canonical_schema_kwargs({key: value for key, value in col.items() if value is not None}, COLUMN_OPTIONS)
                 table.append_column(sa_schema.Column(name, col_type, **col_args))
             if table_metadata.engine == "Dictionary":
                 dictionary_metadata = get_dictionary_metadata(connection, table.name, schema)
                 table.comment = dictionary_metadata.pop("comment", None)
-                for key, value in dictionary_metadata.items():
+                for key, value in canonical_schema_kwargs(dictionary_metadata, TABLE_OPTIONS).items():
                     table.kwargs[key] = value
                 return
 
             table.engine = build_engine(table_metadata.engine_full)
             table.comment = table_metadata.comment or None
             if table.engine is not None:
-                table.kwargs["clickhouse_engine"] = table.engine
+                table.kwargs["clickhousedb_engine"] = table.engine
 
     def get_columns(self, table_name, schema=None, **_kwargs):
         with self._operation_context() as connection:

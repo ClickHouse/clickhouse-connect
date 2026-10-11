@@ -8,6 +8,7 @@ from alembic.operations import Operations, ops
 from alembic.runtime.migration import MigrationContext
 from alembic.util import CommandError, DispatchPriority, PriorityDispatchResult
 
+from clickhouse_connect.cc_sqlalchemy._schema import COLUMN_OPTIONS, TABLE_OPTIONS, canonical_schema_kwargs
 from clickhouse_connect.cc_sqlalchemy.alembic.impl import ClickHouseImpl
 from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
     ClickHouseIndex,
@@ -127,7 +128,10 @@ def _render_clickhouse_column(column, autogen_context: AutogenContext) -> str:
         args=", ".join(str(arg) for arg in args) + ", " if args else "",
         kwargs=", ".join(
             [f"{key}={value}" for key, value in opts]
-            + [f"{key}={render._render_potential_expr(value, autogen_context)}" for key, value in column.kwargs.items()]
+            + [
+                f"{key}={render._render_potential_expr(value, autogen_context)}"
+                for key, value in canonical_schema_kwargs(column.kwargs, COLUMN_OPTIONS).items()
+            ]
         ),
     )
 
@@ -171,8 +175,9 @@ def _render_create_table(autogen_context: AutogenContext, op: ops.CreateTableOp)
     if table.info:
         rendered += f",\ninfo={table.info!r}"
 
-    for key in sorted(op.kw):
-        rendered += f",\n{key.replace(' ', '_')}={op.kw[key]!r}"
+    table_kwargs = canonical_schema_kwargs(op.kw, TABLE_OPTIONS)
+    for key in sorted(table_kwargs):
+        rendered += f",\n{key.replace(' ', '_')}={table_kwargs[key]!r}"
 
     if op.if_not_exists is not None:
         rendered += f",\nif_not_exists={bool(op.if_not_exists)!r}"
@@ -211,8 +216,9 @@ def _render_drop_table(autogen_context: AutogenContext, op: ops.DropTableOp) -> 
         arguments.append(f"schema={render._ident(op.schema)!r}")
     if op.if_exists is not None:
         arguments.append(f"if_exists={bool(op.if_exists)!r}")
-    for key in sorted(op.table_kw):
-        arguments.append(f"{key.replace(' ', '_')}={op.table_kw[key]!r}")
+    table_kwargs = canonical_schema_kwargs(op.table_kw, TABLE_OPTIONS)
+    for key in sorted(table_kwargs):
+        arguments.append(f"{key.replace(' ', '_')}={table_kwargs[key]!r}")
     if arguments:
         rendered += ",\n" + ",\n".join(arguments)
     rendered += ")"

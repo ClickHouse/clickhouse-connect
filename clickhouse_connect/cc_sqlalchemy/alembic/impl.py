@@ -5,7 +5,7 @@ from typing import Any, Literal, cast
 
 from alembic.ddl.impl import DefaultImpl
 from alembic.util import CommandError
-from sqlalchemy import Column, Index, MetaData, String, Table, text
+from sqlalchemy import Column, Index, MetaData, String, Table, TypeDecorator, text
 from sqlalchemy.sql.dml import Delete, Update
 from sqlalchemy.sql.elements import quoted_name
 
@@ -28,6 +28,7 @@ from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import (
     column_specification,
 )
 from clickhouse_connect.datatypes.dynamic import JSON as ChJSON  # noqa: N811
+from clickhouse_connect.datatypes.registry import parse_name
 from clickhouse_connect.driver.binding import quote_identifier
 
 __all__ = ["ClickHouseImpl"]
@@ -338,9 +339,76 @@ class ClickHouseImpl(DefaultImpl):
             metadata_type = ClickHouseDDLHelper.without_nullable(metadata_type)
         else:
             metadata_type = ClickHouseDDLHelper.effective_column_type(metadata_column)
-        inspector_type = self._normalize_type_name(inspector_type)
-        metadata_type = self._normalize_type_name(metadata_type)
-        return inspector_type != metadata_type
+        if self._normalize_type_name(inspector_type) == self._normalize_type_name(metadata_type):
+            return False
+        while isinstance(inspector_type, TypeDecorator):
+            inspector_type = inspector_type.type_engine(self.dialect)
+        while isinstance(metadata_type, TypeDecorator):
+            metadata_type = metadata_type.type_engine(self.dialect)
+        if isinstance(inspector_type, ChSqlaType) and isinstance(metadata_type, ChSqlaType):
+            return not self._type_names_match(inspector_type.name, metadata_type.name)
+        return True
+
+    @classmethod
+    def _type_names_match(cls, inspector_name: str, metadata_name: str) -> bool:
+        if cls._normalize_type_name(inspector_name) == cls._normalize_type_name(metadata_name):
+            return True
+        inspector_base, _, inspector_def = parse_name(inspector_name)
+        metadata_base, _, metadata_def = parse_name(metadata_name)
+        if inspector_base != metadata_base or inspector_def.wrappers != metadata_def.wrappers or inspector_def.keys != metadata_def.keys:
+            return False
+        inspector_args = inspector_def.values
+        metadata_args = metadata_def.values
+        if metadata_base == "Variant":
+            if len(inspector_args) != len(metadata_args):
+                return False
+            # The client sorts pinned uniq version 1 before unversioned sum,
+            # which reverses their order relative to unversioned metadata.
+            candidates = [
+                [
+                    inspector_index
+                    for inspector_index, inspector_arg in enumerate(inspector_args)
+                    if cls._type_names_match(str(inspector_arg), str(metadata_arg))
+                ]
+                for metadata_arg in metadata_args
+            ]
+            matched_metadata = [-1] * len(inspector_args)
+
+            def match_member(metadata_index: int, visited: set[int]) -> bool:
+                for inspector_index in candidates[metadata_index]:
+                    if inspector_index in visited:
+                        continue
+                    visited.add(inspector_index)
+                    previous = matched_metadata[inspector_index]
+                    if previous == -1 or match_member(previous, visited):
+                        matched_metadata[inspector_index] = metadata_index
+                        return True
+                return False
+
+            return all(match_member(metadata_index, set()) for metadata_index in range(len(metadata_args)))
+        if metadata_base.lower() == "aggregatefunction":
+            # Omitted metadata versions preserve the reflected state version.
+            if metadata_args and isinstance(metadata_args[0], int):
+                inspector_version = inspector_args[0] if inspector_args and isinstance(inspector_args[0], int) else 0
+                if inspector_version != metadata_args[0]:
+                    return False
+                metadata_args = metadata_args[1:]
+                if inspector_args and isinstance(inspector_args[0], int):
+                    inspector_args = inspector_args[1:]
+            elif inspector_args and isinstance(inspector_args[0], int):
+                inspector_args = inspector_args[1:]
+            if not inspector_args or not metadata_args:
+                return False
+            if cls._normalize_type_name(inspector_args[0]) != cls._normalize_type_name(metadata_args[0]):
+                return False
+            inspector_args = inspector_args[1:]
+            metadata_args = metadata_args[1:]
+        elif metadata_base not in ("Array", "Map", "Tuple", "Nested", "SimpleAggregateFunction"):
+            return False
+        return len(inspector_args) == len(metadata_args) and all(
+            cls._type_names_match(str(inspector_arg), str(metadata_arg))
+            for inspector_arg, metadata_arg in zip(inspector_args, metadata_args)
+        )
 
     def compare_server_default(
         self,
