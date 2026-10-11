@@ -3,6 +3,7 @@ from types import MappingProxyType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import sqlalchemy as sa
 from alembic.autogenerate import render
 from alembic.autogenerate.api import AutogenContext, render_python_code
 from alembic.ddl.impl import DefaultImpl
@@ -498,6 +499,9 @@ def test_render_type_named_containers_emit_lossless_python(type_name):
         "SimpleAggregateFunction(anyLast, UInt32)",
         "simpleaggregatefunction(anyLast, UInt32)",
         "AggregateFunction(uniq, UInt32)",
+        "AggregateFunction(0, uniq, UInt32)",
+        "AggregateFunction(1, uniq, UInt32)",
+        "Array(Tuple(state AggregateFunction(1, uniq, UInt32)))",
         "AGGREGATEFUNCTION(uniq, UInt32)",
         "Array(SimpleAggregateFunction(anyLast, UInt32))",
         "Map(String, AggregateFunction(uniq, UInt32))",
@@ -595,6 +599,155 @@ def test_compare_type_normalizes_type_decorator_spacing(inspector_type, wrapped_
     metadata_column = Column("value", WrappedClickHouseType(), nullable=False)
 
     assert context.impl.compare_type(inspector_column, metadata_column) is False
+
+
+@pytest.mark.parametrize(
+    "container",
+    [
+        "{}",
+        "Array({})",
+        "Tuple({})",
+        "Array(Tuple({}))",
+        "Nullable({})",
+        "Map(String, {})",
+        "Tuple(state {}, label String)",
+        "Array(Tuple(`state value` {}, label String))",
+        "Nested(state {})",
+    ],
+)
+@pytest.mark.parametrize("aggregate_name", ["AggregateFunction", "aggregatefunction", "AGGREGATEFUNCTION"])
+def test_compare_type_accepts_server_aggregate_version_pin(container, aggregate_name):
+    context = MigrationContext.configure(dialect=ClickHouseDialect())
+    reflected = sqla_type_from_name(container.format("AggregateFunction(1, uniq, UInt32)"))
+    # Parse the case variant before nesting it, as container types require canonical children.
+    declared = sqla_type_from_name(f"{aggregate_name}(uniq, UInt32)")
+    metadata = sqla_type_from_name(container.format(declared.name))
+    assert context.impl.compare_type(Column("state", reflected, nullable=False), Column("state", metadata, nullable=False)) is False
+
+
+@pytest.mark.parametrize(
+    "inspector_name, metadata_name, different",
+    [
+        ("AggregateFunction(1, uniq, UInt32)", "AggregateFunction(uniq, UInt32)", False),
+        ("AggregateFunction(7, uniq, UInt32)", "AggregateFunction(uniq, UInt32)", False),
+        ("AggregateFunction(uniq, UInt32)", "AggregateFunction(1, uniq, UInt32)", True),
+        ("AggregateFunction(uniq, UInt32)", "AggregateFunction(0, uniq, UInt32)", False),
+        ("AggregateFunction(0, uniq, UInt32)", "AggregateFunction(uniq, UInt32)", False),
+        ("AggregateFunction(1, uniq, UInt32)", "AggregateFunction(0, uniq, UInt32)", True),
+        ("AggregateFunction(0, uniq, UInt32)", "AggregateFunction(1, uniq, UInt32)", True),
+        ("AggregateFunction(1, uniq, UInt32)", "AggregateFunction(1, uniq, UInt32)", False),
+        ("AggregateFunction(1, uniq, UInt32)", "AggregateFunction(2, uniq, UInt32)", True),
+        ("AggregateFunction(1, uniq, UInt32)", "AggregateFunction(uniqExact, UInt32)", True),
+        ("AggregateFunction(1, uniq, UInt32)", "AggregateFunction(uniq, UInt64)", True),
+        ("AggregateFunction(1, uniq, UInt32)", "AggregateFunction(uniq, UInt32, UInt32)", True),
+        ("AggregateFunction(1, quantiles(0.5, 0.9), UInt32)", "AggregateFunction(quantiles(0.5, 0.9), UInt32)", False),
+        ("AggregateFunction(1, quantiles(0.5, 0.9), UInt32)", "AggregateFunction(quantiles(0.5, 0.8), UInt32)", True),
+        ("AggregateFunction(3, custom('state 1, uniq'), String)", "AggregateFunction(custom('state 1, uniq'), String)", False),
+        ("AggregateFunction(3, custom('state 1, uniq'), String)", "AggregateFunction(custom('state1, uniq'), String)", True),
+        ("AggregateFunction(3, custom('quote''1'), String)", "AggregateFunction(custom('quote''1'), String)", False),
+        ("AggregateFunction(3, custom('quote\\'1'), String)", "AggregateFunction(custom('quote\\'1'), String)", False),
+        ("Array(AggregateFunction(1, uniq, UInt32))", "Array(AggregateFunction(uniq, UInt64))", True),
+        ("Tuple(state AggregateFunction(1, uniq, UInt32))", "Tuple(other AggregateFunction(uniq, UInt32))", True),
+        ("Tuple(AggregateFunction(1, uniq, UInt32), String)", "Tuple(AggregateFunction(uniq, UInt32), UInt32)", True),
+        (
+            "Tuple(AggregateFunction(1, uniq, UInt32), AggregateFunction(3, sum, UInt64))",
+            "Tuple(AggregateFunction(uniq, UInt32), AggregateFunction(sum, UInt64))",
+            False,
+        ),
+        (
+            "Tuple(AggregateFunction(1, uniq, UInt32), AggregateFunction(3, sum, UInt64))",
+            "Tuple(AggregateFunction(uniq, UInt32), AggregateFunction(2, sum, UInt64))",
+            True,
+        ),
+        (
+            "AggregateFunction(1, argMax, Tuple(value String, score UInt32), UInt32)",
+            "AggregateFunction(argMax, Tuple(value String, score UInt32), UInt32)",
+            False,
+        ),
+        ("AggregateFunction(1, uniq, UInt32)", "SimpleAggregateFunction(uniq, UInt32)", True),
+    ],
+)
+def test_compare_type_preserves_aggregate_version_constraints(inspector_name, metadata_name, different):
+    context = MigrationContext.configure(dialect=ClickHouseDialect())
+    inspector_column = Column("state", sqla_type_from_name(inspector_name), nullable=False)
+    metadata_column = Column("state", sqla_type_from_name(metadata_name), nullable=False)
+    assert context.impl.compare_type(inspector_column, metadata_column) is different
+
+
+@pytest.mark.parametrize(
+    "inspector_name, metadata_name, different",
+    [
+        ("AggregateFunction(1, uniq, UInt32)", "AggregateFunction(uniq, UInt32)", False),
+        ("Array(Tuple(state AggregateFunction(1, uniq, UInt32)))", "Array(Tuple(state AggregateFunction(uniq, UInt32)))", False),
+        ("AggregateFunction(1, uniq, UInt32)", "AggregateFunction(0, uniq, UInt32)", True),
+        ("AggregateFunction(1, uniq, UInt32)", "AggregateFunction(2, uniq, UInt32)", True),
+    ],
+)
+def test_compare_type_accepts_decorated_aggregate_types(inspector_name, metadata_name, different):
+    class WrappedAggregate(TypeDecorator):
+        impl = sqla_type_from_name(metadata_name)
+        cache_ok = True
+
+    context = MigrationContext.configure(dialect=ClickHouseDialect())
+    inspector_column = Column("state", sqla_type_from_name(inspector_name), nullable=False)
+    metadata_column = Column("state", WrappedAggregate(), nullable=False)
+    assert context.impl.compare_type(inspector_column, metadata_column) is different
+
+
+@pytest.mark.parametrize(
+    "inspector_name, metadata_name, different",
+    [
+        (
+            "Variant(AggregateFunction(1, uniq, UInt32), AggregateFunction(sum, UInt64))",
+            "Variant(AggregateFunction(uniq, UInt32), AggregateFunction(sum, UInt64))",
+            False,
+        ),
+        (
+            "Variant(Array(AggregateFunction(1, uniq, UInt32)), Array(AggregateFunction(sum, UInt64)))",
+            "Variant(Array(AggregateFunction(uniq, UInt32)), Array(AggregateFunction(sum, UInt64)))",
+            False,
+        ),
+        (
+            "Variant(AggregateFunction(1, uniq, UInt32), AggregateFunction(sum, UInt64))",
+            "Variant(AggregateFunction(2, uniq, UInt32), AggregateFunction(sum, UInt64))",
+            True,
+        ),
+        (
+            "Variant(AggregateFunction(1, uniq, UInt32), AggregateFunction(2, uniq, UInt32))",
+            "Variant(AggregateFunction(uniq, UInt32), AggregateFunction(1, uniq, UInt32))",
+            False,
+        ),
+        (
+            "Variant(AggregateFunction(1, uniq, UInt32), AggregateFunction(2, uniq, UInt32))",
+            "Variant(AggregateFunction(uniq, UInt32), AggregateFunction(3, uniq, UInt32))",
+            True,
+        ),
+        (
+            "Variant(Tuple(AggregateFunction(1, uniq, UInt32), AggregateFunction(2, sum, UInt64)), "
+            "Tuple(AggregateFunction(1, uniq, UInt32), AggregateFunction(3, sum, UInt64)))",
+            "Variant(Tuple(AggregateFunction(1, uniq, UInt32), AggregateFunction(sum, UInt64)), "
+            "Tuple(AggregateFunction(uniq, UInt32), AggregateFunction(2, sum, UInt64)))",
+            False,
+        ),
+        (
+            "Variant(Tuple(AggregateFunction(1, uniq, UInt32), AggregateFunction(2, sum, UInt64)), "
+            "Tuple(AggregateFunction(4, uniq, UInt32), AggregateFunction(3, sum, UInt64)))",
+            "Variant(Tuple(AggregateFunction(1, uniq, UInt32), AggregateFunction(sum, UInt64)), "
+            "Tuple(AggregateFunction(uniq, UInt32), AggregateFunction(2, sum, UInt64)))",
+            True,
+        ),
+        (
+            "Variant(AggregateFunction(1, uniq, UInt32), String)",
+            "Variant(AggregateFunction(uniq, UInt32), String, UInt32)",
+            True,
+        ),
+    ],
+)
+def test_compare_type_matches_variant_aggregate_members(inspector_name, metadata_name, different):
+    context = MigrationContext.configure(dialect=ClickHouseDialect())
+    inspector_column = Column("state", sqla_type_from_name(inspector_name), nullable=False)
+    metadata_column = Column("state", sqla_type_from_name(metadata_name), nullable=False)
+    assert context.impl.compare_type(inspector_column, metadata_column) is different
 
 
 def test_compare_type_normalizes_nested_type_spacing():
@@ -1007,7 +1160,7 @@ def test_positional_engine_autogenerate_render():
     )
 
     rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(table))
-    assert "clickhouse_engine=MergeTree(order_by='id')" in rendered
+    assert "clickhousedb_engine=MergeTree(order_by='id')" in rendered
     assert "nullable=True" not in rendered
 
 
@@ -1029,11 +1182,11 @@ def test_dictionary_autogenerate_render():
     )
 
     rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(dictionary))
-    assert "clickhouse_table_type='dictionary'" in rendered
-    assert "clickhouse_dictionary_source=" in rendered
-    assert "clickhouse_dictionary_layout='FLAT'" in rendered
-    assert "clickhouse_dictionary_lifetime='MIN 0 MAX 10'" in rendered
-    assert "clickhouse_dictionary_primary_key='id'" in rendered
+    assert "clickhousedb_table_type='dictionary'" in rendered
+    assert "clickhousedb_dictionary_source=" in rendered
+    assert "clickhousedb_dictionary_layout='FLAT'" in rendered
+    assert "clickhousedb_dictionary_lifetime='MIN 0 MAX 10'" in rendered
+    assert "clickhousedb_dictionary_primary_key='id'" in rendered
     assert "nullable=True" not in rendered
 
 
@@ -1069,11 +1222,51 @@ def test_dictionary_drop_autogenerate_render():
 
     rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(dictionary).reverse())
     assert "op.drop_table('dim_lookup'" in rendered
-    assert "clickhouse_table_type='dictionary'" in rendered
-    assert "clickhouse_dictionary_source=" in rendered
-    assert "clickhouse_dictionary_layout='FLAT'" in rendered
-    assert "clickhouse_dictionary_lifetime='MIN 0 MAX 10'" in rendered
-    assert "clickhouse_dictionary_primary_key='id'" in rendered
+    assert "clickhousedb_table_type='dictionary'" in rendered
+    assert "clickhousedb_dictionary_source=" in rendered
+    assert "clickhousedb_dictionary_layout='FLAT'" in rendered
+    assert "clickhousedb_dictionary_lifetime='MIN 0 MAX 10'" in rendered
+    assert "clickhousedb_dictionary_primary_key='id'" in rendered
+
+
+@pytest.mark.parametrize("prefix", ["clickhouse", "clickhousedb"])
+@pytest.mark.parametrize("operation", ["create", "add", "drop"])
+def test_schema_options_render_canonical_and_execute_offline(prefix, operation):
+    table = Table(
+        "events",
+        MetaData(),
+        Column("id", Integer, **{prefix + "_codec": "ZSTD(3)"}),
+        **{prefix + "_engine": engines.Memory()},
+    )
+    create_op = ops.CreateTableOp.from_table(table)
+    migration_op = {
+        "create": create_op,
+        "add": ops.AddColumnOp("events", table.c.id),
+        "drop": create_op.reverse(),
+    }[operation]
+    context = MigrationContext.configure(dialect=ClickHouseDialect())
+    autogen_context = AutogenContext(
+        context,
+        opts={"sqlalchemy_module_prefix": "sa.", "alembic_module_prefix": "op.", "user_module_prefix": None},
+    )
+    rendered = render.render_op_text(autogen_context, migration_op)
+    assert "clickhouse_engine" not in rendered
+    assert "clickhouse_codec" not in rendered
+    if operation in ("create", "drop"):
+        assert "clickhousedb_engine=Memory()" in rendered
+    if operation in ("create", "add"):
+        assert "clickhousedb_codec='ZSTD(3)'" in rendered
+
+    buffer = StringIO()
+    offline = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"as_sql": True, "output_buffer": buffer})
+    exec(rendered, {"sa": sa, "op": Operations(offline), "Memory": engines.Memory})
+    sql = buffer.getvalue().strip()
+    if operation == "create":
+        assert sql == "CREATE TABLE `events` (`id` INTEGER CODEC(ZSTD(3))) Engine Memory;"
+    elif operation == "add":
+        assert sql == "ALTER TABLE `events` ADD COLUMN `id` INTEGER CODEC(ZSTD(3));"
+    else:
+        assert sql == "DROP TABLE `events`;"
 
 
 def test_include_object():
@@ -1172,7 +1365,7 @@ def test_non_clickhouse_create_table_render_keeps_nullable():
     rendered = render.render_op_text(autogen_context, ops.CreateTableOp.from_table(table))
     assert "sa.Column('id', sa.Integer(), nullable=False)" in rendered
     assert "sa.Column('name', sa.String(length=32), nullable=True)" in rendered
-    assert "clickhouse_engine" not in rendered
+    assert "clickhousedb_engine" not in rendered
 
 
 def test_non_clickhouse_drop_table_render_is_unmodified():

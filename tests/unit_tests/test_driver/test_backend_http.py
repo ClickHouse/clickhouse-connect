@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
+from urllib3.exceptions import HTTPError
 from yarl import URL
 
 from clickhouse_connect import common
@@ -23,7 +24,7 @@ from clickhouse_connect.driver._backend.httpcommon import (
     plan_raw_query_request,
 )
 from clickhouse_connect.driver._backend.models import Capabilities, QueryRuntime
-from clickhouse_connect.driver.exceptions import InternalError, ProgrammingError
+from clickhouse_connect.driver.exceptions import InternalError, OperationalError, ProgrammingError
 from tests.helpers import run_in_new_loop
 
 
@@ -54,7 +55,7 @@ def make_plan(form_values=None, form_files=None):
     return QueryRequestPlan(columns_only=False, params={}, headers={}, form_values=form_values, form_files=form_files)
 
 
-RUNTIME = QueryRuntime(database="db1", protocol_version=54468, settings={"max_threads": "4"}, retries=2)
+RUNTIME = QueryRuntime(database="db1", protocol_version=54468, settings={"max_threads": "4"}, retries=2, retryable=True)
 
 
 def plan(context, runtime=RUNTIME, **overrides):
@@ -603,7 +604,7 @@ class TestRawExecuteFlags:
         assert result == b"result"
         args, kwargs = backend.request.call_args
         assert args == ("SELECT 1", {"max_threads": "4", "database": "db1"}, {"X-Custom": "v"})
-        assert kwargs == {"fields": None, "retries": 2}
+        assert kwargs == {"fields": None, "retries": 2, "retryable": True}
 
     def test_sync_execute_raw_stream(self):
         backend = make_sync_backend()
@@ -611,7 +612,7 @@ class TestRawExecuteFlags:
         backend.request = Mock(return_value=response)
         assert backend.execute_raw_stream("SELECT 1", {}, None, RUNTIME, None) is response
         _, kwargs = backend.request.call_args
-        assert kwargs == {"fields": None, "stream": True, "server_wait": False, "retries": 2}
+        assert kwargs == {"fields": None, "stream": True, "server_wait": False, "retries": 2, "retryable": True}
 
     @pytest.mark.asyncio
     async def test_async_execute_raw_query(self):
@@ -622,7 +623,7 @@ class TestRawExecuteFlags:
         assert result == b"result"
         args, kwargs = backend.request.call_args
         assert args == ("SELECT 1", {"max_threads": "4", "database": "db1"})
-        assert kwargs == {"headers": {"X-Custom": "v"}, "files": None, "retries": 2}
+        assert kwargs == {"headers": {"X-Custom": "v"}, "files": None, "retries": 2, "retryable": True}
 
     @pytest.mark.asyncio
     async def test_async_execute_raw_stream(self):
@@ -631,7 +632,7 @@ class TestRawExecuteFlags:
         backend.request = AsyncMock(return_value=response)
         assert await backend.execute_raw_stream("SELECT 1", {}, None, RUNTIME, None) is response
         _, kwargs = backend.request.call_args
-        assert kwargs == {"headers": {}, "files": None, "stream": True, "server_wait": False, "retries": 2}
+        assert kwargs == {"headers": {}, "files": None, "stream": True, "server_wait": False, "retries": 2, "retryable": True}
 
 
 class TestSyncFieldsMerge:
@@ -868,3 +869,81 @@ class TestAsyncSessionLoop:
     @classmethod
     async def _bind_session(cls, backend):
         backend.session = cls._session()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["sync", "async"])
+@pytest.mark.parametrize("failure", ["disconnect", 429, 503, 504])
+@pytest.mark.parametrize(
+    "data, params, form, expected_retry",
+    [
+        (b"SELECT 13", {}, None, True),
+        (b"INSERT INTO target SELECT 13", {}, None, False),
+        (None, {"query": "SELECT 13"}, None, True),
+        (None, {"query": "TRUNCATE TABLE target"}, None, False),
+        (None, {}, {"query": "SELECT 13"}, True),
+        (None, {}, {"query": "INSERT INTO target SELECT 13"}, False),
+        (b"SELECT 13", {"query": "INSERT INTO target"}, None, False),
+        (b"PARALLEL WITH INSERT INTO target SELECT 79", {"query": "SELECT 13"}, None, False),
+        (None, {"query": "INSERT INTO target"}, {"query": "SELECT 13"}, False),
+    ],
+)
+async def test_legacy_request_retry_policy(monkeypatch, transport, failure, data, params, form, expected_retry):
+    backend = make_sync_backend() if transport == "sync" else make_async_backend()
+    success = SimpleNamespace(status=200, headers={})
+    if failure == "disconnect":
+        if transport == "sync":
+            first = HTTPError("connection closed")
+            first.__cause__ = ConnectionResetError("connection closed")
+        else:
+            first = aiohttp.ServerDisconnectedError("connection closed")
+    else:
+        first = SimpleNamespace(status=failure, headers={}, close=Mock())
+    kwargs = {"retries": 2}
+    if transport == "sync":
+        sender = Mock(side_effect=[first, success])
+        backend.http.request = sender
+        backend.error_handler = Mock(side_effect=OperationalError("request rejected"))
+        kwargs["fields"] = form
+        monkeypatch.setattr("clickhouse_connect.driver._backend.http_sync.time.sleep", lambda _: None)
+    else:
+        sender = AsyncMock(side_effect=[first, success])
+        backend.session = SimpleNamespace(closed=False, request=sender)
+        backend.error_handler = AsyncMock(side_effect=OperationalError("request rejected"))
+        kwargs["files"] = {key: (None, value) for key, value in form.items()} if form else None
+        monkeypatch.setattr("clickhouse_connect.driver._backend.http_async.asyncio.sleep", AsyncMock())
+
+    async def request():
+        if transport == "sync":
+            return backend.request(data, params, **kwargs)
+        return await backend.request(data, params, **kwargs)
+
+    if expected_retry:
+        response = await request()
+        assert response is success
+        release_lease(response)
+    else:
+        with pytest.raises(OperationalError):
+            await request()
+    assert sender.call_count == (2 if expected_retry else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["sync", "async"])
+async def test_client_query_prefix_disables_read_retry(transport):
+    backend = make_sync_backend() if transport == "sync" else make_async_backend()
+    if transport == "sync":
+        error = HTTPError("connection closed")
+        error.__cause__ = ConnectionResetError("connection closed")
+        sender = Mock(side_effect=[error, SimpleNamespace(status=200, headers={})])
+        backend.http.request = sender
+        backend.params["query"] = "INSERT INTO target"
+        with pytest.raises(OperationalError):
+            backend.execute_raw_query("SELECT 13", {}, None, RUNTIME, None)
+    else:
+        sender = AsyncMock(side_effect=[aiohttp.ServerDisconnectedError(), SimpleNamespace(status=200, headers={})])
+        backend.session = SimpleNamespace(closed=False, request=sender)
+        backend.client_settings["query"] = "INSERT INTO target"
+        with pytest.raises(OperationalError):
+            await backend.execute_raw_query("SELECT 13", {}, None, RUNTIME, None)
+    assert sender.call_count == 1

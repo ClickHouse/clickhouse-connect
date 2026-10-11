@@ -20,9 +20,51 @@ create_engine("clickhouse+http://user:pass@host:8123/db")
 create_engine("clickhousedb+connect://user:pass@host:8123/db")
 create_engine("clickhousedb://user:pass@host:8123/db")  # short form alias
 
-# If you import clickhouse_connect.cc_sqlalchemy first, it also registers
-# runtime aliases for clickhouse+connect:// and clickhouse://
+# Importing clickhouse_connect.cc_sqlalchemy also registers clickhouse+connect://.
+# The bare clickhouse:// alias is available only when no other provider claims it.
 ```
+
+If `clickhouse-sqlalchemy` is still installed, `clickhouse://` keeps selecting that
+package. Use `clickhousedb://` or `clickhousedb+connect://` to select ClickHouse
+Connect explicitly. This also applies when another part of an application loads
+our dialect during driver discovery. If another installed provider prevents our
+alias registration, the import emits a `UserWarning`. Existing runtime
+registrations are left untouched without a warning.
+
+## Schema options
+
+Use the `clickhousedb_` prefix for ClickHouse Connect table and column options:
+
+```python
+from sqlalchemy import Column, MetaData, Table, text
+from clickhouse_connect.cc_sqlalchemy import engines, types
+
+events = Table(
+    "events",
+    MetaData(),
+    Column("id", types.UInt32),
+    Column("derived", types.UInt32, clickhousedb_materialized=text("id + 13")),
+    clickhousedb_engine=engines.MergeTree(order_by="id"),
+)
+```
+
+ClickHouse Connect also reads explicit legacy `clickhouse_*` options, but
+SQLAlchemy validates them against the dialect that owns `clickhouse`. In a mixed
+install, use `clickhousedb_engine`, `clickhousedb_ttl`, `clickhousedb_settings`,
+`clickhousedb_table_type`, and `clickhousedb_dictionary_*`. The corresponding
+`clickhouse_*` names can raise `ArgumentError`. Shared options such as
+`clickhouse_codec`, `clickhouse_materialized`, `clickhouse_alias`, and
+`clickhouse_after` remain accepted when that dialect supports them.
+
+Driver-generated metadata and Alembic revisions use `clickhousedb_*`, including
+metadata produced by positional table engines and reflection. Public reflection
+dictionaries, such as `Inspector.get_columns()` results, retain their existing
+`clickhouse_*` keys.
+
+ClickHouse Connect reads defaults only from `clickhousedb`. Register them under
+`clickhousedb`, for example `Column.argument_for("clickhousedb", "codec", "LZ4")`.
+Alembic operation arguments such as `op.add_column(..., clickhouse_settings={...})`
+keep their existing names.
 
 ## Import rewrite table
 

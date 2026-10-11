@@ -40,6 +40,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     ReplacingMergeTree,
     SummingMergeTree,
 )
+from clickhouse_connect.datatypes.registry import parse_name
 
 logging.getLogger("alembic").setLevel(logging.WARNING)
 
@@ -482,7 +483,7 @@ def test_alembic_autogenerate_positional_engine_live(test_engine: Engine, test_d
         assert revision is not None
         assert not isinstance(revision, list)
         contents = Path(revision.path).read_text(encoding="utf-8")
-        assert "clickhouse_engine=MergeTree(order_by='id', settings={'index_granularity': 1024})" in contents
+        assert "clickhousedb_engine=MergeTree(order_by='id', settings={'index_granularity': 1024})" in contents
         command.upgrade(config, "head")
 
     with test_engine.begin() as conn:
@@ -501,12 +502,12 @@ def test_alembic_autogenerate_positional_engine_live(test_engine: Engine, test_d
     [
         (
             lambda amount: Memory({"settings": {"max_rows_to_keep": 13}}),
-            "clickhouse_engine=Memory(settings={'max_rows_to_keep': 13})",
+            "clickhousedb_engine=Memory(settings={'max_rows_to_keep': 13})",
             ("Memory", "max_rows_to_keep = 13"),
         ),
         (
             lambda amount: SummingMergeTree("id", columns=[amount, "n_tx"]),
-            "clickhouse_engine=SummingMergeTree(order_by='id', columns='(`net amount`, `n_tx`)')",
+            "clickhousedb_engine=SummingMergeTree(order_by='id', columns='(`net amount`, `n_tx`)')",
             ("SummingMergeTree", "`net amount`", "n_tx", "ORDER BY id"),
         ),
     ],
@@ -590,6 +591,7 @@ def test_alembic_aggregate_function_types_round_trip_live(test_engine: Engine, t
     aggregate_types = {
         "last_value": sqla_type_from_name("SimpleAggregateFunction(anyLast, UInt32)"),
         "unique_state": sqla_type_from_name("AggregateFunction(uniq, UInt32)"),
+        "legacy_unique_state": sqla_type_from_name("AggregateFunction(0, uniq, UInt32)"),
         "sum_state": sqla_type_from_name("AggregateFunction(sum, UInt64)"),
         "latest_state": sqla_type_from_name("AggregateFunction(argMax, Tuple(value String, score UInt32), UInt32)"),
     }
@@ -613,9 +615,77 @@ def test_alembic_aggregate_function_types_round_trip_live(test_engine: Engine, t
 
         reflected = Table(table_name, MetaData(schema=test_db), autoload_with=conn)
         for name, type_obj in aggregate_types.items():
-            assert reflected.c[name].type.name == type_obj.name
+            reflected_base, _, reflected_def = parse_name(reflected.c[name].type.name)
+            declared_base, _, declared_def = parse_name(type_obj.name)
+            assert reflected_base == declared_base
+            assert reflected_def.wrappers == declared_def.wrappers
+            assert reflected_def.keys == declared_def.keys
+            reflected_args = reflected_def.values
+            declared_args = declared_def.values
+            if declared_base == "AggregateFunction":
+                reflected_version = reflected_args[0] if isinstance(reflected_args[0], int) else 0
+                if isinstance(reflected_args[0], int):
+                    reflected_args = reflected_args[1:]
+                if isinstance(declared_args[0], int):
+                    assert reflected_version == declared_args[0]
+                    declared_args = declared_args[1:]
+            assert reflected_args == declared_args
 
         noop_revision = command.revision(config, message="aggregate functions noop", autogenerate=True)
+        assert noop_revision is not None
+        assert not isinstance(noop_revision, list)
+        noop_contents = Path(noop_revision.path).read_text(encoding="utf-8")
+        assert "pass" in noop_contents
+        assert "alter_column" not in noop_contents
+
+
+@pytest.mark.parametrize(
+    "declared_name, pinned_name",
+    [
+        (
+            "Variant(AggregateFunction(sum, UInt64), AggregateFunction(uniq, UInt32))",
+            "Variant(AggregateFunction(sum, UInt64), AggregateFunction(1, uniq, UInt32))",
+        ),
+        (
+            "Variant(Array(AggregateFunction(sum, UInt64)), Array(AggregateFunction(uniq, UInt32)))",
+            "Variant(Array(AggregateFunction(sum, UInt64)), Array(AggregateFunction(1, uniq, UInt32)))",
+        ),
+    ],
+    ids=["variant", "variant_arrays"],
+)
+def test_alembic_server_pinned_aggregate_noop_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name, declared_name, pinned_name):
+    table_name = ch_name("alembic_pinned_aggregate")
+    metadata = MetaData(schema=test_db)
+    declared_type = sqla_type_from_name(declared_name)
+    Table(
+        table_name,
+        metadata,
+        Column("id", UInt32, nullable=False),
+        Column("state", declared_type, nullable=False),
+        MergeTree(order_by="id"),
+    )
+
+    with test_engine.connect().execution_options(settings={"allow_suspicious_variant_types": 1}) as conn:
+        config = _alembic_config(tmp_path, conn, metadata, frozenset({table_name}))
+        revision = command.revision(config, message="create aggregate state", autogenerate=True)
+        assert revision is not None
+        assert not isinstance(revision, list)
+        command.upgrade(config, "head")
+
+        described = conn.execute(text(f"DESCRIBE TABLE `{test_db}`.`{table_name}`")).fetchall()
+        state_name = next(row[1] for row in described if row[0] == "state")
+        if state_name == declared_name:
+            pytest.skip("This server does not pin omitted uniq state versions on CREATE")
+        assert state_name == pinned_name
+
+        reflected = Table(table_name, MetaData(schema=test_db), autoload_with=conn)
+        reflected_type = reflected.c.state.type
+        assert reflected_type.name == sqla_type_from_name(pinned_name).name
+        # Reflection sorts the pinned uniq alternative before the unversioned sum.
+        assert "sum" in declared_type.type_def.values[0]
+        assert "uniq" in reflected_type.type_def.values[0]
+
+        noop_revision = command.revision(config, message="aggregate state noop", autogenerate=True)
         assert noop_revision is not None
         assert not isinstance(noop_revision, list)
         noop_contents = Path(noop_revision.path).read_text(encoding="utf-8")
@@ -803,11 +873,11 @@ def test_alembic_autogenerate_dictionary_round_trip_live(test_engine: Engine, te
         config = _alembic_config(tmp_path, conn, metadata, frozenset({dictionary_name}))
         first_revision = command.revision(config, message="create dictionary", autogenerate=True)
         contents = Path(first_revision.path).read_text(encoding="utf-8")
-        assert "clickhouse_table_type='dictionary'" in contents
-        assert "clickhouse_dictionary_source=" in contents
-        assert "clickhouse_dictionary_layout='FLAT'" in contents
-        assert "clickhouse_dictionary_lifetime='MIN 0 MAX 10'" in contents
-        assert "clickhouse_dictionary_primary_key='id'" in contents
+        assert "clickhousedb_table_type='dictionary'" in contents
+        assert "clickhousedb_dictionary_source=" in contents
+        assert "clickhousedb_dictionary_layout='FLAT'" in contents
+        assert "clickhousedb_dictionary_lifetime='MIN 0 MAX 10'" in contents
+        assert "clickhousedb_dictionary_primary_key='id'" in contents
 
         command.upgrade(config, "head")
 
@@ -846,7 +916,7 @@ def test_alembic_dictionary_downgrade_uses_drop_dictionary_live(test_engine: Eng
         revision = command.revision(config, message="create dictionary", autogenerate=True)
         contents = Path(revision.path).read_text(encoding="utf-8")
         assert "op.drop_table" in contents
-        assert "clickhouse_table_type='dictionary'" in contents
+        assert "clickhousedb_table_type='dictionary'" in contents
         command.upgrade(config, "head")
         command.downgrade(config, "base")
 

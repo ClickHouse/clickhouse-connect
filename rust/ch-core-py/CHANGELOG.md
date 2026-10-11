@@ -7,7 +7,7 @@ Driver integration changes and core version requirements belong in the [driver c
 
 ## UNRELEASED
 
-## 0.2.2, 2026-09-29
+## 0.2.2, 2026-09-30
 
 ### Improvements
 

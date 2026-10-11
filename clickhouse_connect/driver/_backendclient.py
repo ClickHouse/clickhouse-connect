@@ -13,9 +13,9 @@ import logging
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Any, BinaryIO, cast
 
-from clickhouse_connect.driver._backend.httpcommon import parse_command_body
+from clickhouse_connect.driver._backend.httpcommon import _request_is_read_only, parse_command_body
 from clickhouse_connect.driver._backend.models import QueryRuntime
-from clickhouse_connect.driver.binding import bind_query
+from clickhouse_connect.driver.binding import _query_is_read_only, bind_query
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.ctypes import RespBuffCls
 from clickhouse_connect.driver.exceptions import Error
@@ -47,6 +47,7 @@ class SyncBackendClient(Client):
             protocol_version=self.protocol_version,
             settings=self._validate_settings(context.settings),
             retries=self.query_retries,
+            retryable=_query_is_read_only(context.final_query),
         )
         execution = self._backend.execute_query(context, runtime, self._prep_query(context))
         if execution.columns is not None:
@@ -97,7 +98,7 @@ class SyncBackendClient(Client):
                 return active_source.gen
             return self._transform.build_insert(context)
 
-        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(context.settings))
+        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(context.settings), retryable=True)
         try:
             return QuerySummary(self._backend.execute_data_insert(context, runtime, block_gen, rebuild_block_gen))
         finally:
@@ -118,7 +119,7 @@ class SyncBackendClient(Client):
         """
         See BaseClient doc_string for this method
         """
-        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(settings or {}))
+        runtime = QueryRuntime(database=self.database, settings=self._validate_settings(settings or {}), retryable=True)
         summary = self._backend.execute_raw_insert(
             table, column_names, insert_block, fmt if fmt else self._write_format, compression, runtime, transport_settings
         )
@@ -141,6 +142,7 @@ class SyncBackendClient(Client):
         runtime = QueryRuntime(
             database=self.database if use_database else None,
             settings=self._validate_settings(settings or {}),
+            retryable=_request_is_read_only(data, {"query": bound_cmd}),
         )
         execution = self._backend.execute_command(bound_cmd, bind_params, data, external_data, runtime, transport_settings)
         if execution.body:

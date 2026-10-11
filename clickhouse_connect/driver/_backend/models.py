@@ -62,6 +62,7 @@ class QueryRuntime:
     protocol_version: int = 0
     settings: Mapping[str, str] = field(default_factory=dict)
     retries: int = 0
+    retryable: bool = False
 
 
 @dataclass

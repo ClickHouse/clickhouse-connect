@@ -495,7 +495,7 @@ op.add_column(
         "payload",
         types.String(),
         server_default=text("'{}'"),
-        clickhouse_after="id",
+        clickhousedb_after="id",
     ),
     schema="alembic_demo",
     if_not_exists=True,
