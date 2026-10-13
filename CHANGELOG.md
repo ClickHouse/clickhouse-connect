@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- SQLAlchemy String binds no longer hang, including during schema reflection, when another library adds a String decorator to SQLAlchemy's shared `colspecs` defaults. The ClickHouse dialect now owns its mapping so foreign type adaptations and bind processors do not affect ClickHouse queries. Explicit custom type adaptations that remain unresolved after 1024 steps now raise `CompileError` instead of hanging.
+
 ## 1.10.0, 2026-10-07
 
 ### Improvements
@@ -16,7 +20,6 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
-- SQLAlchemy statements with bind parameters no longer hang when a `TypeDecorator`'s impl adapts back to the same decorator through the dialect's `colspecs`. This could happen when another library registered a `String` decorator in the `colspecs` dict that `ClickHouseDialect` shares with SQLAlchemy's `DefaultDialect`, causing every statement with a `String` bind parameter, including reflection queries, to loop forever.
 - Alembic autogeneration now accepts server-pinned `AggregateFunction` state versions when metadata omits the version, including nested types. Explicit metadata versions still detect state version changes. Reflected legacy states match an explicit version `0`.
 - Importing the SQLAlchemy dialect no longer replaces another provider's `clickhouse://` registration, including `clickhouse-sqlalchemy`. Generated schema metadata and Alembic revisions use `clickhousedb_*` options so metadata copies and migrations work with both packages installed. Closes [#1074](https://github.com/ClickHouse/clickhouse-connect/issues/1074).
 - `QueryResult.result_rows` now works after reading `result_columns`. Previously, accessing rows after materializing columns raised `StreamClosedError` even though the data was already cached. This also affected `AsyncClient.query()` with `column_oriented=True`, where `result_rows` always failed.

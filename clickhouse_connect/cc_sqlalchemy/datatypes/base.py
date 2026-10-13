@@ -53,19 +53,22 @@ def _datetime64_query_signature(ch_type: ClickHouseType | None) -> _DateTime64Qu
     return False
 
 
-def _datetime64_bind_signature(sqla_type: TypeEngine[Any], dialect: Dialect) -> _DateTime64QuerySignature:
+def _unwrap_dialect_type(sqla_type: TypeEngine[Any], dialect: Dialect) -> TypeEngine[Any]:
+    """Resolve decorators without allowing endless dialect adaptation."""
     effective_type = sqla_type.dialect_impl(dialect)
-    seen: set[type] = set()
-    while isinstance(effective_type, TypeDecorator):
-        impl = effective_type.type_engine(dialect)
-        if type(effective_type) in seen:
-            # A colspecs entry can map a decorator's impl back to the same
-            # decorator (e.g. another library registering a String decorator in
-            # a colspecs dict this dialect shares); stop at the impl type.
-            effective_type = impl
-            break
-        seen.add(type(effective_type))
-        effective_type = impl.dialect_impl(dialect)
+    for _ in range(1024):
+        if not isinstance(effective_type, TypeDecorator):
+            return effective_type
+        effective_type = effective_type.type_engine(dialect).dialect_impl(dialect)
+    if isinstance(effective_type, TypeDecorator):
+        raise CompileError(
+            "TypeDecorator adaptation did not resolve after 1024 steps. Check the dialect's colspecs and custom type hooks for cycles."
+        )
+    return effective_type
+
+
+def _datetime64_bind_signature(sqla_type: TypeEngine[Any], dialect: Dialect) -> _DateTime64QuerySignature:
+    effective_type = _unwrap_dialect_type(sqla_type, dialect)
     if isinstance(effective_type, ChSqlaType):
         return _datetime64_query_signature(effective_type.ch_type)
     if isinstance(effective_type, ARRAY):
