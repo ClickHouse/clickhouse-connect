@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- SQLAlchemy String binds no longer hang, including during schema reflection, when another library adds a String decorator to SQLAlchemy's shared `colspecs` defaults. The ClickHouse dialect now owns its mapping so foreign type adaptations and bind processors do not affect ClickHouse queries. Explicit custom type adaptations that remain unresolved after 1024 steps now raise `CompileError` instead of hanging.
+
 ## 1.10.0, 2026-10-07
 
 ### Improvements

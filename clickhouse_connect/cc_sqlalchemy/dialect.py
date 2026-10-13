@@ -1,3 +1,4 @@
+from collections.abc import MutableMapping
 from typing import Any, cast
 
 import sqlalchemy.schema as sa_schema
@@ -6,7 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.engine.default import DefaultDialect
 from sqlalchemy.exc import NoResultFound, NoSuchTableError
 from sqlalchemy.sql.dml import Insert
-from sqlalchemy.sql.sqltypes import TupleType
+from sqlalchemy.sql.sqltypes import TupleType, TypeEngine
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy import dialect_name, ischema_names
@@ -42,6 +43,7 @@ class ClickHouseDialect(DefaultDialect):
 
     name = dialect_name
     driver = "connect"
+    colspecs: MutableMapping[type[TypeEngine[Any]], type[TypeEngine[Any]]] = {}
 
     default_schema_name = "default"
     supports_native_decimal = True
