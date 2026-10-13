@@ -7,7 +7,9 @@ aiohttp>=3.9.0
 sqlalchemy[asyncio]>=2.0,<3.0
 alembic>=1.18
 cython==3.2.5
-pyarrow
+# PyArrow 26 requires NumPy 2. Python 3.10-3.12 jobs test NumPy 1.
+pyarrow<26; python_version < '3.13'
+pyarrow; python_version >= '3.13'
 pytest
 pytest-asyncio
 pytest-mock
