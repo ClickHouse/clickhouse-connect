@@ -5,7 +5,7 @@ from sqlalchemy.sql.compiler import SQLCompiler
 from sqlalchemy.sql.selectable import CompoundSelect
 from sqlalchemy.util import memoized_property
 
-from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, _unwrap_dialect_type
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
 from clickhouse_connect.driver.binding import _is_binary_bind_name, _is_valid_bind_name, format_str
 
@@ -88,9 +88,7 @@ def _resolve_ch_bind_type(sqla_type):
 
 
 def _is_ch_literal_type(sqla_type, dialect):
-    effective_type = sqla_type.dialect_impl(dialect)
-    while isinstance(effective_type, sqltypes.TypeDecorator):
-        effective_type = effective_type.type_engine(dialect).dialect_impl(dialect)
+    effective_type = _unwrap_dialect_type(sqla_type, dialect)
     if isinstance(effective_type, ChSqlaType):
         return True
     if isinstance(effective_type, sqltypes.ARRAY):
