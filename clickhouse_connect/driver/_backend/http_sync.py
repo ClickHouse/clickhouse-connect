@@ -355,13 +355,13 @@ class HttpSyncBackend:
                 self._active_session = query_session
             try:
                 response: HTTPResponse = cast(HTTPResponse, cast(PoolManager, self.http).request(method, url, **kwargs))
-                # http.client accepts EOF as the end of headers. ClickHouse finishes
-                # SQL response headers with Summary; proxies may retain only framing.
+                # http.client accepts EOF as the end of headers. ClickHouse sends only progress
+                # headers until it finalizes the response headers.
                 if (
                     200 <= response.status < 300
                     and not response.headers.get(ex_header)
                     and method.upper() != "HEAD"
-                    and not any(name in response.headers for name in ("X-ClickHouse-Summary", "Transfer-Encoding", "Content-Length"))
+                    and all(name.lower() == "x-clickhouse-progress" for name in response.headers)
                 ):
                     response.close()
                     response.release_conn()

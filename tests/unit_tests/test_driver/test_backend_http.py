@@ -707,6 +707,7 @@ class TestSyncRequestTargetPath:
         {"Transfer-Encoding": "chunked"},
         {"X-ClickHouse-Progress": "{}", "Content-Length": "0"},
         {"X-ClickHouse-Summary": "{}", "Connection": "close"},
+        {"Connection": "close"},
     ],
 )
 def test_sync_accepts_completed_response_headers(stream, headers):
