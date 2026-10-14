@@ -62,7 +62,7 @@ class TestHttpClientHeaders:
         assert "User-Agent" in init_headers
 
     def test_request_headers_override_client_headers(self):
-        response = create_mock_response(status=200)
+        response = create_mock_response(status=200, headers={"Content-Length": "0"})
         pool_mgr = Mock()
         pool_mgr.request.return_value = response
 
