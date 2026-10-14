@@ -5,6 +5,8 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+## 1.10.1, 2026-10-14
+
 ### Bug Fixes
 
 - SQLAlchemy `Inspector.get_view_names()` now returns regular and window views instead of always returning an empty list. `Inspector.get_materialized_view_names()` returns materialized views on SQLAlchemy 1.4 and 2.x. `get_table_names()` and default `MetaData.reflect()` continue to include views. Missing-table reflection now raises an exception that both `NoSuchTableError` and existing `NoResultFound` handlers catch, with the existing error message.
