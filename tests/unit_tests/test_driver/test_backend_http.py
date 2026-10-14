@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock
 import aiohttp
 import pytest
 from urllib3.exceptions import HTTPError
+from urllib3.response import HTTPResponse
 from yarl import URL
 
 from clickhouse_connect import common
@@ -678,7 +679,7 @@ class TestSyncRequestTargetPath:
     @staticmethod
     def _sent_url(url):
         backend = make_sync_backend(url)
-        backend.http.request = Mock(return_value=SimpleNamespace(status=200, headers={}))
+        backend.http.request = Mock(return_value=SimpleNamespace(status=200, headers={"Content-Length": "0"}))
         backend.request(b"SELECT 1", {"database": "db1"}, server_wait=False)
         (_method, sent_url), _kwargs = backend.http.request.call_args
         return sent_url
@@ -695,6 +696,97 @@ class TestSyncRequestTargetPath:
 
         assert backend.ping() is True
         assert backend.http.request.call_args.args[:2] == ("GET", "http://localhost:8123/clickhouse/ping")
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"X-ClickHouse-Summary": "{}"},
+        {"Content-Length": "0"},
+        {"Transfer-Encoding": "chunked"},
+        {"X-ClickHouse-Progress": "{}", "Content-Length": "0"},
+        {"X-ClickHouse-Summary": "{}", "Connection": "close"},
+        {"Connection": "close"},
+    ],
+)
+def test_sync_accepts_completed_response_headers(stream, headers):
+    backend = make_sync_backend()
+    response = HTTPResponse(status=200, headers=headers, preload_content=False)
+    backend.http.request.return_value = response
+
+    assert backend.request(b"SELECT 13", {}, stream=stream) is response
+
+
+@pytest.mark.parametrize(
+    "status, headers, method", [(200, {}, "HEAD"), (503, {}, "POST"), (200, {"X-ClickHouse-Exception-Code": "79"}, "POST")]
+)
+def test_sync_incomplete_header_check_preserves_head_and_http_errors(status, headers, method):
+    backend = make_sync_backend()
+    response = HTTPResponse(status=status, headers=headers, preload_content=False)
+    backend.http.request.return_value = response
+    backend.error_handler = Mock(side_effect=OperationalError("server error"))
+
+    if method == "HEAD":
+        assert backend.request(b"", {}, method=method) is response
+    else:
+        with pytest.raises(OperationalError, match="server error"):
+            backend.request(b"INSERT INTO target SELECT 13", {}, method=method)
+        if status == 503:
+            backend.error_handler.assert_called_once_with(response, True)
+        else:
+            backend.error_handler.assert_called_once_with(response)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("show_errors", [True, False, "scrub"])
+def test_sync_incomplete_headers_close_release_and_clear_session(stream, show_errors):
+    backend = make_sync_backend("http://private-host:8123")
+    backend.show_clickhouse_errors = show_errors
+    response = HTTPResponse(status=200, headers={"X-ClickHouse-Progress": "{}"}, preload_content=False)
+    response.close = Mock()
+    response.release_conn = Mock()
+    backend.http.request.return_value = response
+
+    with pytest.raises(OperationalError) as error:
+        backend.request(b"INSERT INTO target SELECT 13", {"session_id": "user_1"}, stream=stream)
+
+    response.close.assert_called_once()
+    response.release_conn.assert_called_once()
+    assert backend._active_session is None
+    assert backend.http.request.call_count == 1
+    assert ("private-host" in str(error.value)) == (show_errors is True)
+
+
+@pytest.mark.parametrize("retries, expected_attempts", [(0, 2), (3, 4)])
+@pytest.mark.parametrize("rebuild", [False, True])
+def test_sync_incomplete_headers_retry_budget_and_body_rebuild(monkeypatch, retries, expected_attempts, rebuild):
+    backend = make_sync_backend()
+    response = Mock(status=200, headers={})
+    backend.http.request.return_value = response
+    monkeypatch.setattr("clickhouse_connect.driver._backend.http_sync.time.sleep", lambda _: None)
+    body = iter([b"13"]) if rebuild else b"SELECT 13"
+    retry_body = Mock(return_value=iter([b"79"])) if rebuild else None
+
+    with pytest.raises(OperationalError, match="response headers completed"):
+        backend.request(body, {}, retries=retries, retryable=True, retry_body=retry_body)
+
+    assert backend.http.request.call_count == expected_attempts
+    assert response.close.call_count == expected_attempts
+    assert response.release_conn.call_count == expected_attempts
+    if retry_body is not None:
+        assert retry_body.call_count == expected_attempts - 1
+
+
+def test_sync_incomplete_headers_do_not_replay_consumed_body(monkeypatch):
+    backend = make_sync_backend()
+    backend.http.request.return_value = Mock(status=200, headers={})
+    monkeypatch.setattr("clickhouse_connect.driver._backend.http_sync.time.sleep", lambda _: None)
+
+    with pytest.raises(OperationalError):
+        backend.request(iter([b"13"]), {}, retryable=True)
+
+    assert backend.http.request.call_count == 1
 
 
 class TestAsyncRequestTargetPath:
@@ -890,7 +982,7 @@ class TestAsyncSessionLoop:
 )
 async def test_legacy_request_retry_policy(monkeypatch, transport, failure, data, params, form, expected_retry):
     backend = make_sync_backend() if transport == "sync" else make_async_backend()
-    success = SimpleNamespace(status=200, headers={})
+    success = SimpleNamespace(status=200, headers={"Content-Length": "0"})
     if failure == "disconnect":
         if transport == "sync":
             first = HTTPError("connection closed")

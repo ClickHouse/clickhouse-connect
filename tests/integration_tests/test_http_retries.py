@@ -11,7 +11,8 @@ from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from clickhouse_connect.driver.options import pd
 
 _HOP_HEADERS = {"connection", "content-length", "expect", "host", "keep-alive", "trailer", "transfer-encoding"}
-_FAULTS = [pytest.param("disconnect", id="disconnect"), 429, 503, 504]
+_REMOTE_CLOSE_FAULTS = ["disconnect", "progress_headers", "status_only"]
+_FAULTS = [*_REMOTE_CLOSE_FAULTS, 429, 503, 504]
 
 
 class _RetryHandler(BaseHTTPRequestHandler):
@@ -50,6 +51,14 @@ class _RetryHandler(BaseHTTPRequestHandler):
         if fault == "disconnect":
             self.close_connection = True
             self.connection.shutdown(socket.SHUT_RDWR)
+            return
+        if fault in ("progress_headers", "status_only"):
+            self.wfile.write(b"HTTP/1.1 200 OK\r\n")
+            if fault == "progress_headers":
+                self.wfile.write(b'X-ClickHouse-Progress: {"read_rows":"13"}\r\n')
+            self.wfile.flush()
+            self.close_connection = True
+            self.connection.shutdown(socket.SHUT_WR)
             return
         if fault is not None:
             self.send_response(fault)
@@ -114,7 +123,7 @@ def test_sql_write_is_not_replayed_after_delivery(retry_proxy, param_client, cal
         rows = call(param_client.query, "SELECT key FROM sql_write_retry").result_rows
         assert rows == [(13,)]
         assert proxy.statuses == [200]
-        assert isinstance(error, OperationalError if fault == "disconnect" else DatabaseError)
+        assert isinstance(error, OperationalError if fault in _REMOTE_CLOSE_FAULTS else DatabaseError)
 
 
 @pytest.mark.parametrize("fault", _FAULTS)
@@ -131,7 +140,7 @@ def test_dbapi_write_is_not_replayed_after_delivery(retry_proxy, param_client, c
 
         assert call(param_client.query, "SELECT key FROM dbapi_write_retry").result_rows == [(13,)]
         assert proxy.statuses == [200]
-        assert isinstance(error, OperationalError if fault == "disconnect" else DatabaseError)
+        assert isinstance(error, OperationalError if fault in _REMOTE_CLOSE_FAULTS else DatabaseError)
 
 
 @pytest.mark.parametrize("fault", _FAULTS)
@@ -140,7 +149,7 @@ def test_read_retries_after_delivery(retry_proxy, call, consume_stream, method, 
     proxy, client = retry_proxy
     # Commands retain their remote-close retry but have no HTTP status retry budget.
     proxy.arm(fault)
-    if method == "command" and fault != "disconnect":
+    if method == "command" and fault not in _REMOTE_CLOSE_FAULTS:
         with pytest.raises(DatabaseError):
             call(client.command, "SELECT 13")
         assert proxy.statuses == [200]
@@ -161,13 +170,14 @@ def test_read_retries_after_delivery(retry_proxy, call, consume_stream, method, 
 
 @pytest.mark.parametrize("method", ["insert", "insert_df", "raw_insert", "raw_insert_preframed"])
 @pytest.mark.parametrize("deduplicate", [False, True], ids=["at_least_once", "dedup_window"])
-def test_insert_data_retries_after_delivery(retry_proxy, param_client, call, table_context, method, deduplicate):
+@pytest.mark.parametrize("fault", _REMOTE_CLOSE_FAULTS)
+def test_insert_data_retries_after_delivery(retry_proxy, param_client, call, table_context, method, deduplicate, fault):
     if method == "insert_df" and pd is None:
         pytest.skip("pandas not available")
     proxy, client = retry_proxy
     table_settings = {"non_replicated_deduplication_window": 100} if deduplicate else None
     with table_context("insert_data_retry", ["key Int32"], settings=table_settings):
-        proxy.arm("disconnect")
+        proxy.arm(fault)
         settings = {"insert_deduplicate": int(deduplicate)}
         if method == "raw_insert_preframed":
             call(client.raw_insert, insert_block=b"INSERT INTO insert_data_retry FORMAT CSV\n13\n79\n", settings=settings)
