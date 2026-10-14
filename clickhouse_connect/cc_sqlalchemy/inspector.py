@@ -24,6 +24,10 @@ _INTERNAL_QUERY_OPTION = "ch_internal_query"
 _INTERNAL_QUERY_SENTINEL = object()
 
 
+class _NoSuchTableError(NoSuchTableError, NoResultFound):
+    """Preserve NoResultFound handlers for missing-table reflection."""
+
+
 def with_internal_query_formats(clause: TextClause) -> TextClause:
     """Force String columns to decode as str for driver metadata introspection.
 
@@ -189,7 +193,7 @@ class ChInspector(Inspector):
             try:
                 table_metadata = get_table_metadata(connection, table.name, schema)
             except NoResultFound as ex:
-                raise NoSuchTableError(f"{schema}.{table.name}" if schema else table.name) from ex
+                raise _NoSuchTableError(str(ex)) from ex
             reflected_columns: list[dict[str, Any]]
             if table_metadata.engine == "Dictionary":
                 reflected_columns = get_dictionary_columns(connection, table.name, schema)
@@ -220,4 +224,9 @@ class ChInspector(Inspector):
             try:
                 return get_columns(connection, table_name, schema)
             except NoResultFound as ex:
-                raise NoSuchTableError(f"{schema}.{table_name}" if schema else table_name) from ex
+                raise _NoSuchTableError(str(ex)) from ex
+
+    def get_materialized_view_names(self, schema: str | None = None, **kwargs: Any) -> list[str]:
+        """Return materialized views, including on SQLAlchemy 1.4."""
+        with self._operation_context() as connection:
+            return self.dialect.get_materialized_view_names(connection, schema, info_cache=self.info_cache, **kwargs)

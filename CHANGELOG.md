@@ -7,6 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- SQLAlchemy `Inspector.get_view_names()` now returns regular and window views instead of always returning an empty list. `Inspector.get_materialized_view_names()` returns materialized views on SQLAlchemy 1.4 and 2.x. `get_table_names()` and default `MetaData.reflect()` continue to include views. Missing-table reflection now raises an exception that both `NoSuchTableError` and existing `NoResultFound` handlers catch, with the existing error message.
 - SQLAlchemy String binds no longer hang, including during schema reflection, when another library adds a String decorator to SQLAlchemy's shared `colspecs` defaults. The ClickHouse dialect now owns its mapping so foreign type adaptations and bind processors do not affect ClickHouse queries. Explicit custom type adaptations that remain unresolved after 1024 steps now raise `CompileError` instead of hanging.
 
 ## 1.10.0, 2026-10-07
@@ -38,7 +39,6 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - Rust codec NumPy and Pandas queries now preserve nanoseconds in nullable scalar `DateTime64(9)` columns, including `SimpleAggregateFunction` aliases. They also reject unsupported scalar `DateTime64` precisions consistently for nullable columns and aliases.
 - Rust codec NumPy and Pandas queries now return correct durations and `NaT` for NULL values in `Nullable(SimpleAggregateFunction(..., Time64))` columns. Previously, columns with NULLs returned floating-point bit patterns interpreted as durations.
 - Large async external-data uploads now use bounded writes to avoid long event-loop stalls during TLS encryption. Closes [#1057](https://github.com/ClickHouse/clickhouse-connect/issues/1057).
-- SQLAlchemy `Inspector.get_view_names()` now returns the views, materialized views, live views and window views in a database instead of always returning an empty list, and `get_table_names()` no longer includes views. Autoloading a missing table (for example `Table("absent", metadata, autoload_with=conn)`) now raises `NoSuchTableError` instead of `NoResultFound`.
 
 ### Compatibility
 
