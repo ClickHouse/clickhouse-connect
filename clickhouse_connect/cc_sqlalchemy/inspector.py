@@ -6,7 +6,7 @@ from typing import Any, cast
 import sqlalchemy.schema as sa_schema
 from sqlalchemy import String, bindparam, text
 from sqlalchemy.engine.reflection import Inspector
-from sqlalchemy.exc import NoResultFound
+from sqlalchemy.exc import NoResultFound, NoSuchTableError
 from sqlalchemy.sql.elements import TextClause
 
 from clickhouse_connect.cc_sqlalchemy._schema import COLUMN_OPTIONS, TABLE_OPTIONS, canonical_schema_kwargs
@@ -22,6 +22,10 @@ from clickhouse_connect.driver.client import _INTERNAL_QUERY_FORMATS
 
 _INTERNAL_QUERY_OPTION = "ch_internal_query"
 _INTERNAL_QUERY_SENTINEL = object()
+
+
+class _NoSuchTableError(NoSuchTableError, NoResultFound):
+    """Preserve NoResultFound handlers for missing-table reflection."""
 
 
 def with_internal_query_formats(clause: TextClause) -> TextClause:
@@ -186,7 +190,10 @@ class ChInspector(Inspector):
         schema = table.schema
         with self._inspection_context() as inspector:
             connection = inspector.bind
-            table_metadata = get_table_metadata(connection, table.name, schema)
+            try:
+                table_metadata = get_table_metadata(connection, table.name, schema)
+            except NoResultFound as ex:
+                raise _NoSuchTableError(str(ex)) from ex
             reflected_columns: list[dict[str, Any]]
             if table_metadata.engine == "Dictionary":
                 reflected_columns = get_dictionary_columns(connection, table.name, schema)
@@ -214,4 +221,12 @@ class ChInspector(Inspector):
 
     def get_columns(self, table_name, schema=None, **_kwargs):
         with self._operation_context() as connection:
-            return get_columns(connection, table_name, schema)
+            try:
+                return get_columns(connection, table_name, schema)
+            except NoResultFound as ex:
+                raise _NoSuchTableError(str(ex)) from ex
+
+    def get_materialized_view_names(self, schema: str | None = None, **kwargs: Any) -> list[str]:
+        """Return materialized views, including on SQLAlchemy 1.4."""
+        with self._operation_context() as connection:
+            return self.dialect.get_materialized_view_names(connection, schema, info_cache=self.info_cache, **kwargs)

@@ -4,8 +4,10 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
+import sqlalchemy as db
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import NoResultFound, NoSuchTableError
 
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 from clickhouse_connect.cc_sqlalchemy.inspector import (
@@ -274,10 +276,58 @@ def test_get_table_names_uses_internal_query_formats(mock_engine):
     with engine.connect() as conn:
         conn.exec_driver_sql("SELECT 1")
         client.query.reset_mock()
-        client.query.return_value = _NamedRowsResult([["my_table"]], ["name"])
+
+        def _side_effect(operation, *args, **kwargs):
+            op = str(operation)
+            if "currentDatabase" in op:
+                return _NamedRowsResult([["default"]], ["currentDatabase()"])
+            if "system.tables" in op:
+                return _NamedRowsResult([["my_view"]], ["name"])
+            return _NamedRowsResult([["my_table"], ["my_view"]], ["name"])
+
+        client.query.side_effect = _side_effect
         names = conn.dialect.get_table_names(conn)
-    assert names == ["my_table"]
+    assert names == ["my_table", "my_view"]
+    assert len(client.query.call_args_list) == 1
     assert all(fmt == dict(_INTERNAL_QUERY_FORMATS) for fmt in _query_formats(client))
+
+
+@pytest.mark.parametrize(
+    ("method", "names", "predicate"),
+    [
+        ("get_view_names", ["v"], "engine IN ('View', 'WindowView')"),
+        ("get_materialized_view_names", ["mv"], "engine = 'MaterializedView'"),
+    ],
+)
+def test_get_view_names_reads_system_tables(mock_engine, method, names, predicate):
+    engine, client = mock_engine
+    with engine.connect() as conn:
+        conn.exec_driver_sql("SELECT 1")
+        client.query.reset_mock()
+        client.query.return_value = _NamedRowsResult([[name] for name in names], ["name"])
+        assert getattr(db.inspect(conn), method)(schema="db") == names
+    (call,) = client.query.call_args_list
+    query = str(call.args[0] if call.args else call.kwargs.get("query"))
+    assert "FROM system.tables" in query and predicate in query
+    assert all(fmt == dict(_INTERNAL_QUERY_FORMATS) for fmt in _query_formats(client))
+
+
+@pytest.mark.parametrize("path", ["dialect", "inspector", "autoload"])
+def test_get_columns_missing_table_raises_compatible_exception(mock_engine, path):
+    engine, client = mock_engine
+    with engine.connect() as conn:
+        conn.exec_driver_sql("SELECT 1")
+        client.query.reset_mock()
+        client.query.return_value = _NamedRowsResult([], ["engine", "engine_full", "comment"])
+        with pytest.raises(NoSuchTableError) as error:
+            if path == "dialect":
+                conn.dialect.get_columns(conn, "absent", schema="db")
+            elif path == "inspector":
+                db.inspect(conn).get_columns("absent", schema="db")
+            else:
+                db.Table("absent", db.MetaData(), schema="db", autoload_with=conn)
+        assert isinstance(error.value, NoResultFound)
+        assert str(error.value) == "Table db.absent does not exist"
 
 
 def test_get_schema_names_uses_internal_query_formats(mock_engine):
