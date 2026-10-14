@@ -155,7 +155,9 @@ class TestTokenProviderConstruction:
 def _fake_response(status, ex_code=None):
     r = MagicMock()
     r.status = status
-    r.headers = {} if ex_code is None else {"X-ClickHouse-Exception-Code": ex_code}
+    r.headers = {"Content-Length": "0"}
+    if ex_code is not None:
+        r.headers["X-ClickHouse-Exception-Code"] = ex_code
     r.data = b""
     r.close = MagicMock()
     return r
