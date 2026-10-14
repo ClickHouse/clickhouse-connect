@@ -8,6 +8,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 ### Bug Fixes
 
 - SQLAlchemy `Inspector.get_view_names()` now returns regular and window views instead of always returning an empty list. `Inspector.get_materialized_view_names()` returns materialized views on SQLAlchemy 1.4 and 2.x. `get_table_names()` and default `MetaData.reflect()` continue to include views. Missing-table reflection now raises an exception that both `NoSuchTableError` and existing `NoResultFound` handlers catch, with the existing error message.
+- The synchronous HTTP client no longer reports success when a connection closes after the status line or progress headers, before ClickHouse sends the final response headers. These failures follow the existing remote-close retry policy.
 - SQLAlchemy String binds no longer hang, including during schema reflection, when another library adds a String decorator to SQLAlchemy's shared `colspecs` defaults. The ClickHouse dialect now owns its mapping so foreign type adaptations and bind processors do not affect ClickHouse queries. Explicit custom type adaptations that remain unresolved after 1024 steps now raise `CompileError` instead of hanging.
 
 ## 1.10.0, 2026-10-07
