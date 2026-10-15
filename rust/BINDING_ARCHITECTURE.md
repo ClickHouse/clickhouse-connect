@@ -82,13 +82,18 @@ copy at the price of holding the GIL, the right trade for a one-shot
 buffered call.
 
 Pass `has_block_info=True` whenever the request pinned
-`client_protocol_version`, which preserves bare DateTime timezones.
+`client_protocol_version`, which preserves bare DateTime timezones. All four
+entry points also accept `default_timezone=None` to stamp an IANA zone on
+emitted batches for timezone-less `DateTime`/`DateTime64` Python
+materialization. Intake validates the zone with `zoneinfo.ZoneInfo` and
+canonicalizes UTC equivalents to `None`. `ColBatch.default_timezone` exposes
+the resolved zone name or `None`.
 
 Schema uniformity across blocks is enforced in the core for every surface.
 A mid-stream schema change raises `ValueError` rather than producing a
 result that would corrupt row materialization. `from_batches` validates
-schema equality across inputs and keeps working column names and types even
-when every chunk is empty.
+schema and `default_timezone` equality across inputs and keeps working
+column names and types even when every chunk is empty.
 
 ## Exits
 
@@ -279,12 +284,12 @@ cell except where documented in `docs/rust-codec.mdx`.
 - **Temporals.** A per-column context resolves timezone policy once, not
   per cell. Naive columns are built by pure epoch arithmetic with no
   datetime parsing in the loop. Named non-UTC zones go through
-  `datetime.fromtimestamp` for DST correctness. A `StreamDecoder` built
-  with `default_timezone` stamps that IANA zone on its batches, and a
-  timezone-less `DateTime`/`DateTime64` uses it as if the type named it.
-  The batch installs the zone in a thread-local scope for the duration of
-  each Python exit, so Dynamic and SharedVariant children resolved deep in a
-  fill see it too. The schema, buffers, and Arrow export never change.
+  `datetime.fromtimestamp` for DST correctness. A batch decoded with
+  `default_timezone` stamps that IANA zone on its Python materialization,
+  and a timezone-less `DateTime`/`DateTime64` uses it as if the type named
+  it. The batch installs the zone in a thread-local scope for the duration
+  of each Python exit, so Dynamic and SharedVariant children resolved deep
+  in a fill see it too. The schema, buffers, and Arrow export never change.
 - **Aggregate states.** Exact serialized state `bytes`, uninterpreted. The
   Arrow exit exports them zero copy as LargeBinary.
 - **Variant and Dynamic.** Intrinsic NULL becomes `None`, unambiguous

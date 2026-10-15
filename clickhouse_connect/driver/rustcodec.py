@@ -70,11 +70,12 @@ def _log_versions_once(resolved: str, core: Any) -> None:
         return
     _versions_logged = True
     logger.info(
-        "native_codec=%s using clickhouse-connect-core %s (binding API %s, column buffer API %s), clickhouse-connect %s",
+        "native_codec=%s using clickhouse-connect-core %s (binding API %s, column buffer API %s, default timezone API %s), clickhouse-connect %s",
         resolved,
         getattr(core, "__version__", "unknown"),
         getattr(core, "BINDING_API_VERSION", 0),
         getattr(core, "COLUMN_BUFFER_API_VERSION", 0),
+        getattr(core, "DEFAULT_TIMEZONE_API_VERSION", 0),
         common.version(),
     )
 
@@ -164,8 +165,11 @@ def _rust_query_ineligible_reason(context: QueryContext) -> str | None:
     if context.tz_mode != "naive_utc":
         return "tz_mode"
     # With the checks above excluded, active_tz(None) is None exactly when bare DateTime renders naive-UTC
-    # (query.py active_tz). Any other ambient zone needs a core that applies it by IANA name.
-    if context.active_tz(None) is not None and (_ambient_timezone_name(context) is None or not _core_supports_default_timezone()):
+    # (query.py active_tz). Any other ambient zone needs a core that applies it by IANA name, and only
+    # Python row/column exits are eligible; numpy/pandas queries keep routing to the Python codec.
+    if context.active_tz(None) is not None and (
+        context.use_numpy or _ambient_timezone_name(context) is None or not _core_supports_default_timezone()
+    ):
         return "ambient timezone"
     return None
 

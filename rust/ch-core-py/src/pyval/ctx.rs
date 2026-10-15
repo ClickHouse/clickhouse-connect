@@ -45,6 +45,31 @@ const UTC_EQUIVALENTS: &[&str] = &[
     "Etc/Greenwich",
 ];
 
+fn is_utc_equivalent(tz: &str) -> bool {
+    UTC_EQUIVALENTS.contains(&tz)
+}
+
+/// Validate an optional default timezone at intake and canonicalize UTC
+/// equivalents to `None`.
+pub(crate) fn resolve_default_timezone(
+    py: Python<'_>,
+    default_timezone: Option<String>,
+) -> PyResult<Option<Arc<str>>> {
+    let Some(tz) = default_timezone else {
+        return Ok(None);
+    };
+    if is_utc_equivalent(&tz) {
+        return Ok(None);
+    }
+    py.import("zoneinfo")?
+        .getattr("ZoneInfo")?
+        .call1((&tz,))
+        .map_err(|err| {
+            PyValueError::new_err(format!("Unknown or invalid default_timezone '{tz}': {err}"))
+        })?;
+    Ok(Some(Arc::from(tz)))
+}
+
 thread_local! {
     /// Zone applied to timezone-less DateTime/DateTime64 columns while a
     /// ColBatch materializes Python values on this thread. Set through
@@ -56,6 +81,7 @@ thread_local! {
 
 /// Installs a batch's default timezone for the current thread and restores the
 /// previous value on drop, so nested or re-entrant materialization stays scoped.
+#[must_use]
 pub(crate) struct DefaultTimezoneScope {
     previous: Option<Arc<str>>,
 }
@@ -240,7 +266,7 @@ pub(crate) fn prepare_column_ctx<'py>(
     };
 
     let (tz, fromtimestamp) = match timezone {
-        Some(tz) if !UTC_EQUIVALENTS.contains(&tz) => {
+        Some(tz) if !is_utc_equivalent(tz) => {
             let zone = py.import("zoneinfo")?.getattr("ZoneInfo")?.call1((tz,))?;
             let fromtimestamp = py
                 .import("datetime")?
@@ -386,4 +412,42 @@ pub(crate) fn prepare_column_ctx<'py>(
         tuple_names,
         json_paths,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn current_default_timezone() -> Option<String> {
+        DEFAULT_TIMEZONE.with(|cell| cell.borrow().as_deref().map(str::to_owned))
+    }
+
+    #[test]
+    fn default_timezone_scope_restores_nested_and_outer_state() {
+        assert_eq!(current_default_timezone(), None);
+        {
+            let _outer = DefaultTimezoneScope::enter(Some(Arc::from("America/New_York")));
+            assert_eq!(
+                current_default_timezone().as_deref(),
+                Some("America/New_York")
+            );
+            {
+                let _inner = DefaultTimezoneScope::enter(Some(Arc::from("Asia/Kolkata")));
+                assert_eq!(current_default_timezone().as_deref(), Some("Asia/Kolkata"));
+            }
+            assert_eq!(
+                current_default_timezone().as_deref(),
+                Some("America/New_York")
+            );
+            {
+                let _inner = DefaultTimezoneScope::enter(None);
+                assert_eq!(current_default_timezone(), None);
+            }
+            assert_eq!(
+                current_default_timezone().as_deref(),
+                Some("America/New_York")
+            );
+        }
+        assert_eq!(current_default_timezone(), None);
+    }
 }

@@ -9,7 +9,7 @@ Driver integration changes and core version requirements belong in the [driver c
 
 ### Improvements
 
-- `StreamDecoder` accepts `default_timezone`, an IANA zone name applied to timezone-less `DateTime` and `DateTime64` values when batches materialize Python objects. Explicit column timezones still win. Schemas, type names, column buffers, and the Arrow export are unchanged. The module advertises this through `DEFAULT_TIMEZONE_API_VERSION = 1`, so the driver can use it to serve ambient-timezone queries.
+- `StreamDecoder`, `BlockDecoder`, `PipeDecoder`, and `ColBatch.decode_native` accept `default_timezone`, an IANA zone name applied to timezone-less `DateTime` and `DateTime64` values when batches materialize Python objects. Intake validates `default_timezone` with `zoneinfo.ZoneInfo` and canonicalizes UTC equivalents to `None`. `ColBatch.default_timezone` exposes the resolved zone, and `ColBatch.from_batches` validates that every merged batch carries the same value. Explicit column timezones still win. Schemas, type names, column buffers, and the Arrow export are unchanged. The module advertises this through `DEFAULT_TIMEZONE_API_VERSION = 1`, so the driver can use it to serve ambient-timezone queries.
 
 ### Compatibility
 

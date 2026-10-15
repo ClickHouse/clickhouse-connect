@@ -12,7 +12,7 @@ import pytest
 
 from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver import rustnumpy
+from clickhouse_connect.driver import rustnumpy, tzutil
 from clickhouse_connect.driver.exceptions import (
     DatabaseError,
     DataError,
@@ -2841,3 +2841,83 @@ def test_rust_codec_pandas_selected_string_storage(client_factory, call, consume
         assert len(chunks) > 1 if block_size == 1 else len(chunks) == 1
         empty = call(rust_client.query_df, query.replace("numbers(13)", "numbers(0)"), use_extended_dtypes=True)
         assert empty.empty
+
+
+def test_rust_codec_ambient_timezone_parity(client_factory, call, consume_stream, monkeypatch):
+    monkeypatch.setattr(tzutil, "local_tz", ZoneInfo("America/New_York"))
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    rust_client._apply_server_tz = False
+    python_client._apply_server_tz = False
+
+    base_expressions = [
+        "toDateTime(ts) AS dt",
+        "toDateTime64(ts, 3) AS dt64",
+        "toDateTime(n) AS ndt",
+        "toDateTime64(n, 9) AS ndt64",
+        "[toDateTime(ts)] AS arr",
+        "[toDateTime(n), CAST(NULL AS Nullable(DateTime))] AS narr",
+        "tuple(toDateTime(ts), toDateTime(ts, 'UTC')) AS tup",
+        "toDateTime(ts, 'Europe/Kaliningrad') AS zoned",
+    ]
+    source = "values('ts UInt32, n Nullable(UInt32)', (1705322096, 1705322096), (1720000079, NULL))"
+    base_query = f"SELECT {', '.join(base_expressions)} FROM {source}"
+    if python_client.min_version("24.8"):
+        dynamic_expressions = [
+            *base_expressions,
+            "CAST(toDateTime(ts) AS Dynamic) AS dyn",
+            "CAST(toDateTime(ts) AS Dynamic(max_types=0)) AS dyn_shared",
+        ]
+        query = f"SELECT {', '.join(dynamic_expressions)} FROM {source}"
+    else:
+        query = base_query
+
+    rust_res = call(rust_client.query, query)
+    python_res = call(python_client.query, query)
+    assert repr(rust_res.result_rows) == repr(python_res.result_rows)
+    assert repr([list(col) for col in rust_res.result_columns]) == repr([list(col) for col in python_res.result_columns])
+    assert [t.name for t in rust_res.column_types] == [t.name for t in python_res.column_types]
+
+    def row_blocks(client):
+        blocks = []
+        consume_stream(call(client.query_row_block_stream, query), lambda b: blocks.append(list(b)))
+        return blocks
+
+    assert repr(row_blocks(rust_client)) == repr(row_blocks(python_client))
+
+    def col_blocks(client):
+        blocks = []
+        consume_stream(call(client.query_column_block_stream, query), lambda b: blocks.append([list(col) for col in b]))
+        return blocks
+
+    assert repr(col_blocks(rust_client)) == repr(col_blocks(python_client))
+
+    def rows_stream(client):
+        rows = []
+        consume_stream(call(client.query_rows_stream, query), rows.append)
+        return rows
+
+    assert repr(rows_stream(rust_client)) == repr(rows_stream(python_client))
+
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    with pytest.raises(NotSupportedError, match="ambient timezone"):
+        call(rust_client.query_np, base_query)
+    with pytest.raises(NotSupportedError, match="ambient timezone"):
+        call(rust_client.query_df, query)
+
+    fallback_client = client_factory(native_codec="rust")
+    fallback_client._apply_server_tz = False
+    nano_query = "SELECT [fromUnixTimestamp64Nano(toInt64(1705322096000000013))] AS arr, toDateTime(1705322096) AS dt"
+    fallback_np = call(fallback_client.query_np, nano_query)
+    python_np = call(python_client.query_np, nano_query)
+    np.testing.assert_array_equal(fallback_np, python_np)
+    assert isinstance(fallback_np[0][0][0], np.datetime64)
+
+    for use_extended_dtypes in (False, True):
+        fallback_df = call(fallback_client.query_df, nano_query, use_extended_dtypes=use_extended_dtypes)
+        python_df = call(python_client.query_df, nano_query, use_extended_dtypes=use_extended_dtypes)
+        pd.testing.assert_frame_equal(fallback_df, python_df)
+        cell = fallback_df["arr"].iloc[0][0]
+        assert isinstance(cell, pd.Timestamp)
+        assert cell.nanosecond == 13

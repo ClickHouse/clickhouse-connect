@@ -13,7 +13,9 @@ use ch_core_rs::schema::ChType;
 
 use crate::buffers::{column_buffers, ColumnBuffers};
 use crate::decoder::{buffer_to_vec, decode_err, decode_options};
-use crate::pyval::{fill_column, prepare_column_ctx, ColumnCtx, DefaultTimezoneScope};
+use crate::pyval::{
+    fill_column, prepare_column_ctx, resolve_default_timezone, ColumnCtx, DefaultTimezoneScope,
+};
 
 /// Wrapper to make ArrowArrayStream Send-safe for PyCapsule.
 #[repr(transparent)]
@@ -65,8 +67,13 @@ impl ColBatch {
 impl ColBatch {
     /// Decode a complete Native payload from bytes, bytearray, or memoryview.
     #[staticmethod]
-    #[pyo3(signature = (data, has_block_info = false))]
-    fn decode_native(data: &Bound<'_, PyAny>, has_block_info: bool) -> PyResult<Self> {
+    #[pyo3(signature = (data, has_block_info = false, default_timezone = None))]
+    fn decode_native(
+        data: &Bound<'_, PyAny>,
+        has_block_info: bool,
+        default_timezone: Option<String>,
+    ) -> PyResult<Self> {
+        let default_timezone = resolve_default_timezone(data.py(), default_timezone)?;
         let options = decode_options(has_block_info);
         let chunked = if let Ok(bytes) = data.cast::<pyo3::types::PyBytes>() {
             // bytes: decode straight from the borrowed buffer, no copy. The
@@ -78,12 +85,13 @@ impl ColBatch {
             data.py().detach(|| decode_all_bytes(&owned, &options))
         }
         .map_err(decode_err)?;
-        Ok(Self::from_chunked(chunked))
+        Ok(Self::from_chunked(chunked).with_default_timezone(default_timezone))
     }
 
-    /// Merge already-decoded batches into one. The schema comes from the
-    /// first batch and every later batch must match it. Chunks are shared via
-    /// Arc clones; zero-row chunks are dropped, as in `decode_all_bytes`.
+    /// Merge already-decoded batches into one. The schema and
+    /// `default_timezone` come from the first batch and every later batch must
+    /// match them. Chunks are shared via Arc clones; zero-row chunks are
+    /// dropped, as in `decode_all_bytes`.
     #[staticmethod]
     fn from_batches(py: Python<'_>, batches: Vec<Py<ColBatch>>) -> PyResult<Self> {
         let first = batches
@@ -101,6 +109,13 @@ impl ColBatch {
                     "Batch {i} schema differs from the first batch"
                 )));
             }
+            if guard.default_timezone != default_timezone {
+                return Err(PyValueError::new_err(format!(
+                    "Batch {i} default_timezone ({:?}) differs from the first batch ({:?})",
+                    guard.default_timezone.as_deref(),
+                    default_timezone.as_deref(),
+                )));
+            }
             chunks.extend(
                 guard
                     .inner
@@ -112,6 +127,11 @@ impl ColBatch {
         }
         Ok(Self::from_chunked(ChunkedBatch { schema, chunks })
             .with_default_timezone(default_timezone))
+    }
+
+    #[getter]
+    fn default_timezone(&self) -> Option<&str> {
+        self.default_timezone.as_deref()
     }
 
     #[getter]

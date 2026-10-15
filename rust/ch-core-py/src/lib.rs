@@ -14,8 +14,9 @@ fn _ch_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("BINDING_API_VERSION", 3)?;
     // Additive, private buffer capability. Existing drivers still use API 3.
     m.add("COLUMN_BUFFER_API_VERSION", 1)?;
-    // Additive capability: StreamDecoder(default_timezone=...) applies an
-    // ambient zone to timezone-less DateTime/DateTime64 Python values.
+    // Additive capability: decoders and ColBatch.decode_native accept
+    // default_timezone to apply an ambient zone to timezone-less
+    // DateTime/DateTime64 Python values.
     m.add("DEFAULT_TIMEZONE_API_VERSION", 1)?;
     m.add_class::<batch::ColBatch>()?;
     m.add_class::<decoder::BlockDecoder>()?;

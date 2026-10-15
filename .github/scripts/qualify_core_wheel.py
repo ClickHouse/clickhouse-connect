@@ -40,6 +40,7 @@ def check_install(profile: str, output: Path, allow_source_lz4: bool = False) ->
     assert rustcodec.resolve_native_codec("rust_strict") == "rust_strict"
     assert _ch_core.BINDING_API_VERSION >= rustcodec.REQUIRED_BINDING_API_VERSION
     assert _ch_core.COLUMN_BUFFER_API_VERSION >= rustcodec.REQUIRED_COLUMN_BUFFER_API_VERSION
+    assert _ch_core.DEFAULT_TIMEZONE_API_VERSION >= rustcodec.DEFAULT_TIMEZONE_API_VERSION
     for name, expected in (
         ("numpy", profile != "bare"),
         ("pandas", profile in ("pandas", "arrow")),
@@ -74,6 +75,7 @@ def check_install(profile: str, output: Path, allow_source_lz4: bool = False) ->
         "source_builds": ["lz4"] if allow_source_lz4 else [],
         "binding_api": _ch_core.BINDING_API_VERSION,
         "column_buffer_api": _ch_core.COLUMN_BUFFER_API_VERSION,
+        "default_timezone_api": _ch_core.DEFAULT_TIMEZONE_API_VERSION,
         "core_version": core.version,
         "core_wheel_tags": wheel_tags,
         "module_paths": {name: module.__file__ for name, module in modules.items()},
