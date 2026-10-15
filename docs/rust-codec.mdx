@@ -21,7 +21,7 @@ pip install "clickhouse-connect[rust,numpy]"   # NumPy results
 pip install "clickhouse-connect[rust,pandas]"  # Pandas results and inserts
 ```
 
-Core wheels are published for CPython 3.10 through 3.14 and free-threaded CPython 3.14t on Linux, macOS, and Windows. On free-threaded Python, importing the core extension doesn't re-enable the GIL.
+Core wheels are published for CPython 3.10 through 3.15 and free-threaded CPython 3.14t and 3.15t on Linux, macOS, and Windows. On free-threaded Python, importing the core extension doesn't re-enable the GIL.
 
 Ordinary Rust NumPy and Pandas output doesn't require PyArrow or any other Arrow package. This includes `query_np`, `query_df`, their streaming variants, and `query(..., use_numpy=True)`. NumPy queries don't require Pandas. Add the `async` extra for the async client.
 
