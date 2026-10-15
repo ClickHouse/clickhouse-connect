@@ -1,12 +1,14 @@
+from collections.abc import MutableMapping
 from typing import Any, cast
 
 import sqlalchemy.schema as sa_schema
+from sqlalchemy import String, bindparam, text
 from sqlalchemy import __version__ as sa_version
-from sqlalchemy import text
+from sqlalchemy.engine import Connection
 from sqlalchemy.engine.default import DefaultDialect
 from sqlalchemy.exc import NoResultFound, NoSuchTableError
 from sqlalchemy.sql.dml import Insert
-from sqlalchemy.sql.sqltypes import TupleType
+from sqlalchemy.sql.sqltypes import TupleType, TypeEngine
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy import dialect_name, ischema_names
@@ -20,6 +22,8 @@ from clickhouse_connect.cc_sqlalchemy.inspector import (
     _INTERNAL_QUERY_OPTION,
     _INTERNAL_QUERY_SENTINEL,
     ChInspector,
+    _database_name,
+    _NoSuchTableError,
     get_columns,
     get_table_metadata,
     with_internal_query_formats,
@@ -42,6 +46,7 @@ class ClickHouseDialect(DefaultDialect):
 
     name = dialect_name
     driver = "connect"
+    colspecs: MutableMapping[type[TypeEngine[Any]], type[TypeEngine[Any]]] = {}
 
     default_schema_name = "default"
     supports_native_decimal = True
@@ -380,7 +385,10 @@ class ClickHouseDialect(DefaultDialect):
         return [row.name for row in connection.execute(with_internal_query_formats(text(cmd)))]
 
     def get_columns(self, connection, table_name, schema=None, **kw):
-        return get_columns(connection, table_name, schema)
+        try:
+            return get_columns(connection, table_name, schema)
+        except NoResultFound as ex:
+            raise _NoSuchTableError(str(ex)) from ex
 
     def get_primary_keys(self, connection, table_name, schema=None, **kw):
         return []
@@ -394,8 +402,19 @@ class ClickHouseDialect(DefaultDialect):
     def get_temp_table_names(self, connection, schema=None, **kw):
         return []
 
-    def get_view_names(self, connection, schema=None, **kw):
-        return []
+    def get_view_names(self, connection: Connection, schema: str | None = None, **kw: Any) -> list[str]:
+        query = text(
+            "SELECT name FROM system.tables WHERE database = :database AND engine IN ('View', 'WindowView') ORDER BY name"
+        ).bindparams(bindparam("database", type_=String()))
+        rows = connection.execute(with_internal_query_formats(query), {"database": _database_name(connection, schema)})
+        return [row.name for row in rows]
+
+    def get_materialized_view_names(self, connection: Connection, schema: str | None = None, **kw: Any) -> list[str]:
+        query = text("SELECT name FROM system.tables WHERE database = :database AND engine = 'MaterializedView' ORDER BY name").bindparams(
+            bindparam("database", type_=String())
+        )
+        rows = connection.execute(with_internal_query_formats(query), {"database": _database_name(connection, schema)})
+        return [row.name for row in rows]
 
     def get_temp_view_names(self, connection, schema=None, **kw):
         return []
