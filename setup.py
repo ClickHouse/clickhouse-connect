@@ -98,7 +98,11 @@ def run_setup():
             "numpy": ["numpy"],
             "pandas": ["pandas>=2,<4"],
             "polars": ["polars>=1.0"],
-            "arrow": ['pyarrow>=22.0; python_version>="3.14"', 'pyarrow; python_version<"3.14"'],
+            "arrow": [
+                'pyarrow>=26.0; python_version>="3.15"',
+                'pyarrow>=22.0; python_version>="3.14" and python_version<"3.15"',
+                'pyarrow; python_version<"3.14"',
+            ],
             "orjson": ["orjson"],
             "tzlocal": ["tzlocal>=4.0"],
             "tzdata": ["tzdata"],

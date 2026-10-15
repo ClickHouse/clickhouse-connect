@@ -7,7 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
-- Added CPython 3.15 support and wheels. `lz4` has no CPython 3.15 wheels yet, so installing on 3.15 builds it from source. Closes [#1086](https://github.com/ClickHouse/clickhouse-connect/issues/1086).
+- Added CPython 3.15 support and wheels, including experimental free-threaded 3.15t wheels. `lz4` has no CPython 3.15 wheels yet, so installing on 3.15 builds it from source. Closes [#1086](https://github.com/ClickHouse/clickhouse-connect/issues/1086).
 
 ## 1.10.1, 2026-10-14
 
