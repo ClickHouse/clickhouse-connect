@@ -25,8 +25,9 @@ from tests.integration_tests.conftest import nullable_tuple_settings, supports_m
 
 pytest.importorskip("_ch_core")
 
-# These tests require a UTC-configured server. On a non-UTC server the eligibility gate reports
-# "ambient timezone"/"server timezone header" and rust_strict raises instead of exercising the codec.
+# These tests require a UTC-configured server. On a non-UTC server bare DateTime values render in the server
+# zone instead of the naive UTC values asserted here, or the eligibility gate reports "server timezone header"
+# and rust_strict raises instead of exercising the codec.
 
 SCALAR_QUERY = (
     "SELECT number AS n, toString(number) AS s, toDateTime(number) AS dt, "

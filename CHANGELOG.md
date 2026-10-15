@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Improvements
+
+- The Rust codec now serves queries whose timezone-less `DateTime` and `DateTime64` columns render in a non-UTC ambient timezone, the server timezone or the client's local timezone. Previously `rust` routed these queries to the Python codec and `rust_strict` raised `NotSupportedError: native_codec="rust_strict" does not support ambient timezone`. Values match the Python codec, including DST offsets, and column types keep the server's type names. This needs a `clickhouse-connect-core` build with the default-timezone capability, see the [core changelog](rust/ch-core-py/CHANGELOG.md). With an older core, or when the ambient zone is a fixed offset with no IANA name, routing is unchanged.
+
 ## 1.10.1, 2026-10-14
 
 ### Bug Fixes

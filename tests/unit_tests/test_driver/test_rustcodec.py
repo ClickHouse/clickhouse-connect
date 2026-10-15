@@ -1,7 +1,7 @@
 import logging
 import struct
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -9,7 +9,7 @@ import pytest
 from clickhouse_connect import common
 from clickhouse_connect.common import _native_codec_env_default
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver import rustcodec
+from clickhouse_connect.driver import rustcodec, tzutil
 from clickhouse_connect.driver.exceptions import (
     GENERIC_CLICKHOUSE_ERROR,
     DataError,
@@ -27,7 +27,7 @@ from clickhouse_connect.driver.rustcodec import (
     resolve_native_codec,
 )
 from clickhouse_connect.driver.transform import NativeTransform
-from tests.helpers import TAGGED_EXCEPTION_BODY, TAGGED_EXCEPTION_TAG
+from tests.helpers import TAGGED_EXCEPTION_BODY, TAGGED_EXCEPTION_TAG, bytes_source
 
 
 class FakeSource:
@@ -265,11 +265,6 @@ def _ctx_response_tz():
         pytest.param(lambda: eligible_ctx(tz_mode="aware"), "tz_mode", id="tz_mode_aware"),
         pytest.param(lambda: eligible_ctx(tz_mode="schema"), "tz_mode", id="tz_mode_schema"),
         pytest.param(_ctx_response_tz, "server timezone header", id="response_tz"),
-        pytest.param(
-            lambda: QueryContext(apply_server_tz=True, server_tz=ZoneInfo("America/New_York")),
-            "ambient timezone",
-            id="non_utc_server",
-        ),
     ],
 )
 def test_rust_query_ineligible(builder, reason):
@@ -295,6 +290,32 @@ def test_rust_query_eligible(builder):
 def test_rust_query_eligible_without_pyarrow(monkeypatch, as_pandas):
     monkeypatch.setattr("clickhouse_connect.driver.options.arrow", None)
     assert _rust_query_ineligible_reason(eligible_ctx(use_numpy=True, as_pandas=as_pandas)) is None
+
+
+class _DefaultTimezoneCore(_PresentCore):
+    DEFAULT_TIMEZONE_API_VERSION = rustcodec.DEFAULT_TIMEZONE_API_VERSION
+
+
+def _ambient_ctx(server_tz=None, local_tz=None, monkeypatch=None):
+    if local_tz is not None:
+        monkeypatch.setattr(tzutil, "local_tz", local_tz)
+        return QueryContext(apply_server_tz=False)
+    return QueryContext(apply_server_tz=True, server_tz=server_tz)
+
+
+@pytest.mark.parametrize(
+    ("core", "server_tz", "local_tz", "reason"),
+    [
+        pytest.param(_PresentCore, ZoneInfo("America/New_York"), None, "ambient timezone", id="core_without_capability"),
+        pytest.param(_DefaultTimezoneCore, timezone(timedelta(hours=3)), None, "ambient timezone", id="fixed_offset_server"),
+        pytest.param(_DefaultTimezoneCore, ZoneInfo("America/New_York"), None, None, id="named_server_zone"),
+        pytest.param(_DefaultTimezoneCore, None, ZoneInfo("Europe/Kaliningrad"), None, id="named_local_zone"),
+        pytest.param(_PresentCore, timezone.utc, None, None, id="utc_server_any_core"),
+    ],
+)
+def test_rust_query_ambient_timezone(monkeypatch, core, server_tz, local_tz, reason):
+    monkeypatch.setattr(rustcodec, "_ch_core_module", lambda: core)
+    assert _rust_query_ineligible_reason(_ambient_ctx(server_tz, local_tz, monkeypatch)) == reason
 
 
 def test_rust_query_ineligible_global_read_format(clean_formats):
@@ -644,7 +665,10 @@ class _FakeBatch:
 
 def _fake_decoder_core(feed_batches=(), finish_batches=(), feed_error=None):
     class _FakeStreamDecoder:
-        def __init__(self, has_block_info=False):
+        created_kwargs: list[dict] = []
+
+        def __init__(self, **kwargs):
+            _FakeStreamDecoder.created_kwargs.append(kwargs)
             self._feed = list(feed_batches)
             self._finish = list(finish_batches)
 
@@ -659,6 +683,7 @@ def _fake_decoder_core(feed_batches=(), finish_batches=(), feed_error=None):
 
     class _FakeCore:
         StreamDecoder = _FakeStreamDecoder
+        DEFAULT_TIMEZONE_API_VERSION = rustcodec.DEFAULT_TIMEZONE_API_VERSION
 
     return _FakeCore
 
@@ -867,6 +892,27 @@ def test_decode_buffered_result_columns_uses_direct_column_exit(monkeypatch):
     assert result.result_columns == [[13, 79], [1, 2]]
 
 
+@pytest.mark.parametrize(
+    ("server_tz", "expected_kwargs"),
+    [
+        pytest.param(timezone.utc, {"has_block_info": False}, id="utc"),
+        pytest.param(
+            ZoneInfo("America/New_York"),
+            {"has_block_info": False, "default_timezone": "America/New_York"},
+            id="named_zone",
+        ),
+    ],
+)
+def test_decode_passes_ambient_timezone_to_decoder(monkeypatch, server_tz, expected_kwargs):
+    core = _fake_decoder_core(feed_batches=[_FakeBatch(["a"], ["Int32"], columns=[[13]])])
+    monkeypatch.setitem(sys.modules, "_ch_core", core)
+    ctx = QueryContext(apply_server_tz=True, server_tz=server_tz)
+
+    _RustNativeTransform(strict=True).parse_response(FakeSource([b"chunk"]), ctx)
+
+    assert core.StreamDecoder.created_kwargs == [expected_kwargs]
+
+
 # --- Decode against real _ch_core --------------------------------------------
 
 
@@ -885,6 +931,36 @@ def test_decode_basic(ch_core):
     assert result.result_rows == [(13, "user_1"), (79, "user_2")]
     assert result.column_names == ("a", "b")
     assert [t.name for t in result.column_types] == ["Int32", "String"]
+
+
+@pytest.mark.parametrize("server_tz", [ZoneInfo("America/New_York"), ZoneInfo("Asia/Kolkata")])
+def test_decode_ambient_timezone_matches_python_codec(ch_core, server_tz):
+    if getattr(ch_core, "DEFAULT_TIMEZONE_API_VERSION", 0) < rustcodec.DEFAULT_TIMEZONE_API_VERSION:
+        pytest.skip("installed _ch_core lacks the default timezone capability")
+    names = ["dt", "dt64", "n", "arr", "utc", "zoned"]
+    types = ["DateTime", "DateTime64(3)", "Nullable(DateTime)", "Array(DateTime)", "DateTime('UTC')", "DateTime('Europe/Kaliningrad')"]
+    secs = [1705322096, 1720000079]  # one winter and one summer instant, so DST offsets differ
+    columns = [
+        [datetime.fromtimestamp(s, timezone.utc) for s in secs],
+        [datetime.fromtimestamp(s + 0.013, timezone.utc) for s in secs],
+        [datetime.fromtimestamp(secs[0], timezone.utc), None],
+        [[datetime.fromtimestamp(s, timezone.utc)] for s in secs],
+        [datetime.fromtimestamp(s, timezone.utc) for s in secs],
+        [datetime.fromtimestamp(s, timezone.utc) for s in secs],
+    ]
+    data = ch_core.encode_native_block(names, types, columns, len(secs), None)
+
+    def ctx():
+        return QueryContext(apply_server_tz=True, server_tz=server_tz)
+
+    assert _rust_query_ineligible_reason(ctx()) is None
+    rust = _RustNativeTransform(strict=True).parse_response(FakeSource([data]), ctx())
+    python = NativeTransform.parse_response(bytes_source(data), ctx())
+
+    # repr also compares tzinfo, which aware-datetime equality ignores.
+    assert repr(rust.result_rows) == repr(python.result_rows)
+    assert [row[0].tzinfo for row in rust.result_rows] == [server_tz, server_tz]
+    assert [t.name for t in rust.column_types] == [t.name for t in python.column_types] == types
 
 
 def test_decode_empty_stream(ch_core):

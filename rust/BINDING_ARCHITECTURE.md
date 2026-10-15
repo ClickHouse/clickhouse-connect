@@ -279,7 +279,12 @@ cell except where documented in `docs/rust-codec.mdx`.
 - **Temporals.** A per-column context resolves timezone policy once, not
   per cell. Naive columns are built by pure epoch arithmetic with no
   datetime parsing in the loop. Named non-UTC zones go through
-  `datetime.fromtimestamp` for DST correctness.
+  `datetime.fromtimestamp` for DST correctness. A `StreamDecoder` built
+  with `default_timezone` stamps that IANA zone on its batches, and a
+  timezone-less `DateTime`/`DateTime64` uses it as if the type named it.
+  The batch installs the zone in a thread-local scope for the duration of
+  each Python exit, so Dynamic and SharedVariant children resolved deep in a
+  fill see it too. The schema, buffers, and Arrow export never change.
 - **Aggregate states.** Exact serialized state `bytes`, uninterpreted. The
   Arrow exit exports them zero copy as LargeBinary.
 - **Variant and Dynamic.** Intrinsic NULL becomes `None`, unambiguous

@@ -7,6 +7,14 @@ Driver integration changes and core version requirements belong in the [driver c
 
 ## UNRELEASED
 
+### Improvements
+
+- `StreamDecoder` accepts `default_timezone`, an IANA zone name applied to timezone-less `DateTime` and `DateTime64` values when batches materialize Python objects. Explicit column timezones still win. Schemas, type names, column buffers, and the Arrow export are unchanged. The module advertises this through `DEFAULT_TIMEZONE_API_VERSION = 1`, so the driver can use it to serve ambient-timezone queries.
+
+### Compatibility
+
+- Binding API 3, column-buffer API 1, and the bundled `ch-core-rs` 0.2.0 are unchanged. The new capability is additive, and drivers that don't pass `default_timezone` behave as before.
+
 ## 0.2.2, 2026-09-30
 
 ### Improvements

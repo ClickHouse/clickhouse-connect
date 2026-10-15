@@ -500,6 +500,69 @@ class TestDecodeDateTime:
         assert (v.hour, v.minute, v.second) == (7, 34, 56)
 
 
+class TestStreamDecoderDefaultTimezone:
+    _NY = ZoneInfo("America/New_York")
+    _SECS = 1705322096  # 2024-01-15 12:34:56 UTC
+
+    def _batch(self, default_timezone="America/New_York"):
+        data = build_native_block(
+            [
+                ("dt", "DateTime", [self._SECS]),
+                ("dt64", "DateTime64(3)", [self._SECS * 1000 + 13]),
+                ("n", "Nullable(DateTime)", [self._SECS]),
+                ("arr", "Array(DateTime64(3))", [[self._SECS * 1000]]),
+                ("utc", "DateTime('UTC')", [self._SECS]),
+                ("kolkata", "DateTime('Asia/Kolkata')", [self._SECS]),
+            ]
+        )
+        decoder = _ch_core.StreamDecoder(default_timezone=default_timezone)
+        [batch] = decoder.feed(data) + decoder.finish()
+        return batch
+
+    def test_capability_flag(self):
+        assert _ch_core.DEFAULT_TIMEZONE_API_VERSION == 1
+
+    def test_applies_to_timezone_less_values_only(self):
+        batch = self._batch()
+        # Metadata stays as the server wrote it; only Python values change.
+        assert batch.column_type_names == [
+            "DateTime",
+            "DateTime64(3)",
+            "Nullable(DateTime)",
+            "Array(DateTime64(3))",
+            "DateTime('UTC')",
+            "DateTime('Asia/Kolkata')",
+        ]
+        instant = dt.datetime(2024, 1, 15, 12, 34, 56, tzinfo=dt.timezone.utc)
+        dt_col, dt64_col, nullable_col, array_col, utc_col, kolkata_col = batch.to_python_columns()
+        for value in (dt_col[0], nullable_col[0], array_col[0][0]):
+            assert value == instant
+            assert value.tzinfo == self._NY
+        assert dt64_col[0] == instant + dt.timedelta(milliseconds=13)
+        assert dt64_col[0].tzinfo == self._NY
+        # Explicit zones win: UTC stays naive and a named zone keeps its own tz.
+        assert utc_col[0] == _EPOCH_NAIVE + dt.timedelta(seconds=self._SECS)
+        assert utc_col[0].tzinfo is None
+        assert kolkata_col[0].tzinfo == ZoneInfo("Asia/Kolkata")
+
+    def test_every_python_exit_and_merge(self):
+        batch = self._batch()
+        merged = _ch_core.ColBatch.from_batches([batch])
+        for source in (batch, merged):
+            assert source.column_data(0)[0].tzinfo == self._NY
+            assert source.to_python_rows()[0][0].tzinfo == self._NY
+            assert source.to_python_columns(typed_numeric=True)[0][0].tzinfo == self._NY
+
+    def test_unset_keeps_naive_utc(self):
+        batch = self._batch(default_timezone=None)
+        value = batch.column_data(0)[0]
+        assert value == _EPOCH_NAIVE + dt.timedelta(seconds=self._SECS)
+        assert value.tzinfo is None
+        # A batch without a default never inherits one from an earlier batch on this thread.
+        self._batch().column_data(0)
+        assert batch.column_data(0)[0].tzinfo is None
+
+
 class TestDateTimeTzSubSecond:
     _NY = ZoneInfo("America/New_York")
 

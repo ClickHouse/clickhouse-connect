@@ -32,7 +32,7 @@ mod temporal;
 mod variant_dynamic;
 
 use containers::{fill_map, fill_tuple, point_list_owned_ptr, point_pair_slices};
-pub(crate) use ctx::{prepare_column_ctx, ColumnCtx};
+pub(crate) use ctx::{prepare_column_ctx, ColumnCtx, DefaultTimezoneScope};
 use ctx::{prepare_json_path, IpCtx, JsonPath, UuidCtx};
 use errors::*;
 use fixed::{

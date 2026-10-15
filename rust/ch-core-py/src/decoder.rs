@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{
     PyEOFError, PyNotImplementedError, PyOSError, PyRuntimeError, PyStopIteration, PyValueError,
@@ -277,6 +279,11 @@ impl PipeDecoder {
 /// No blocking I/O, no pipes, no threads — designed for async contexts
 /// where an event loop pushes chunks as they arrive from the network.
 ///
+/// `default_timezone` names the IANA zone that Python materialization applies
+/// to `DateTime` and `DateTime64` values whose type carries no timezone, the
+/// driver's ambient timezone. Explicit wire timezones always win, and the
+/// schema, type names, buffers, and Arrow export stay as the server wrote them.
+///
 /// Usage::
 ///
 ///     decoder = StreamDecoder()
@@ -288,16 +295,18 @@ impl PipeDecoder {
 #[pyclass]
 pub struct StreamDecoder {
     inner: RustStreamDecoder,
+    default_timezone: Option<Arc<str>>,
 }
 
 #[pymethods]
 impl StreamDecoder {
     #[new]
-    #[pyo3(signature = (has_block_info = false))]
-    fn new(has_block_info: bool) -> Self {
+    #[pyo3(signature = (has_block_info = false, default_timezone = None))]
+    fn new(has_block_info: bool, default_timezone: Option<String>) -> Self {
         let options = decode_options(has_block_info);
         Self {
             inner: RustStreamDecoder::new(options),
+            default_timezone: default_timezone.map(Arc::from),
         }
     }
 
@@ -316,7 +325,12 @@ impl StreamDecoder {
         // Copy out of Python-owned memory so we can drop the GIL during decode.
         let owned = buffer_to_vec(data)?;
         let batches = py.detach(|| self.inner.feed(&owned)).map_err(decode_err)?;
-        let py_batches: Vec<ColBatch> = batches.into_iter().map(ColBatch::from_block).collect();
+        let py_batches: Vec<ColBatch> = batches
+            .into_iter()
+            .map(|block| {
+                ColBatch::from_block(block).with_default_timezone(self.default_timezone.clone())
+            })
+            .collect();
         PyList::new(py, py_batches)
     }
 
@@ -324,7 +338,12 @@ impl StreamDecoder {
     /// Raises an error if the stream ends with a truncated block.
     fn finish<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let batches = py.detach(|| self.inner.finish()).map_err(decode_err)?;
-        let py_batches: Vec<ColBatch> = batches.into_iter().map(ColBatch::from_block).collect();
+        let py_batches: Vec<ColBatch> = batches
+            .into_iter()
+            .map(|block| {
+                ColBatch::from_block(block).with_default_timezone(self.default_timezone.clone())
+            })
+            .collect();
         PyList::new(py, py_batches)
     }
 }

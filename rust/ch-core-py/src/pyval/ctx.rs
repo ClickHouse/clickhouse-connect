@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::sync::Arc;
+
 use super::*;
 
 // ---------------------------------------------------------------------------
@@ -41,6 +44,35 @@ const UTC_EQUIVALENTS: &[&str] = &[
     "Greenwich",
     "Etc/Greenwich",
 ];
+
+thread_local! {
+    /// Zone applied to timezone-less DateTime/DateTime64 columns while a
+    /// ColBatch materializes Python values on this thread. Set through
+    /// [`DefaultTimezoneScope`] so every nested context, including Dynamic and
+    /// SharedVariant children resolved deep inside a fill, sees it without
+    /// threading it through each call.
+    static DEFAULT_TIMEZONE: RefCell<Option<Arc<str>>> = const { RefCell::new(None) };
+}
+
+/// Installs a batch's default timezone for the current thread and restores the
+/// previous value on drop, so nested or re-entrant materialization stays scoped.
+pub(crate) struct DefaultTimezoneScope {
+    previous: Option<Arc<str>>,
+}
+
+impl DefaultTimezoneScope {
+    pub(crate) fn enter(default_timezone: Option<Arc<str>>) -> Self {
+        let previous = DEFAULT_TIMEZONE.with(|cell| cell.replace(default_timezone));
+        Self { previous }
+    }
+}
+
+impl Drop for DefaultTimezoneScope {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        DEFAULT_TIMEZONE.with(|cell| *cell.borrow_mut() = previous);
+    }
+}
 
 /// Per-column context for materializing a column's host values, resolved once
 /// per column rather than per cell. For a temporal column it carries the
@@ -183,12 +215,26 @@ pub(crate) fn prepare_column_ctx<'py>(
         _ => None,
     };
 
+    // A timezone-less DateTime/DateTime64 takes the batch's default timezone,
+    // matching the Python codec's ambient timezone. Explicit zones win.
+    let default_timezone = match resolved {
+        ChType::DateTime { timezone: None } | ChType::DateTime64 { timezone: None, .. } => {
+            DEFAULT_TIMEZONE.with(|cell| cell.borrow().clone())
+        }
+        _ => None,
+    };
     let (timezone, precision, time_scale) = match resolved {
-        ChType::DateTime { timezone } => (timezone.as_deref(), 0u8, 1),
+        ChType::DateTime { timezone } => {
+            (timezone.as_deref().or(default_timezone.as_deref()), 0u8, 1)
+        }
         ChType::DateTime64 {
             precision,
             timezone,
-        } => (timezone.as_deref(), *precision, 1),
+        } => (
+            timezone.as_deref().or(default_timezone.as_deref()),
+            *precision,
+            1,
+        ),
         ChType::Time64 { precision } => (None, *precision, 10u64.pow(u32::from(*precision))),
         _ => (None, 0u8, 1),
     };
