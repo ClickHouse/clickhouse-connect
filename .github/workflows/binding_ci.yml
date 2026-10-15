@@ -24,6 +24,7 @@ on:
       - 'tests/unit_tests/test_sqlalchemy/**'
       - 'tests/unit_tests/test_streaming_source.py'
       - '.github/workflows/binding_ci.yml'
+      - '.github/workflows/publish_core.yml'
       - '.github/workflows/clickhouse-versions.yml'
       - '.github/clickhouse-versions.json'
       - 'docker-compose.yml'
@@ -52,6 +53,7 @@ on:
       - 'tests/unit_tests/test_sqlalchemy/**'
       - 'tests/unit_tests/test_streaming_source.py'
       - '.github/workflows/binding_ci.yml'
+      - '.github/workflows/publish_core.yml'
       - '.github/workflows/clickhouse-versions.yml'
       - '.github/clickhouse-versions.json'
       - 'docker-compose.yml'
@@ -265,16 +267,20 @@ jobs:
         run: docker compose -f docker-compose.yml down --volumes --remove-orphans
 
   binding-freethreaded:
-    name: Core binding tests (Python 3.14t, GIL off)
+    name: Core binding tests (Python ${{ matrix.python-version }}, GIL off)
     runs-on: ubuntu-26.04
     needs: rust-checks
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.14t', '3.15t']
     env:
       PYTHON_GIL: '0'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.14t'
+          python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v10.2.0
       - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
@@ -299,7 +305,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: qualification-linux-3.14t
+          name: qualification-linux-${{ matrix.python-version }}
           path: |
             ${{ runner.temp }}/core-qualification/*.json
             ${{ runner.temp }}/core-qualification/*.xml

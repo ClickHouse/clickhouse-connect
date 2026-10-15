@@ -129,7 +129,7 @@ def qualify(args: argparse.Namespace) -> None:
     # uv can reuse cached contents for a same-version wheel installed by name.
     run(*install, "--no-cache", "--no-deps", "--no-index", "--find-links", str(args.core_wheels.resolve()), "clickhouse-connect-core")
     if args.allow_source_lz4:
-        # lz4 has no musllinux or free-threaded wheels. Keep other installs binary-only.
+        # lz4 has no musllinux, free-threaded, or CPython 3.15 wheels. Keep other installs binary-only.
         run(args.uv, "pip", "install", "--python", python, "--no-deps", "--no-binary=lz4", "lz4>=4.4.5")
     run(*install, str(driver), "pytest", "tzdata", "packaging")
 
@@ -164,7 +164,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--uv", default="uv")
     parser.add_argument("--arrow", action="store_true")
-    parser.add_argument("--allow-source-lz4", action="store_true", help="Build lz4 from source for musllinux or free-threaded Python")
+    parser.add_argument(
+        "--allow-source-lz4",
+        action="store_true",
+        help="Build lz4 from source for musllinux, free-threaded, or CPython 3.15",
+    )
     parser.add_argument("--check-installed", choices=("bare", "numpy", "pandas", "arrow"))
     args = parser.parse_args()
     if args.check_installed:

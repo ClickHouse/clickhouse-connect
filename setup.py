@@ -81,7 +81,7 @@ def run_setup():
         url="https://github.com/ClickHouse/clickhouse-connect",
         packages=find_packages(exclude=["tests*"]),
         package_data={"clickhouse_connect": ["py.typed"]},
-        python_requires=">=3.10,<3.15",
+        python_requires=">=3.10,<3.16",
         license_expression="Apache-2.0",
         install_requires=[
             "certifi",
@@ -98,7 +98,11 @@ def run_setup():
             "numpy": ["numpy"],
             "pandas": ["pandas>=2,<4"],
             "polars": ["polars>=1.0"],
-            "arrow": ['pyarrow>=22.0; python_version>="3.14"', 'pyarrow; python_version<"3.14"'],
+            "arrow": [
+                'pyarrow>=26.0; python_version>="3.15"',
+                'pyarrow>=22.0; python_version>="3.14" and python_version<"3.15"',
+                'pyarrow; python_version<"3.14"',
+            ],
             "orjson": ["orjson"],
             "tzlocal": ["tzlocal>=4.0"],
             "tzdata": ["tzdata"],
@@ -121,6 +125,7 @@ def run_setup():
             "Programming Language :: Python :: 3.12",
             "Programming Language :: Python :: 3.13",
             "Programming Language :: Python :: 3.14",
+            "Programming Language :: Python :: 3.15",
         ],
         ext_modules=c_modules,
     )
