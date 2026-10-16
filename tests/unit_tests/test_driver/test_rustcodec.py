@@ -1013,8 +1013,9 @@ def test_decode_ambient_timezone_matches_python_codec(ch_core, server_tz):
     with rust_col.column_block_stream as rust_stream, python_col.column_block_stream as python_stream:
         rust_col_blocks = list(rust_stream)
         python_col_blocks = list(python_stream)
-    assert [type(col) for col in rust_col_blocks[0]] == [type(col) for col in python_col_blocks[0]]
-    assert repr(rust_col_blocks) == repr(python_col_blocks)
+    # Python codec containers depend on Cython (pure-Python DateTime readers return lists), so compare values only.
+    assert [isinstance(col, tuple) for col in rust_col_blocks[0]] == [True, True, False, False, False, True, True]
+    assert repr([[list(col) for col in b] for b in rust_col_blocks]) == repr([[list(col) for col in b] for b in python_col_blocks])
 
     rust_row = _RustNativeTransform(strict=True).parse_response(FakeSource([data]), ctx(streaming=True))
     python_row = NativeTransform.parse_response(bytes_source(data), ctx(streaming=True))
