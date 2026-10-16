@@ -400,6 +400,8 @@ class HttpSyncBackend:
                 if not retryable or attempts > retries:
                     self.error_handler(response, True)
                 logger.debug("Retrying requests with status code %d", response.status)
+                time.sleep(0.1 * attempts)
+                response.close()
             elif self.token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
                 body = kwargs.get("body")
                 if retry_body is None and not (body is None or isinstance(body, (bytes, bytearray, str))):
