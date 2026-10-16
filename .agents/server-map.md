@@ -141,6 +141,14 @@ Cite file and class or function names in your answers. Do not cite line numbers,
 - **Query context**: `src/Interpreters/Context.h` holds `Settings` plus other per-query execution state. TCP and HTTP handlers apply client-provided setting overrides at query start.
 - **Client setting delivery**: settings ride on the Query packet on TCP (see `src/Server/TCPHandler.cpp` and `src/Core/Protocol.h`) and on URL parameters via HTTP (`src/Server/HTTP/`).
 
+## HTTP completion and process-list teardown
+
+- **HTTP query execution and response completion**: `src/Server/HTTPHandler.cpp`, in `HTTPHandler::processQuery`, constructs the output buffers, reads `http_wait_end_of_query`/`wait_end_of_query`, and supplies `query_finish_callback` to `executeQuery`. `HTTPHandler::Output::finalize` in the same file drains delayed buffers and calls `WriteBufferFromHTTPServerResponse::finalize`; the latter's `finalizeImpl` is in `src/Server/HTTP/WriteBufferFromHTTPServerResponse.cpp`.
+- **Completion ordering**: `src/Interpreters/executeQuery.cpp`, in the execution function containing the `query_finish_callback` call, first invokes the callback (which flushes HTTP output), then calls `BlockIO::onFinish`. `BlockIO::onFinish` is implemented in `src/QueryPipeline/BlockIO.cpp`; its finish callbacks include query-log finalization. `BlockIO` owns `process_list_entries`, and its destructor/reset clears those entries after pipeline and output teardown.
+- **Process-list removal**: `src/Interpreters/ProcessList.cpp`, `ProcessList::insert` and `ProcessListEntry::~ProcessListEntry`, own insertion and erase of `current_query_id`. `ProcessListEntry::~ProcessListEntry` erases the ID from the per-user map and the global process container while holding the process-list mutex. Error 216 for a duplicate ID is checked in `ProcessList::insert`.
+- **`system.processes` observation**: `src/Storages/System/StorageSystemProcesses.cpp`, `StorageSystemProcesses::fillData`, obtains a snapshot from `ProcessList::getInfo` and emits `QueryStatusInfo::client_info.current_query_id` as `system.processes.query_id`. Polling that table for an exact ID until no row remains is therefore a useful test synchronization point after the response body is complete. It observes the process-list snapshot and cannot prevent an unrelated actor from concurrently reusing the same ID.
+- **`wait_end_of_query` scope**: `Setting::http_wait_end_of_query` is declared in `src/Core/Settings.cpp` and only selects delayed memory/temporary-file HTTP output buffers in `HTTPHandler::processQuery`. It does not move the `query_finish_callback` or `BlockIO::onFinish`/`ProcessListEntry` teardown point.
+
 ## Errors and exceptions
 
 - **Error codes**: `src/Common/ErrorCodes.h`, `src/Common/ErrorCodes.cpp`. Enumerates every error code and its name.

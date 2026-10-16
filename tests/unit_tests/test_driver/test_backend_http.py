@@ -992,18 +992,19 @@ async def test_legacy_request_retry_policy(monkeypatch, transport, failure, data
     else:
         first = SimpleNamespace(status=failure, headers={}, close=Mock())
     kwargs = {"retries": 2}
+    sleep = Mock() if transport == "sync" else AsyncMock()
     if transport == "sync":
         sender = Mock(side_effect=[first, success])
         backend.http.request = sender
         backend.error_handler = Mock(side_effect=OperationalError("request rejected"))
         kwargs["fields"] = form
-        monkeypatch.setattr("clickhouse_connect.driver._backend.http_sync.time.sleep", lambda _: None)
+        monkeypatch.setattr("clickhouse_connect.driver._backend.http_sync.time.sleep", sleep)
     else:
         sender = AsyncMock(side_effect=[first, success])
         backend.session = SimpleNamespace(closed=False, request=sender)
         backend.error_handler = AsyncMock(side_effect=OperationalError("request rejected"))
         kwargs["files"] = {key: (None, value) for key, value in form.items()} if form else None
-        monkeypatch.setattr("clickhouse_connect.driver._backend.http_async.asyncio.sleep", AsyncMock())
+        monkeypatch.setattr("clickhouse_connect.driver._backend.http_async.asyncio.sleep", sleep)
 
     async def request():
         if transport == "sync":
@@ -1018,6 +1019,45 @@ async def test_legacy_request_retry_policy(monkeypatch, transport, failure, data
         with pytest.raises(OperationalError):
             await request()
     assert sender.call_count == (2 if expected_retry else 1)
+    if expected_retry:
+        sleep.assert_called_once_with(0.1)
+        if failure != "disconnect":
+            first.close.assert_called_once_with()
+    else:
+        sleep.assert_not_called()
+        if failure != "disconnect":
+            first.close.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["sync", "async"])
+@pytest.mark.parametrize("status", [429, 503, 504])
+@pytest.mark.parametrize("retries", [0, 2])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_status_retry_backoff_and_cleanup_respect_budget(monkeypatch, transport, status, retries, stream):
+    backend = make_sync_backend() if transport == "sync" else make_async_backend()
+    responses = [SimpleNamespace(status=status, headers={}, close=Mock()) for _ in range(retries + 1)]
+    sleep = Mock() if transport == "sync" else AsyncMock()
+    if transport == "sync":
+        backend.http.request.side_effect = responses
+        backend.error_handler = Mock(side_effect=OperationalError("retry budget exhausted"))
+        monkeypatch.setattr("clickhouse_connect.driver._backend.http_sync.time.sleep", sleep)
+        with pytest.raises(OperationalError, match="retry budget exhausted"):
+            backend.request(b"SELECT 13", {}, retries=retries, stream=stream)
+        assert backend.http.request.call_count == retries + 1
+    else:
+        sender = AsyncMock(side_effect=responses)
+        backend.session = SimpleNamespace(closed=False, request=sender)
+        backend.error_handler = AsyncMock(side_effect=OperationalError("retry budget exhausted"))
+        monkeypatch.setattr("clickhouse_connect.driver._backend.http_async.asyncio.sleep", sleep)
+        with pytest.raises(OperationalError, match="retry budget exhausted"):
+            await backend.request(b"SELECT 13", {}, retries=retries, stream=stream)
+        assert sender.call_count == retries + 1
+
+    assert [args[0] for args, _ in sleep.call_args_list] == [0.1 * attempt for attempt in range(1, retries + 1)]
+    for response in responses[:-1]:
+        response.close.assert_called_once_with()
+    responses[-1].close.assert_not_called()
 
 
 @pytest.mark.asyncio

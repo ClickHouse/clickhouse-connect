@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- The synchronous HTTP client now waits before retrying HTTP 429, 503, and 504 responses and closes each failed response before the next attempt, matching the asynchronous client.
+
 ### Improvements
 
 - Added CPython 3.15 support and wheels, including experimental free-threaded 3.15t wheels. `lz4` has no CPython 3.15 wheels yet, so installing on 3.15 builds it from source. Closes [#1086](https://github.com/ClickHouse/clickhouse-connect/issues/1086).
