@@ -4,12 +4,16 @@ from helpers import (
     ZoneInfo,
     _ch_core,
     _encode_plain_body,
+    _encode_varint,
+    _encode_varint_string,
     _NdarrayLikeColumn,
     build_native_block,
     build_native_block_from_bodies,
     dt,
+    os,
     pytest,
     struct,
+    sys,
 )
 
 
@@ -498,6 +502,233 @@ class TestDecodeDateTime:
         # Same instant as the source UTC seconds, expressed in New York time.
         assert v == dt.datetime(2024, 1, 15, 12, 34, 56, tzinfo=dt.timezone.utc)
         assert (v.hour, v.minute, v.second) == (7, 34, 56)
+
+
+class TestStreamDecoderDefaultTimezone:
+    _NY = ZoneInfo("America/New_York")
+    _SECS = 1705322096  # 2024-01-15 12:34:56 UTC
+
+    def _batch(self, default_timezone="America/New_York"):
+        data = build_native_block(
+            [
+                ("dt", "DateTime", [self._SECS]),
+                ("dt64", "DateTime64(3)", [self._SECS * 1000 + 13]),
+                ("n", "Nullable(DateTime)", [self._SECS]),
+                ("arr", "Array(DateTime64(3))", [[self._SECS * 1000]]),
+                ("utc", "DateTime('UTC')", [self._SECS]),
+                ("kolkata", "DateTime('Asia/Kolkata')", [self._SECS]),
+            ]
+        )
+        decoder = _ch_core.StreamDecoder(default_timezone=default_timezone)
+        [batch] = decoder.feed(data) + decoder.finish()
+        return batch
+
+    def test_capability_flag(self):
+        assert _ch_core.DEFAULT_TIMEZONE_API_VERSION == 1
+
+    def test_applies_to_timezone_less_values_only(self):
+        batch = self._batch()
+        assert batch.default_timezone == "America/New_York"
+        # Metadata stays as the server wrote it; only Python values change.
+        assert batch.column_type_names == [
+            "DateTime",
+            "DateTime64(3)",
+            "Nullable(DateTime)",
+            "Array(DateTime64(3))",
+            "DateTime('UTC')",
+            "DateTime('Asia/Kolkata')",
+        ]
+        instant = dt.datetime(2024, 1, 15, 12, 34, 56, tzinfo=dt.timezone.utc)
+        dt_col, dt64_col, nullable_col, array_col, utc_col, kolkata_col = batch.to_python_columns()
+        for value in (dt_col[0], nullable_col[0], array_col[0][0]):
+            assert value == instant
+            assert value.tzinfo == self._NY
+        assert dt64_col[0] == instant + dt.timedelta(milliseconds=13)
+        assert dt64_col[0].tzinfo == self._NY
+        # Explicit zones win: UTC stays naive and a named zone keeps its own tz.
+        assert utc_col[0] == _EPOCH_NAIVE + dt.timedelta(seconds=self._SECS)
+        assert utc_col[0].tzinfo is None
+        assert kolkata_col[0].tzinfo == ZoneInfo("Asia/Kolkata")
+
+    def test_every_python_exit_and_merge(self):
+        batch = self._batch()
+        merged = _ch_core.ColBatch.from_batches([batch])
+        for source in (batch, merged):
+            assert source.default_timezone == "America/New_York"
+            assert source.column_data(0)[0].tzinfo == self._NY
+            assert source.to_python_rows()[0][0].tzinfo == self._NY
+            assert source.to_python_columns(typed_numeric=True)[0][0].tzinfo == self._NY
+            tuple_cols = source.to_python_columns(
+                typed_numeric=True, tuple_columns=[True] * source.num_columns
+            )
+            assert tuple_cols[0][0].tzinfo == self._NY
+
+    def test_all_intake_surfaces(self):
+        data = build_native_block([("dt", "DateTime", [self._SECS])])
+        batches = [
+            _ch_core.ColBatch.decode_native(data, default_timezone="America/New_York"),
+            next(_ch_core.BlockDecoder(data, default_timezone="America/New_York")),
+        ]
+        if sys.platform != "win32":
+            read_fd, write_fd = os.pipe()
+            try:
+                os.write(write_fd, data)
+                os.close(write_fd)
+                write_fd = -1
+                decoder = _ch_core.PipeDecoder(read_fd, default_timezone="America/New_York")
+                batches.append(next(decoder))
+            finally:
+                if write_fd != -1:
+                    os.close(write_fd)
+                os.close(read_fd)
+        for batch in batches:
+            assert batch.default_timezone == "America/New_York"
+            assert batch.column_data(0)[0].tzinfo == self._NY
+
+    def test_from_batches_rejects_mismatched_default_timezone(self):
+        ny = self._batch("America/New_York")
+        unset = self._batch(None)
+        london = self._batch("Europe/London")
+        merged = _ch_core.ColBatch.from_batches([unset, self._batch("UTC")])
+        assert merged.default_timezone is None
+        with pytest.raises(
+            ValueError,
+            match=r'Batch 1 default_timezone \(None\) differs from the first batch \(Some\("America/New_York"\)\)',
+        ):
+            _ch_core.ColBatch.from_batches([ny, unset])
+        with pytest.raises(
+            ValueError,
+            match=r'Batch 1 default_timezone \(Some\("Europe/London"\)\) differs from the first batch \(Some\("America/New_York"\)\)',
+        ):
+            _ch_core.ColBatch.from_batches([ny, london])
+
+    def test_invalid_default_timezone_rejected_at_intake(self):
+        data = build_native_block([("dt", "DateTime", [self._SECS])])
+        for bad_zone in ("", "No/Such_Zone"):
+            match = f"Unknown or invalid default_timezone '{bad_zone}'"
+            with pytest.raises(ValueError, match=match):
+                _ch_core.StreamDecoder(default_timezone=bad_zone)
+            with pytest.raises(ValueError, match=match):
+                _ch_core.BlockDecoder(data, default_timezone=bad_zone)
+            with pytest.raises(ValueError, match=match):
+                _ch_core.ColBatch.decode_native(data, default_timezone=bad_zone)
+            if sys.platform != "win32":
+                read_fd, write_fd = os.pipe()
+                try:
+                    with pytest.raises(ValueError, match=match):
+                        _ch_core.PipeDecoder(read_fd, default_timezone=bad_zone)
+                finally:
+                    os.close(write_fd)
+                    os.close(read_fd)
+
+    def test_dynamic_and_json_paths(self):
+        kolkata = ZoneInfo("Asia/Kolkata")
+        instant = dt.datetime(2024, 1, 15, 12, 34, 56, tzinfo=dt.timezone.utc)
+        instant_ms = instant + dt.timedelta(milliseconds=13)
+
+        # Dynamic V2 with typed DateTime/DateTime('Asia/Kolkata')/DateTime64(3)
+        # children (discriminators 0, 1, 2) and SharedVariant cells (discriminator 3).
+        dyn_body = bytearray(struct.pack("<Q", 2))
+        dyn_body.extend(_encode_varint(3))
+        for child_type in ("DateTime", "DateTime('Asia/Kolkata')", "DateTime64(3)"):
+            dyn_body.extend(_encode_varint_string(child_type))
+        dyn_body.extend(struct.pack("<Q", 0))
+        dyn_body.extend(bytes([0, 1, 2, 3, 3, 3]))
+        dyn_body.extend(struct.pack("<I", self._SECS))
+        dyn_body.extend(struct.pack("<I", self._SECS))
+        dyn_body.extend(struct.pack("<q", self._SECS * 1000 + 13))
+        shared_cells = [
+            b"\x11" + struct.pack("<I", self._SECS),
+            b"\x13\x03" + struct.pack("<q", self._SECS * 1000 + 13),
+            b"\x12" + _encode_varint_string("Asia/Kolkata") + struct.pack("<I", self._SECS),
+        ]
+        for cell in shared_cells:
+            dyn_body.extend(_encode_varint(len(cell)))
+            dyn_body.extend(cell)
+        dyn_block = build_native_block_from_bodies([("d", "Dynamic", bytes(dyn_body))], 6)
+        dyn_values = list(_ch_core.ColBatch.decode_native(dyn_block, default_timezone="America/New_York").column_data(0))
+        assert [v.tzinfo for v in dyn_values] == [self._NY, kolkata, self._NY, self._NY, self._NY, kolkata]
+        assert dyn_values == [instant, instant, instant_ms, instant, instant_ms, instant]
+
+        # JSON V2 with typed, dynamic, and shared-data DateTime/DateTime64 paths.
+        json_type = "JSON(typed_dt DateTime, typed_dt64 DateTime64(3), typed_tz DateTime('Asia/Kolkata'))"
+        json_body = bytearray(struct.pack("<Q", 2))
+        json_body.extend(_encode_varint(3))
+        for path in ("dyn_dt", "dyn_dt64", "dyn_tz"):
+            json_body.extend(_encode_varint_string(path))
+        for child_type in ("DateTime", "DateTime64(3)", "DateTime('Asia/Kolkata')"):
+            json_body.extend(struct.pack("<Q", 3))
+            json_body.extend(_encode_varint(1))
+            json_body.extend(_encode_varint_string(child_type))
+        json_body.extend(struct.pack("<I", self._SECS))
+        json_body.extend(struct.pack("<q", self._SECS * 1000 + 13))
+        json_body.extend(struct.pack("<I", self._SECS))
+        json_body.extend(b"\x00" + struct.pack("<I", self._SECS))
+        json_body.extend(b"\x00" + struct.pack("<q", self._SECS * 1000 + 13))
+        json_body.extend(b"\x00" + struct.pack("<I", self._SECS))
+        json_body.extend(struct.pack("<Q", 3))
+        for path in ("shared_dt", "shared_dt64", "shared_tz"):
+            json_body.extend(_encode_varint_string(path))
+        for cell in (
+            b"\x11" + struct.pack("<I", self._SECS),
+            b"\x13\x03" + struct.pack("<q", self._SECS * 1000 + 13),
+            b"\x14\x03" + _encode_varint_string("Asia/Kolkata") + struct.pack("<q", self._SECS * 1000 + 13),
+        ):
+            json_body.extend(_encode_varint(len(cell)))
+            json_body.extend(cell)
+        json_block = build_native_block_from_bodies([("j", json_type, bytes(json_body))], 1)
+        [doc] = _ch_core.ColBatch.decode_native(json_block, default_timezone="America/New_York").column_data(0)
+        for key, expected in (
+            ("typed_dt", instant),
+            ("typed_dt64", instant_ms),
+            ("dyn_dt", instant),
+            ("dyn_dt64", instant_ms),
+            ("shared_dt", instant),
+            ("shared_dt64", instant_ms),
+        ):
+            assert doc[key] == expected
+            assert doc[key].tzinfo == self._NY
+        for key, expected in (("typed_tz", instant), ("dyn_tz", instant), ("shared_tz", instant_ms)):
+            assert doc[key] == expected
+            assert doc[key].tzinfo == kolkata
+
+    def test_utc_equivalents_and_dst_fold(self):
+        for zone in ("UTC", "Etc/UTC"):
+            batch = self._batch(default_timezone=zone)
+            assert batch.default_timezone is None
+            value = batch.column_data(0)[0]
+            assert value == _EPOCH_NAIVE + dt.timedelta(seconds=self._SECS)
+            assert value.tzinfo is None
+
+        fold_data = build_native_block(
+            [
+                ("dt", "DateTime", [1604206800, 1604210400]),
+                (
+                    "dt64",
+                    "DateTime64(6)",
+                    [1604206800 * 1_000_000 + 500_000, 1604210400 * 1_000_000 + 500_000],
+                ),
+            ]
+        )
+        fold_batch = _ch_core.ColBatch.decode_native(fold_data, default_timezone="America/New_York")
+        for col_idx in (0, 1):
+            first, second = fold_batch.column_data(col_idx)
+            assert (first.tzinfo, second.tzinfo) == (self._NY, self._NY)
+            assert (first.fold, second.fold) == (0, 1)
+            assert first.utcoffset() == dt.timedelta(hours=-4)
+            assert second.utcoffset() == dt.timedelta(hours=-5)
+            assert (first.hour, first.minute, first.second) == (1, 0, 0)
+            assert (second.hour, second.minute, second.second) == (1, 0, 0)
+
+    def test_unset_keeps_naive_utc(self):
+        batch = self._batch(default_timezone=None)
+        assert batch.default_timezone is None
+        value = batch.column_data(0)[0]
+        assert value == _EPOCH_NAIVE + dt.timedelta(seconds=self._SECS)
+        assert value.tzinfo is None
+        # A batch without a default never inherits one from an earlier batch on this thread.
+        self._batch().column_data(0)
+        assert batch.column_data(0)[0].tzinfo is None
 
 
 class TestDateTimeTzSubSecond:

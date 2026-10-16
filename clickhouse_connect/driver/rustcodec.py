@@ -48,6 +48,9 @@ _FEED_SLICE_BYTES = 1 << 20
 
 REQUIRED_BINDING_API_VERSION = 3
 REQUIRED_COLUMN_BUFFER_API_VERSION = 1
+# Optional capability: StreamDecoder(default_timezone=...) materializes timezone-less DateTime/DateTime64 in a
+# named zone. Older cores lack it and keep routing ambient-timezone queries to Python.
+DEFAULT_TIMEZONE_API_VERSION = 1
 
 _versions_logged = False
 
@@ -67,11 +70,12 @@ def _log_versions_once(resolved: str, core: Any) -> None:
         return
     _versions_logged = True
     logger.info(
-        "native_codec=%s using clickhouse-connect-core %s (binding API %s, column buffer API %s), clickhouse-connect %s",
+        "native_codec=%s using clickhouse-connect-core %s (binding API %s, column buffer API %s, default timezone API %s), clickhouse-connect %s",
         resolved,
         getattr(core, "__version__", "unknown"),
         getattr(core, "BINDING_API_VERSION", 0),
         getattr(core, "COLUMN_BUFFER_API_VERSION", 0),
+        getattr(core, "DEFAULT_TIMEZONE_API_VERSION", 0),
         common.version(),
     )
 
@@ -119,6 +123,22 @@ def _make_native_transform(native_codec: NativeCodec | None = None) -> Transform
     return _RustNativeTransform(strict=(resolved == "rust_strict"))
 
 
+def _ambient_timezone_name(context: QueryContext) -> str | None:
+    """Return the IANA name of the zone bare DateTime renders in, or None when it renders naive-UTC.
+
+    Only meaningful once the earlier eligibility checks pass, so active_tz(None) is the ambient zone
+    (server or local), not a query, column, or response override.
+    """
+    ambient_tz = context.active_tz(None)
+    # zoneinfo.ZoneInfo exposes its IANA key. Fixed offsets have no key the decoder can resolve.
+    return getattr(ambient_tz, "key", None) if ambient_tz is not None else None
+
+
+def _core_supports_default_timezone() -> bool:
+    core = _ch_core_module()
+    return getattr(core, "DEFAULT_TIMEZONE_API_VERSION", 0) >= DEFAULT_TIMEZONE_API_VERSION
+
+
 def _rust_query_ineligible_reason(context: QueryContext) -> str | None:
     """Return a short reason the rust decoder cannot serve this query, or None if it can.
 
@@ -145,8 +165,11 @@ def _rust_query_ineligible_reason(context: QueryContext) -> str | None:
     if context.tz_mode != "naive_utc":
         return "tz_mode"
     # With the checks above excluded, active_tz(None) is None exactly when bare DateTime renders naive-UTC
-    # (query.py active_tz), the only ambient timezone behavior the rust decoder reproduces.
-    if context.active_tz(None) is not None:
+    # (query.py active_tz). Any other ambient zone needs a core that applies it by IANA name, and only
+    # Python row/column exits are eligible; numpy/pandas queries keep routing to the Python codec.
+    if context.active_tz(None) is not None and (
+        context.use_numpy or _ambient_timezone_name(context) is None or not _core_supports_default_timezone()
+    ):
         return "ambient timezone"
     return None
 
@@ -303,7 +326,11 @@ class _RustNativeTransform:
         # decode. The consumer generator re-raises producer errors verbatim, in stream order, so the exception
         # mapping, tag scanning, and last-chunk heuristics below run unchanged on the consuming thread.
         read_source = ReadAheadSource(source)
-        decoder = core.StreamDecoder(has_block_info=context.block_info)
+        ambient_tz_name = _ambient_timezone_name(context)
+        if ambient_tz_name is None:
+            decoder = core.StreamDecoder(has_block_info=context.block_info)
+        else:
+            decoder = core.StreamDecoder(has_block_info=context.block_info, default_timezone=ambient_tz_name)
         exception_tag = read_source.exception_tag
         scanner = _ExceptionTagScanner(exception_tag) if exception_tag else None
         last_chunk = b""

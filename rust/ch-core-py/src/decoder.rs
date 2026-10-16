@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{
     PyEOFError, PyNotImplementedError, PyOSError, PyRuntimeError, PyStopIteration, PyValueError,
@@ -16,6 +18,7 @@ use std::collections::VecDeque;
 use ch_core_rs::batch::ColBatch as RustColBatch;
 
 use crate::batch::ColBatch;
+use crate::pyval::resolve_default_timezone;
 
 /// Map a core decode error to the Python exception for its failure class.
 /// Unsupported input becomes NotImplementedError, matching the insert side.
@@ -102,13 +105,19 @@ pub struct BlockDecoder {
     exhausted: bool,
     schema: Option<ch_core_rs::schema::Schema>,
     blocks_seen: usize,
+    default_timezone: Option<Arc<str>>,
 }
 
 #[pymethods]
 impl BlockDecoder {
     #[new]
-    #[pyo3(signature = (data, has_block_info = false))]
-    fn new(data: &Bound<'_, PyAny>, has_block_info: bool) -> PyResult<Self> {
+    #[pyo3(signature = (data, has_block_info = false, default_timezone = None))]
+    fn new(
+        data: &Bound<'_, PyAny>,
+        has_block_info: bool,
+        default_timezone: Option<String>,
+    ) -> PyResult<Self> {
+        let default_timezone = resolve_default_timezone(data.py(), default_timezone)?;
         Ok(Self {
             data: buffer_to_vec(data)?,
             pos: 0,
@@ -116,6 +125,7 @@ impl BlockDecoder {
             exhausted: false,
             schema: None,
             blocks_seen: 0,
+            default_timezone,
         })
     }
 
@@ -145,7 +155,10 @@ impl BlockDecoder {
                 }
                 self.blocks_seen += 1;
                 self.pos += reader.position() as u64;
-                Ok(ColBatch::from_block(batch))
+                Ok(
+                    ColBatch::from_block(batch)
+                        .with_default_timezone(self.default_timezone.clone()),
+                )
             }
             Ok(None) => {
                 self.exhausted = true;
@@ -196,20 +209,27 @@ pub struct PipeDecoder {
     /// Reused read buffer, refilled from the pipe on each network read.
     buf: Vec<u8>,
     finished: bool,
+    default_timezone: Option<Arc<str>>,
 }
 
 #[cfg(unix)]
 #[pymethods]
 impl PipeDecoder {
     #[new]
-    #[pyo3(signature = (read_fd, has_block_info = false))]
-    fn new(read_fd: i32, has_block_info: bool) -> PyResult<Self> {
+    #[pyo3(signature = (read_fd, has_block_info = false, default_timezone = None))]
+    fn new(
+        py: Python<'_>,
+        read_fd: i32,
+        has_block_info: bool,
+        default_timezone: Option<String>,
+    ) -> PyResult<Self> {
         use std::os::fd::BorrowedFd;
         if read_fd < 0 {
             return Err(PyOSError::new_err(format!(
                 "invalid file descriptor: {read_fd}"
             )));
         }
+        let default_timezone = resolve_default_timezone(py, default_timezone)?;
         // Safety: borrow_raw requires fd != -1, guarded above. Its stays-open
         // contract is knowingly relaxed: the borrow is used only for the dup
         // call, never for I/O, so a closed fd yields EBADF from dup rather
@@ -223,6 +243,7 @@ impl PipeDecoder {
             pending: VecDeque::new(),
             buf: vec![0u8; 1 << 16],
             finished: false,
+            default_timezone,
         })
     }
 
@@ -233,7 +254,8 @@ impl PipeDecoder {
     fn __next__(&mut self, py: Python<'_>) -> PyResult<ColBatch> {
         loop {
             if let Some(block) = self.pending.pop_front() {
-                return Ok(ColBatch::from_block(block));
+                return Ok(ColBatch::from_block(block)
+                    .with_default_timezone(self.default_timezone.clone()));
             }
             if self.finished {
                 return Err(PyStopIteration::new_err(()));
@@ -277,6 +299,11 @@ impl PipeDecoder {
 /// No blocking I/O, no pipes, no threads — designed for async contexts
 /// where an event loop pushes chunks as they arrive from the network.
 ///
+/// `default_timezone` names the IANA zone that Python materialization applies
+/// to `DateTime` and `DateTime64` values whose type carries no timezone, the
+/// driver's ambient timezone. Explicit wire timezones always win, and the
+/// schema, type names, buffers, and Arrow export stay as the server wrote them.
+///
 /// Usage::
 ///
 ///     decoder = StreamDecoder()
@@ -288,17 +315,24 @@ impl PipeDecoder {
 #[pyclass]
 pub struct StreamDecoder {
     inner: RustStreamDecoder,
+    default_timezone: Option<Arc<str>>,
 }
 
 #[pymethods]
 impl StreamDecoder {
     #[new]
-    #[pyo3(signature = (has_block_info = false))]
-    fn new(has_block_info: bool) -> Self {
+    #[pyo3(signature = (has_block_info = false, default_timezone = None))]
+    fn new(
+        py: Python<'_>,
+        has_block_info: bool,
+        default_timezone: Option<String>,
+    ) -> PyResult<Self> {
+        let default_timezone = resolve_default_timezone(py, default_timezone)?;
         let options = decode_options(has_block_info);
-        Self {
+        Ok(Self {
             inner: RustStreamDecoder::new(options),
-        }
+            default_timezone,
+        })
     }
 
     /// Feed a chunk of bytes (bytes, bytearray, or memoryview). Returns a
@@ -316,7 +350,12 @@ impl StreamDecoder {
         // Copy out of Python-owned memory so we can drop the GIL during decode.
         let owned = buffer_to_vec(data)?;
         let batches = py.detach(|| self.inner.feed(&owned)).map_err(decode_err)?;
-        let py_batches: Vec<ColBatch> = batches.into_iter().map(ColBatch::from_block).collect();
+        let py_batches: Vec<ColBatch> = batches
+            .into_iter()
+            .map(|block| {
+                ColBatch::from_block(block).with_default_timezone(self.default_timezone.clone())
+            })
+            .collect();
         PyList::new(py, py_batches)
     }
 
@@ -324,7 +363,12 @@ impl StreamDecoder {
     /// Raises an error if the stream ends with a truncated block.
     fn finish<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let batches = py.detach(|| self.inner.finish()).map_err(decode_err)?;
-        let py_batches: Vec<ColBatch> = batches.into_iter().map(ColBatch::from_block).collect();
+        let py_batches: Vec<ColBatch> = batches
+            .into_iter()
+            .map(|block| {
+                ColBatch::from_block(block).with_default_timezone(self.default_timezone.clone())
+            })
+            .collect();
         PyList::new(py, py_batches)
     }
 }

@@ -13,7 +13,9 @@ use ch_core_rs::schema::ChType;
 
 use crate::buffers::{column_buffers, ColumnBuffers};
 use crate::decoder::{buffer_to_vec, decode_err, decode_options};
-use crate::pyval::{fill_column, prepare_column_ctx, ColumnCtx};
+use crate::pyval::{
+    fill_column, prepare_column_ctx, resolve_default_timezone, ColumnCtx, DefaultTimezoneScope,
+};
 
 /// Wrapper to make ArrowArrayStream Send-safe for PyCapsule.
 #[repr(transparent)]
@@ -29,13 +31,22 @@ unsafe impl Send for SendableStream {}
 #[pyclass(name = "ColBatch")]
 pub struct ColBatch {
     inner: Arc<ChunkedBatch>,
+    /// Zone applied to timezone-less DateTime/DateTime64 values when
+    /// materializing Python objects. Never changes the schema or buffers.
+    default_timezone: Option<Arc<str>>,
 }
 
 impl ColBatch {
     pub(crate) fn from_chunked(inner: ChunkedBatch) -> Self {
         Self {
             inner: Arc::new(inner),
+            default_timezone: None,
         }
+    }
+
+    pub(crate) fn with_default_timezone(mut self, default_timezone: Option<Arc<str>>) -> Self {
+        self.default_timezone = default_timezone;
+        self
     }
 
     /// Wrap a single decoded block as a one-chunk result. Used by the
@@ -47,6 +58,7 @@ impl ColBatch {
                 schema,
                 chunks: vec![Arc::new(block)],
             }),
+            default_timezone: None,
         }
     }
 }
@@ -55,8 +67,13 @@ impl ColBatch {
 impl ColBatch {
     /// Decode a complete Native payload from bytes, bytearray, or memoryview.
     #[staticmethod]
-    #[pyo3(signature = (data, has_block_info = false))]
-    fn decode_native(data: &Bound<'_, PyAny>, has_block_info: bool) -> PyResult<Self> {
+    #[pyo3(signature = (data, has_block_info = false, default_timezone = None))]
+    fn decode_native(
+        data: &Bound<'_, PyAny>,
+        has_block_info: bool,
+        default_timezone: Option<String>,
+    ) -> PyResult<Self> {
+        let default_timezone = resolve_default_timezone(data.py(), default_timezone)?;
         let options = decode_options(has_block_info);
         let chunked = if let Ok(bytes) = data.cast::<pyo3::types::PyBytes>() {
             // bytes: decode straight from the borrowed buffer, no copy. The
@@ -68,24 +85,35 @@ impl ColBatch {
             data.py().detach(|| decode_all_bytes(&owned, &options))
         }
         .map_err(decode_err)?;
-        Ok(Self::from_chunked(chunked))
+        Ok(Self::from_chunked(chunked).with_default_timezone(default_timezone))
     }
 
-    /// Merge already-decoded batches into one. The schema comes from the
-    /// first batch and every later batch must match it. Chunks are shared via
-    /// Arc clones; zero-row chunks are dropped, as in `decode_all_bytes`.
+    /// Merge already-decoded batches into one. The schema and
+    /// `default_timezone` come from the first batch and every later batch must
+    /// match them. Chunks are shared via Arc clones; zero-row chunks are
+    /// dropped, as in `decode_all_bytes`.
     #[staticmethod]
     fn from_batches(py: Python<'_>, batches: Vec<Py<ColBatch>>) -> PyResult<Self> {
         let first = batches
             .first()
             .ok_or_else(|| PyValueError::new_err("from_batches requires at least one batch"))?;
-        let schema = first.borrow(py).inner.schema.clone();
+        let (schema, default_timezone) = {
+            let first = first.borrow(py);
+            (first.inner.schema.clone(), first.default_timezone.clone())
+        };
         let mut chunks = Vec::new();
         for (i, batch) in batches.iter().enumerate() {
             let guard = batch.borrow(py);
             if guard.inner.schema != schema {
                 return Err(PyValueError::new_err(format!(
                     "Batch {i} schema differs from the first batch"
+                )));
+            }
+            if guard.default_timezone != default_timezone {
+                return Err(PyValueError::new_err(format!(
+                    "Batch {i} default_timezone ({:?}) differs from the first batch ({:?})",
+                    guard.default_timezone.as_deref(),
+                    default_timezone.as_deref(),
                 )));
             }
             chunks.extend(
@@ -97,7 +125,13 @@ impl ColBatch {
                     .cloned(),
             );
         }
-        Ok(Self::from_chunked(ChunkedBatch { schema, chunks }))
+        Ok(Self::from_chunked(ChunkedBatch { schema, chunks })
+            .with_default_timezone(default_timezone))
+    }
+
+    #[getter]
+    fn default_timezone(&self) -> Option<&str> {
+        self.default_timezone.as_deref()
     }
 
     #[getter]
@@ -201,6 +235,7 @@ impl ColBatch {
             )));
         }
 
+        let _scope = DefaultTimezoneScope::enter(self.default_timezone.clone());
         let ctx = prepare_column_ctx(py, &self.inner.schema.fields[index].ch_type, raw_time_ticks)?;
         column_to_pylist(py, &self.inner.chunks, index, &ctx)
     }
@@ -209,6 +244,9 @@ impl ColBatch {
     fn to_python_rows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let total_rows = self.inner.num_rows();
         let num_cols = self.inner.num_columns();
+        // Covers every context prepared below, including the per-child
+        // contexts Dynamic and SharedVariant cells resolve during the fill.
+        let _scope = DefaultTimezoneScope::enter(self.default_timezone.clone());
         // Resolve each column's temporal context once, not per cell, so a
         // tz-aware column imports its zoneinfo a single time for the whole table.
         let ctxs: Vec<ColumnCtx> = self
@@ -295,6 +333,7 @@ impl ColBatch {
         for chunk in &self.inner.chunks {
             check_chunk_shape(chunk, self.inner.num_columns())?;
         }
+        let _scope = DefaultTimezoneScope::enter(self.default_timezone.clone());
         let array_ctor = if typed_numeric {
             Some(PyModule::import(py, "array")?.getattr("array")?)
         } else {
