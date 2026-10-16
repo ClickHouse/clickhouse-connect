@@ -5,6 +5,8 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+## 1.11.0, 2026-10-16
+
 ### Bug Fixes
 
 - The synchronous HTTP client now waits before retrying HTTP 429, 503, and 504 responses and closes each failed response before the next attempt, matching the asynchronous client.
@@ -12,7 +14,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 ### Improvements
 
 - Added CPython 3.15 support and wheels, including experimental free-threaded 3.15t wheels. `lz4` has no CPython 3.15 wheels yet, so installing on 3.15 builds it from source. Closes [#1086](https://github.com/ClickHouse/clickhouse-connect/issues/1086).
-- The Rust codec now serves Python row and column queries (`query`, `query_row_block_stream`, `query_column_block_stream`, and `query_rows_stream`) whose timezone-less `DateTime` and `DateTime64` columns render in a non-UTC ambient timezone, the server timezone or the client's local timezone when `TZ` is set or `tzlocal` is installed. Previously `rust` routed these queries to the Python codec and `rust_strict` raised `NotSupportedError: native_codec="rust_strict" does not support ambient timezone`. Values match the Python codec, including DST offsets, and column types keep the server's type names. This needs a `clickhouse-connect-core` build with the default-timezone capability, see the [core changelog](rust/ch-core-py/CHANGELOG.md). NumPy and Pandas queries (`query_np`, `query_df`, and their streaming variants) with a non-UTC ambient timezone, older cores, and fixed-offset ambient timezones with no IANA name keep the existing routing.
+- The Rust codec now serves Python row and column queries (`query`, `query_row_block_stream`, `query_column_block_stream`, and `query_rows_stream`) whose timezone-less `DateTime` and `DateTime64` columns render in a non-UTC ambient timezone, the server timezone or the client's local timezone when `TZ` is set or `tzlocal` is installed. Previously `rust` routed these queries to the Python codec and `rust_strict` raised `NotSupportedError: native_codec="rust_strict" does not support ambient timezone`. Values match the Python codec, including DST offsets, and column types keep the server's type names. This needs `clickhouse-connect-core>=0.2.3`, see the [core changelog](rust/ch-core-py/CHANGELOG.md). NumPy and Pandas queries (`query_np`, `query_df`, and their streaming variants) with a non-UTC ambient timezone, older cores, and fixed-offset ambient timezones with no IANA name keep the existing routing.
 
 ## 1.10.1, 2026-10-14
 

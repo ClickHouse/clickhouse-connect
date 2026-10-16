@@ -103,6 +103,8 @@ pip install --upgrade clickhouse-connect-core
 
 Fixes and performance improvements in the compiled codec ship as `clickhouse-connect-core` releases and can be picked up with a compatible core wheel upgrade. Changes to the driver's Rust integration require a `clickhouse-connect` upgrade.
 
+Rust support for Python row and column queries in non-UTC ambient timezones requires `clickhouse-connect>=1.11.0` and `clickhouse-connect-core>=0.2.3`. Upgrade both packages to enable it. Older compatible cores retain the existing Python fallback in `rust` mode and rejection in `rust_strict` mode.
+
 ## Known behavior differences {#known-behavior-differences}
 
 The Rust codec targets cell for cell parity with the Python codec. The following differences are known.
