@@ -2057,11 +2057,20 @@ def test_rust_codec_abandoned_stream_no_read_ahead_thread(client_factory, call, 
             call(abandon, stream)
 
         del stream
-        deadline = time.time() + 2.0
-        while time.time() < deadline and thread.is_alive():
-            time.sleep(0.05)
-        assert read_source_ref() is None
+        if client_mode == "sync":
+            thread.join(timeout=2.0)
+        else:
+
+            async def wait_for_cleanup():
+                # Let the transport's event loop run while the producer and source finalize.
+                deadline = time.monotonic() + 2.0
+                while time.monotonic() < deadline and (thread.is_alive() or read_source_ref() is not None):
+                    await asyncio.sleep(0.05)
+
+            call(wait_for_cleanup)
+
         assert thread.is_alive() is False
+        assert read_source_ref() is None
     finally:
         if read_source_ref is not None:
             leaked_source = read_source_ref()
