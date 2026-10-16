@@ -7,6 +7,8 @@ Driver integration changes and core version requirements belong in the [driver c
 
 ## UNRELEASED
 
+## 0.2.3, 2026-10-16
+
 ### Improvements
 
 - Added CPython 3.15 and free-threaded 3.15t wheels for Linux, macOS, and Windows.
