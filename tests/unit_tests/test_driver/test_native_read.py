@@ -235,6 +235,26 @@ def test_empty_tuple_native_write_and_size():
 
 
 @pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+@pytest.mark.parametrize("null_map", [b"\x01\x00\x00\x00", b"\x01" * 4, b"\x00" * 4, b""])
+def test_nullable_tuple_native_null_map_and_stream_alignment(buffer_cls, null_map):
+    tuple_type = registry.get_from_name("Nullable(Tuple(name Nullable(String), value UInt8))")
+    values = [
+        {"name": None, "value": 13},
+        {"name": "S", "value": 79},
+        {"name": None, "value": 80},
+        {"name": "", "value": 81},
+    ]
+    body = b"\x01\x00\x01\x00" + b"\x00\x01S\x00\x00" + bytes((13, 79, 80, 81))
+    source = bytes_source(b"\x4f" + null_map + (body if null_map else b"") + b"\x53", cls=buffer_cls)
+
+    assert source.read_byte() == 79
+    assert tuple_type.read_column(source, len(null_map), QueryContext()) == [
+        None if is_null else value for is_null, value in zip(null_map, values)
+    ]
+    assert list(registry.get_from_name("UInt8").read_column(source, 1, QueryContext())) == [83]
+
+
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
 def test_nullable_empty_tuple_native_markers(buffer_cls):
     tuple_type = registry.get_from_name("Nullable(Tuple())")
     source = bytes_source(b"\x01\x00\x01" + b"000" + bytes((13, 79, 80)), cls=buffer_cls)

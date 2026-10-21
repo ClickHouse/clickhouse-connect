@@ -158,14 +158,10 @@ class Tuple(ClickHouseType):
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         return [e_type.read_column_prefix(source, ctx) for e_type in self.element_types]
 
-    def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any):
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any):
         if not self.element_types:
-            null_map = source.read_bytes(num_rows) if self.nullable else None
             source.read_bytes(num_rows)
-            empty_column = tuple(() for _ in range(num_rows))
-            if null_map is not None:
-                return data_conv.build_nullable_column(empty_column, null_map, self._active_null(ctx))
-            return empty_column
+            return tuple(() for _ in range(num_rows))
         columns = []
         e_names = self.element_names
         for ix, e_type in enumerate(self.element_types):

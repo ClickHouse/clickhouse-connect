@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- Native queries now decode `Nullable(Tuple(...))` correctly, preserving NULL tuples and non-NULL values, including nested tuples and tuple read formats. Closes [#1102](https://github.com/ClickHouse/clickhouse-connect/issues/1102).
+
 ## 1.11.0, 2026-10-16
 
 ### Bug Fixes

@@ -140,6 +140,70 @@ def test_tuple_inserts(param_client: Client, call, table_context: Callable):
 
 
 @pytest.mark.parametrize(
+    "tuple_type, values_sql, expected_values",
+    [
+        (
+            "Tuple(name Nullable(String))",
+            "NULL, tuple('S'), tuple(NULL), tuple('')",
+            [None, {"name": "S"}, {"name": None}, {"name": ""}],
+        ),
+        (
+            "Tuple(Nullable(String))",
+            "NULL, tuple('S'), tuple(NULL), tuple('')",
+            [None, ("S",), (None,), ("",)],
+        ),
+        (
+            "Tuple(name LowCardinality(String), value UInt8)",
+            "NULL, tuple('S', 13), tuple('', 79), NULL",
+            [None, {"name": "S", "value": 13}, {"name": "", "value": 79}, None],
+        ),
+        (
+            "Tuple(value Nullable(Tuple(name Nullable(String))))",
+            "NULL, tuple(NULL), tuple(tuple('S')), tuple(tuple(NULL))",
+            [None, {"value": None}, {"value": {"name": "S"}}, {"value": {"name": None}}],
+        ),
+        (
+            "Tuple(values Array(String), empty_value Tuple())",
+            "NULL, tuple(['S', ''], tuple()), tuple([], tuple()), NULL",
+            [None, {"values": ["S", ""], "empty_value": ()}, {"values": [], "empty_value": ()}, None],
+        ),
+    ],
+)
+def test_nullable_tuple_queries(param_client: Client, call, test_config, tuple_type, values_sql, expected_values):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    rows = call(
+        param_client.query,
+        "SELECT value, [value], tuple(value), [tuple(value)], toUInt8(79) AS sentinel "
+        f"FROM values('value Nullable({tuple_type})', {values_sql})",
+        settings=nullable_tuple_settings(param_client),
+    ).result_rows
+
+    assert rows == [(value, [value], (value,), [(value,)], 79) for value in expected_values]
+
+
+@pytest.mark.parametrize(
+    "read_format, expected_values",
+    [
+        ("native", [None, {"name": "S"}, {"name": None}, {"name": ""}]),
+        ("tuple", [None, ("S",), (None,), ("",)]),
+        ("json", [None, b'{"name":"S"}', b'{"name":null}', b'{"name":""}']),
+    ],
+)
+def test_nullable_tuple_read_formats(param_client: Client, call, test_config, read_format, expected_values):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    rows = call(
+        param_client.query,
+        "SELECT value FROM values('value Nullable(Tuple(name Nullable(String)))', NULL, tuple('S'), tuple(NULL), tuple(''))",
+        settings=nullable_tuple_settings(param_client),
+        column_formats={"value": read_format},
+    ).result_rows
+
+    assert rows == [(value,) for value in expected_values]
+
+
+@pytest.mark.parametrize(
     "expression, expected_values",
     [
         ("tuple()", [(), (), ()]),

@@ -1216,8 +1216,6 @@ def test_rust_codec_unsupported_aggregate_function_decode(client_factory, call, 
 
 
 def test_rust_codec_nullable_tuple_decode(client_factory, call):
-    # The python codec cannot parse Nullable(Tuple), so the rust path is the
-    # reference here rather than a parity target.
     client = client_factory(native_codec="rust_strict")
     query = "SELECT if(number % 2 = 0, CAST((number, 'x'), 'Nullable(Tuple(UInt64, String))'), NULL) AS t FROM numbers(4)"
     result = call(client.query, query, settings=nullable_tuple_settings(client))
