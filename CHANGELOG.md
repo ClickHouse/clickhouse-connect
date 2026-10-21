@@ -8,6 +8,8 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 ### Bug Fixes
 
 - Native queries now decode `Nullable(Tuple(...))` correctly, preserving NULL tuples and non-NULL values, including nested tuples and tuple read formats. Closes [#1102](https://github.com/ClickHouse/clickhouse-connect/issues/1102).
+- Native queries now decode `Nullable(Point)` columns, returning `None` for NULL points. Previously the decoder read the NULL map as point data and the query failed with `InternalError`.
+- With the Rust codec, `query_column_block_stream` now returns unnamed `Nullable(Tuple(...))` columns, including `Nullable(Tuple())`, as lists instead of tuples, matching the Python codec. Row results are unchanged.
 
 ## 1.11.0, 2026-10-16
 

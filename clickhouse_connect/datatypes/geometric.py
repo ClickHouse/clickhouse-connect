@@ -29,7 +29,7 @@ class Point(ClickHouseType):
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         return POINT_DATA_TYPE.read_column_prefix(source, ctx)
 
-    def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
         return POINT_DATA_TYPE.read_column_data(source, num_rows, ctx, read_state)
 
 
