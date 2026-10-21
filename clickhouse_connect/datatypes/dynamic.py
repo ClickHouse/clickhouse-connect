@@ -154,6 +154,10 @@ class Variant(ClickHouseType):
         for e_type in self.element_types:
             e_type.write_column_prefix(dest)
 
+    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        # A Variant row of None is already NULL
+        self.write_column_data(column, dest, ctx)
+
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         sub_columns: list[list] = [[] for _ in range(len(self.element_types))]
         discriminators = bytearray()
@@ -290,6 +294,10 @@ class Dynamic(ClickHouseType):
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         write_str_values(self, column, dest, ctx)
 
+    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        # A Dynamic row of None is already NULL
+        self.write_column_data(column, dest, ctx)
+
 
 def json_sample_size(_, sample: Collection) -> int:
     if len(sample) == 0:
@@ -306,13 +314,17 @@ def json_sample_size(_, sample: Collection) -> int:
 def write_json(ch_type: ClickHouseType, column: Sequence, dest: bytearray, ctx: InsertContext):
     if ch_type.nullable:
         dest += bytearray(1 if v is None else 0 for v in column)
+    _write_json_values(ch_type, column, dest, ctx, ch_type.nullable)
 
-    first = first_value(column, ch_type.nullable)
+
+def _write_json_values(ch_type: ClickHouseType, column: Sequence, dest: bytearray, ctx: InsertContext, null_rows: bool):
+    """Writes JSON text.  With null_rows, a None row is hidden by a NULL map and gets the JSON null placeholder."""
+    first = first_value(column, null_rows)
     write_col = column
     encoding: str | None = ctx.encoding or ch_type.encoding
     if not isinstance(first, str) and ch_type.write_format(ctx) != "string":
         to_json = any_to_json
-        if ch_type.nullable:
+        if null_rows:
             write_col = [_JSON_NULL if v is None else to_json(v) for v in column]
         else:
             write_col = [to_json(v) for v in column]
@@ -320,7 +332,7 @@ def write_json(ch_type: ClickHouseType, column: Sequence, dest: bytearray, ctx: 
     else:
         write_col = [_JSON_NULL_STR if v is None else v for v in column]
 
-    handle_error(data_conv.write_str_col(write_col, ch_type.nullable, encoding, dest), ctx)
+    handle_error(data_conv.write_str_col(write_col, null_rows, encoding, dest), ctx)
 
 
 def write_str_values(ch_type: ClickHouseType, column: Sequence, dest: bytearray, ctx: InsertContext):
@@ -634,6 +646,12 @@ class JSON(ClickHouseType):
         super().__init__(canonical_type_def)
         if parts:
             self._name_suffix = f"({', '.join(parts)})"
+
+    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        if self.nullable:
+            write_json(self, column, dest, ctx)
+        else:
+            _write_json_values(self, column, dest, ctx, True)
 
     def write_column_prefix(self, dest: bytearray):
         write_uint64(_JSON_SERIALIZATION_VERSION, dest)

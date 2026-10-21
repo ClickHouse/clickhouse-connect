@@ -122,6 +122,9 @@ class SimpleAggregateFunction(ClickHouseType):
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         self.element_type.write_column_data(column, dest, ctx)
 
+    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        self.element_type.write_masked_column_data(column, dest, ctx)
+
 
 class AggregateFunction(UnsupportedType):
     _type_args = _TypeArgs(1, None, variadic_nested=1)

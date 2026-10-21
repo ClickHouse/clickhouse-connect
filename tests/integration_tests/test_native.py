@@ -276,6 +276,54 @@ def test_nullable_empty_tuple(param_client: Client, call, test_config):
         call(param_client.command, f"DROP TABLE IF EXISTS {table}")
 
 
+@pytest.mark.parametrize(
+    "column_type, values",
+    [
+        ("Nullable(Tuple(UInt64, String))", [None, (13, "user_1"), None]),
+        ("Nullable(Tuple(UInt64, String))", [None, None]),
+        ("Nullable(Tuple(id UInt64, name LowCardinality(String)))", [None, {"id": 13, "name": "user_1"}]),
+        (
+            "Nullable(Tuple(ip IPv4, values Array(Nullable(String)), inner Tuple(String, Map(String, UInt8))))",
+            [{"ip": IPv4Address("10.0.0.1"), "values": ["user_1", None], "inner": ("user_2", {"k": 79})}, None],
+        ),
+        ("Nullable(Tuple(value Nullable(Tuple(String))))", [None, {"value": None}, {"value": ("user_1",)}]),
+        ("Nullable(Point)", [None, (3.55, -4.5), None]),
+        ("Array(Nullable(Tuple(UInt64)))", [[None, (13,)], [], [None]]),
+        ("Tuple(Nullable(Tuple(UInt64)), UInt8)", [(None, 79), ((13,), 80)]),
+    ],
+)
+def test_nullable_tuple_inserts(param_client: Client, call, test_config, column_type, values):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    settings = nullable_tuple_settings(param_client)
+    top_level_null = column_type.startswith("Nullable")
+
+    table = "nullable_tuple_inserts"
+    call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            param_client.command,
+            f"CREATE TABLE {table} (key UInt8, value {column_type}) ENGINE MergeTree ORDER BY key",
+            settings=settings,
+        )
+        call(param_client.insert, table, [[key, value] for key, value in enumerate(values)])
+        rows = call(param_client.query, f"SELECT value FROM {table} ORDER BY key").result_rows
+        hidden = []
+        if top_level_null:
+            # The server keeps the values under a NULL row, so they must match what the server writes for NULL
+            hidden = call(
+                param_client.query,
+                f"SELECT DISTINCT toString(assumeNotNull(value)) = toString(assumeNotNull(CAST(NULL, '{column_type}'))) "
+                f"FROM {table} WHERE isNull(value)",
+                settings=settings,
+            ).result_rows
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+
+    assert rows == [(value,) for value in values]
+    assert hidden == ([(True,)] if top_level_null else [])
+
+
 def test_agg_function(param_client: Client, call, table_context: Callable):
     with table_context(
         "agg_func_test",

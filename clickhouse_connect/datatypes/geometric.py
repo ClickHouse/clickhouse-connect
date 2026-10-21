@@ -20,11 +20,12 @@ class Point(ClickHouseType):
     def _data_size(self, sample: Collection) -> int:
         return POINT_DATA_TYPE._data_size(sample)
 
-    def write_column(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        return POINT_DATA_TYPE.write_column(column, dest, ctx)
-
-    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        return POINT_DATA_TYPE.write_column_data(column, dest, ctx)
+    def _write_column_binary(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        # Nullable(Point) rows that are None are hidden by the NULL map the base class writes
+        if self.nullable:
+            POINT_DATA_TYPE.write_masked_column_data(column, dest, ctx)
+        else:
+            POINT_DATA_TYPE.write_column_data(column, dest, ctx)
 
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         return POINT_DATA_TYPE.read_column_prefix(source, ctx)
@@ -43,6 +44,9 @@ class Ring(ClickHouseType):
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         return RING_DATA_TYPE.write_column_data(column, dest, ctx)
 
+    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        return RING_DATA_TYPE.write_masked_column_data(column, dest, ctx)
+
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         return RING_DATA_TYPE.read_column_prefix(source, ctx)
 
@@ -60,6 +64,9 @@ class Polygon(ClickHouseType):
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         return POLYGON_DATA_TYPE.write_column_data(column, dest, ctx)
 
+    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        return POLYGON_DATA_TYPE.write_masked_column_data(column, dest, ctx)
+
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         return POLYGON_DATA_TYPE.read_column_prefix(source, ctx)
 
@@ -76,6 +83,9 @@ class MultiPolygon(ClickHouseType):
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         return MULTI_POLYGON_DATA_TYPE.write_column_data(column, dest, ctx)
+
+    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        return MULTI_POLYGON_DATA_TYPE.write_masked_column_data(column, dest, ctx)
 
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         return MULTI_POLYGON_DATA_TYPE.read_column_prefix(source, ctx)
