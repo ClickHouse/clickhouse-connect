@@ -240,7 +240,7 @@ class Tuple(ClickHouseType):
         else:
             first = next((value for value, hidden in zip(column, null_map) if not hidden), None)
         if self.element_names and isinstance(first, dict):
-            columns = self.convert_dict_insert(column)
+            columns = self.convert_dict_insert(column, null_map)
         else:
             rows = column
             if null_map is not None:
@@ -258,12 +258,18 @@ class Tuple(ClickHouseType):
             else:
                 e_type.write_column_data(elem_column, dest, ctx)
 
-    def convert_dict_insert(self, column: Sequence) -> Sequence:
+    def convert_dict_insert(self, column: Sequence, null_map: Sequence[bool] | None = None) -> Sequence:
         names = self.element_names
         col: list[list[Any]] = [[] for _ in names]
-        for x in column:
+        for row, x in enumerate(column):
+            if x is None:
+                if null_map is None or not null_map[row]:
+                    raise DataError(f"{self.name} expects a sequence with {len(self.element_types)} elements at row {row}")
+                for values in col:
+                    values.append(None)
+                continue
             for ix, name in enumerate(names):
-                col[ix].append(None if x is None else x.get(name))
+                col[ix].append(x.get(name))
         return col
 
 

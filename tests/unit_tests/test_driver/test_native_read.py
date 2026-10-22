@@ -407,6 +407,26 @@ def test_nonnullable_tuple_nonsequence_row_is_data_error(value):
         registry.get_from_name("Tuple(UInt64, UInt8)").write_column([(13, 79), value], bytearray(), InsertContext("", [], []))
 
 
+@pytest.mark.parametrize(
+    "type_name, values, row",
+    [
+        ("Tuple(value Nullable(UInt8))", [{"value": 13}, None], 1),
+        ("Tuple(value Nullable(UInt8))", [None, {"value": 13}], 0),
+        ("Array(Tuple(value Nullable(UInt8)))", [[{"value": 13}, None]], 1),
+        ("Nullable(Tuple(inner Tuple(value Nullable(UInt8))))", [None, {"inner": {"value": 13}}, {"inner": None}], 2),
+    ],
+)
+def test_nonnullable_named_tuple_rejects_visible_none_dict_row(type_name, values, row):
+    with pytest.raises(DataError, match=rf"expects a sequence with 1 elements at row {row}"):
+        registry.get_from_name(type_name).write_column(values, bytearray(), InsertContext("", [], []))
+
+
+def test_nullable_named_tuple_accepts_none_dict_row():
+    dest = bytearray()
+    registry.get_from_name("Nullable(Tuple(value Nullable(UInt8)))").write_column([{"value": 13}, None], dest, InsertContext("", [], []))
+    assert dest == b"\x00\x01\x00\x01\x0d\x00"
+
+
 @pytest.mark.parametrize("values", [[None], [None, (13,)]])
 def test_nullable_tuple_unsupported_element_still_rejected(values):
     with pytest.raises(NotSupportedError, match="serialization.*not supported"):
