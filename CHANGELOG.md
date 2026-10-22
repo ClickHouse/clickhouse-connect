@@ -7,10 +7,13 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
-- Native queries now decode `Nullable(Tuple(...))` correctly, preserving NULL tuples and non-NULL values, including nested tuples and tuple read formats. Closes [#1102](https://github.com/ClickHouse/clickhouse-connect/issues/1102).
-- Native queries now decode `Nullable(Point)` columns, returning `None` for NULL points. Previously the decoder read the NULL map as point data and the query failed with `InternalError`.
+- The Python codec now decodes `Nullable(Tuple(...))` correctly, preserving NULL tuples and non-NULL values, including nested tuples and tuple read formats. Closes [#1102](https://github.com/ClickHouse/clickhouse-connect/issues/1102).
+- The Python codec now decodes `Nullable(Point)` columns, returning `None` for NULL points. Previously the decoder read the NULL map as point data and the query failed.
 - With the Rust codec, `query_column_block_stream` now returns unnamed `Nullable(Tuple(...))` columns, including `Nullable(Tuple())`, as lists instead of tuples, matching the Python codec. Row results are unchanged.
-- The Python codec now inserts `None` into `Nullable(Tuple(...))` and `Nullable(Point)` columns as NULL, including when nested in `Array` or `Tuple`. Previously these inserts failed with `TypeError` or `AttributeError` before reaching the server. A NULL row stores the same element values the server writes for NULL, matching the Rust codec. Inserts into these columns now declare the `Nullable(Tuple(...))` type in the Native block header instead of `Tuple(...)`. Closes [#1104](https://github.com/ClickHouse/clickhouse-connect/issues/1104).
+- The Python codec now inserts `None` into `Nullable(Tuple(...))` and `Nullable(Point)` columns as NULL, including when nested in `Array` or `Tuple`. Previously these inserts failed with `TypeError` or `AttributeError` before reaching the server. Tuple elements keep their declared types' validation and input handling, including Decimal aliases and nullable SimpleAggregateFunction elements. Native insert headers now preserve the tuple's Nullable wrapper. Closes [#1104](https://github.com/ClickHouse/clickhouse-connect/issues/1104).
+- The Python codec now inserts `None` into `Nullable(SimpleAggregateFunction(...))` columns as NULL.
+- Tuple serialization now reports non-sequence rows with `DataError` and a row number instead of a raw `TypeError`.
+- `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
 
 ## 1.11.0, 2026-10-16
 

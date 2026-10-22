@@ -100,8 +100,14 @@ class Array(ClickHouseType):
             column = data
         final_type.write_column_data(column, dest, ctx)
 
-    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        self.write_column_data([[] if x is None else x for x in column], dest, ctx)
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
+        self.write_column_data([[] if hidden else value for value, hidden in zip(column, null_map)], dest, ctx)
 
 
 class Tuple(ClickHouseType):
@@ -184,9 +190,11 @@ class Tuple(ClickHouseType):
         for e_type in self.element_types:
             e_type.write_column_prefix(dest)
 
-    def _row_length_error(self, column: Sequence) -> DataError:
+    def _row_length_error(self, column: Sequence, null_map: Sequence[bool] | None) -> DataError:
         expected = len(self.element_types)
         for row_number, row in enumerate(column):
+            if null_map is not None and null_map[row_number]:
+                continue
             try:
                 actual = len(row)
             except TypeError:
@@ -196,44 +204,57 @@ class Tuple(ClickHouseType):
         return DataError(f"{self.name} rows have inconsistent lengths")
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        null_map = None
         if self.nullable:
-            dest += bytes([1 if x is None else 0 for x in column])
-        self._write_tuple_rows(column, dest, ctx, self.nullable)
+            null_map = [value is None for value in column]
+            dest += bytes(null_map)
+        self._write_tuple_rows(column, dest, ctx, null_map)
 
-    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
         if self.nullable:
-            self.write_column_data(column, dest, ctx)
-        else:
-            self._write_tuple_rows(column, dest, ctx, True)
+            null_map = [hidden or value is None for value, hidden in zip(column, null_map)]
+            dest += bytes(null_map)
+        self._write_tuple_rows(column, dest, ctx, null_map)
 
-    def _write_tuple_rows(self, column: Sequence, dest: bytearray, ctx: InsertContext, hidden_nulls: bool):
-        """Writes the tuple elements.  With hidden_nulls, a None row is hidden by a NULL map and gets placeholders."""
+    def _write_tuple_rows(self, column: Sequence[Any], dest: bytearray, ctx: InsertContext, null_map: Sequence[bool] | None) -> None:
+        """Write tuple elements, with defaults only at positions hidden by a NULL map."""
         if not self.element_types:
-            for value in column:
-                if value is None and hidden_nulls:
+            for row, value in enumerate(column):
+                if null_map is not None and null_map[row]:
                     continue
                 if not isinstance(value, tuple) or value:
                     raise ctx.data_error("Tuple() values must be empty tuples")
             # ClickHouse SerializationTuple uses ASCII '0' per row, not a NUL byte.
             dest += b"0" * len(column)
             return
-        masked = hidden_nulls and any(x is None for x in column)
-        if self.element_names and isinstance(first_value(column, hidden_nulls), dict):
+        if null_map is not None and not any(null_map):
+            null_map = None
+        if null_map is None:
+            first = first_value(column, False)
+        else:
+            first = next((value for value, hidden in zip(column, null_map) if not hidden), None)
+        if self.element_names and isinstance(first, dict):
             columns = self.convert_dict_insert(column)
         else:
             rows = column
-            if masked:
+            if null_map is not None:
                 hidden_row = (None,) * len(self.element_types)
-                rows = [hidden_row if x is None else x for x in column]
+                rows = [hidden_row if hidden else value for value, hidden in zip(column, null_map)]
             try:
                 columns = list(zip(*rows, strict=True))
-            except ValueError:
-                raise self._row_length_error(column) from None
+            except (TypeError, ValueError):
+                raise self._row_length_error(column, null_map) from None
             if len(column) and len(columns) != len(self.element_types):
-                raise self._row_length_error(column)
+                raise self._row_length_error(column, null_map)
         for e_type, elem_column in zip(self.element_types, columns):
-            if masked:
-                e_type.write_masked_column_data(elem_column, dest, ctx)
+            if null_map is not None:
+                e_type._write_masked_column_data(elem_column, dest, ctx, null_map)
             else:
                 e_type.write_column_data(elem_column, dest, ctx)
 
@@ -317,8 +338,14 @@ class Map(ClickHouseType):
         self.key_type.write_column_data(keys, dest, ctx)
         self.value_type.write_column_data(values, dest, ctx)
 
-    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        self.write_column_data([{} if x is None else x for x in column], dest, ctx)
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
+        self.write_column_data([{} if hidden else value for value, hidden in zip(column, null_map)], dest, ctx)
 
 
 class Nested(ClickHouseType):
@@ -358,5 +385,11 @@ class Nested(ClickHouseType):
         data = [[tuple(sub_row[key] for key in keys) for sub_row in row] for row in column]
         self.tuple_array.write_column_data(data, dest, ctx)
 
-    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        self.write_column_data([[] if x is None else x for x in column], dest, ctx)
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
+        self.write_column_data([[] if hidden else value for value, hidden in zip(column, null_map)], dest, ctx)

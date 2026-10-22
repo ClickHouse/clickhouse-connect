@@ -3,6 +3,7 @@ import logging
 from abc import ABC
 from collections.abc import Collection, MutableSequence, Sequence
 from dataclasses import dataclass
+from itertools import compress
 from math import log
 from typing import Any, NamedTuple
 
@@ -271,23 +272,40 @@ class ClickHouseType(ABC):  # noqa: B024
                 dest += bytes([1 if x is None else 0 for x in column])
             self._write_column_binary(column, dest, ctx)
 
-    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        """
-        Native write method for element data of a Nullable(Tuple(...)) column.  None marks a row hidden by the
-        tuple NULL map.  The server keeps hidden rows (assumeNotNull returns them), so a hidden row gets the
-        value this type writes for a NULL, as the server does for a NULL tuple
-        :param column: Sequence of Python data, with None for hidden rows
-        :param dest: Native binary write buffer
-        :param ctx: Insert Context with insert specific settings
-        """
-        if self.nullable or all(x is not None for x in column):
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
+        """Write declared-type values, replacing only rows hidden by a parent NULL map with defaults."""
+        if not any(null_map):
             self.write_column_data(column, dest, ctx)
             return
-        null_type = self.build(TypeDef(("Nullable",), self.type_def.keys, self.type_def.values))
+        if self.nullable:
+            self.write_column_data([None if hidden else value for value, hidden in zip(column, null_map)], dest, ctx)
+            return
         if self.low_card:
-            self._write_column_low_card(column, dest, ctx, null_type)
+            self._write_column_low_card(column, dest, ctx, null_map)
+            return
+        first = next((value for value, hidden in zip(column, null_map) if not hidden), None)
+        if self.byte_size and all(null_map):
+            dest += bytes(len(column) * self.byte_size)
+            return
+        # A visible placeholder preserves the declared writer's first-value inference and validation.
+        start = len(dest)
+        self.write_column_data([first if hidden else value for value, hidden in zip(column, null_map)], dest, ctx)
+        hidden_rows = compress(range(len(column)), null_map)
+        if self.byte_size in (1, 2, 4, 8):
+            with memoryview(dest)[start : len(dest)].cast(array_type(self.byte_size, False)) as values:
+                for row in hidden_rows:
+                    values[row] = 0
         else:
-            null_type._write_column_binary(column, dest, ctx)
+            empty = bytes(self.byte_size)
+            for row in hidden_rows:
+                offset = start + row * self.byte_size
+                dest[offset : offset + self.byte_size] = empty
 
     def _read_low_card_column(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any):
         if num_rows == 0:
@@ -346,16 +364,26 @@ class ClickHouseType(ABC):  # noqa: B024
         column: Sequence,
         dest: bytearray,
         ctx: InsertContext,
-        index_type: "ClickHouseType | None" = None,
+        null_map: Sequence[bool] | None = None,
     ):
         if len(column) == 0:
             return
-        index, keys = self._build_lc_dictionary(column, ctx)
+        if null_map is None:
+            index, keys = self._build_lc_dictionary(column, ctx)
+        else:
+            index, visible_keys = self._build_lc_dictionary([value for value, hidden in zip(column, null_map) if not hidden], ctx)
+            hidden_key = len(index)
+            index.append(None)
+            key_iter = iter(visible_keys)
+            keys = [hidden_key if hidden else next(key_iter) for hidden in null_map]
         ix_type = int(log(len(index), 2)) >> 3  # power of two bytes needed to store the total number of keys
         write_uint64((1 << 9) | (1 << 10) | ix_type, dest)  # Index type plus new dictionary (9) and additional keys(10)
         write_uint64(len(index), dest)
-        # A masked write passes a Nullable index type, so a hidden row's None key gets the NULL placeholder value
-        (index_type or self)._write_column_binary(index, dest, ctx)
+        if null_map is None:
+            self._write_column_binary(index, dest, ctx)
+        else:
+            self._write_column_binary(index[:-1], dest, ctx)
+            dest += bytes(self.byte_size)
         write_uint64(len(keys), dest)
         write_array(array_type(1 << ix_type, False), keys, dest, ctx.column_name)
 

@@ -105,11 +105,14 @@ class QBit(ClickHouseType):
             dest += bytes([1 if x is None else 0 for x in column])
         self._write_vectors(column, dest, ctx)
 
-    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        if self.nullable:
-            self.write_column_data(column, dest, ctx)
-        elif len(column):
-            self._write_vectors(column, dest, ctx)
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
+        self.write_column_data([None if hidden else value for value, hidden in zip(column, null_map)], dest, ctx)
 
     def _write_vectors(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         """Writes the vectors.  A None row is hidden by a NULL map and gets the all-zero vector."""

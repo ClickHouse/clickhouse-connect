@@ -1,4 +1,6 @@
+import decimal
 import struct
+from datetime import date, datetime, timezone
 from ipaddress import IPv4Address
 from uuid import UUID
 
@@ -8,7 +10,7 @@ from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.driver.buffer import ResponseBuffer as PyResponseBuffer
-from clickhouse_connect.driver.exceptions import DataError, InternalError
+from clickhouse_connect.driver.exceptions import DataError, InternalError, NotSupportedError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.transform import NativeTransform
@@ -268,6 +270,149 @@ def test_nullable_empty_tuple_native_markers(buffer_cls):
     assert dest == b"\x01\x00\x01" + b"000"
     assert tuple_type.data_size([None, (), None]) == 2
     assert tuple_type.insert_name == "Nullable(Tuple())"
+
+
+@pytest.mark.parametrize(
+    "type_name, values, expected",
+    [
+        ("Nullable(Tuple(UInt8, String))", [None, (13, "S")], b"\x01\x00\x00\x0d\x00\x01S"),
+        ("Nullable(Point)", [None, (13, 79)], b"\x01\x00" + struct.pack("<4d", 0, 13, 0, 79)),
+        (
+            "Nullable(Tuple(value Nullable(SimpleAggregateFunction(anyLast, UInt64)), number UInt8))",
+            [None, (13, 79), (None, 80)],
+            b"\x01\x00\x00\x01\x00\x01" + struct.pack("<3Q", 0, 13, 0) + b"\x00\x4f\x50",
+        ),
+    ],
+)
+def test_nullable_tuple_native_write_payload(type_name, values, expected):
+    dest = bytearray()
+    registry.get_from_name(type_name).write_column(values, dest, InsertContext("", [], []))
+    assert dest == expected
+
+
+@pytest.mark.parametrize(
+    "values, expected",
+    [
+        ([None, 13, None], b"\x01\x00\x01" + struct.pack("<3Q", 0, 13, 0)),
+        ([None, None], b"\x01\x01" + bytes(16)),
+    ],
+)
+def test_nullable_simple_aggregate_function_native_write(values, expected):
+    dest = bytearray()
+    registry.get_from_name("Nullable(SimpleAggregateFunction(anyLast, UInt64))").write_column(values, dest, InsertContext("", [], []))
+    assert dest == expected
+
+
+@pytest.mark.parametrize(
+    "element_type, value",
+    [
+        ("UInt64", "13"),
+        ("UInt64", 13.75),
+        ("Int128", "79"),
+        ("Decimal32(2)", decimal.Decimal("13.79")),
+        ("Decimal64(2)", "13.79"),
+        ("Decimal128(2)", decimal.Decimal("13.79")),
+        ("Decimal256(2)", decimal.Decimal("13.79")),
+        ("String", b"user_1"),
+        ("FixedString(6)", b"user_1"),
+        ("Date", date(2026, 10, 22)),
+        ("DateTime('UTC')", datetime(2026, 10, 22, tzinfo=timezone.utc)),
+        ("IPv4", IPv4Address("10.0.0.13")),
+        ("UUID", UUID(int=13)),
+        ("Enum8('user_1'=13)", "user_1"),
+    ],
+)
+@pytest.mark.parametrize("all_null", [False, True], ids=["mixed", "all-null"])
+def test_nullable_tuple_scalar_defaults_and_inference(element_type, value, all_null):
+    ch_type = registry.get_from_name(f"Nullable(Tuple({element_type}))")
+    dest = bytearray()
+    values = [None, None] if all_null else [None, (value,)]
+    ch_type.write_column(values, dest, InsertContext("", [], []))
+    plain = bytearray()
+    registry.get_from_name(element_type).write_column([value], plain, InsertContext("", [], []))
+    default = b"\x00" if element_type == "String" else bytes(len(plain))
+    assert dest == (b"\x01\x01" + default * 2 if all_null else b"\x01\x00" + default + plain)
+
+
+@pytest.mark.parametrize("size, precision", [(32, 9), (64, 18), (128, 38), (256, 76)])
+def test_decimal_alias_canonical_precision(size, precision):
+    ch_type = registry.get_from_name(f"Decimal{size}(2)")
+    assert ch_type.name == f"Decimal({precision}, 2)"
+    assert ch_type.prec == precision
+
+
+@pytest.mark.parametrize(
+    "element_type, value",
+    [
+        ("UInt64", None),
+        ("UInt64", ""),
+        ("UInt64", []),
+        ("Int128", None),
+        ("Int128", ""),
+        ("Int128", []),
+        ("Decimal(9, 2)", None),
+        ("Decimal(9, 2)", ""),
+        ("Decimal(38, 2)", []),
+        ("String", None),
+        ("Array(UInt8)", None),
+        ("Tuple(UInt8)", None),
+        ("Tuple(UInt8)", ()),
+        ("LowCardinality(String)", None),
+        ("LowCardinality(UInt64)", ""),
+    ],
+)
+def test_nullable_tuple_mask_preserves_visible_validation(element_type, value):
+    ch_type = registry.get_from_name(f"Nullable(Tuple(element {element_type}))")
+    ctx = InsertContext("", [], [])
+    with pytest.raises((TypeError, ValueError, AttributeError, DataError, decimal.InvalidOperation)) as original:
+        ch_type.write_column([{"element": value}], bytearray(), ctx)
+    with pytest.raises(type(original.value)):
+        ch_type.write_column([None, {"element": value}], bytearray(), ctx)
+
+
+@pytest.mark.parametrize(
+    "type_name, values",
+    [
+        ("Nullable(Tuple(element UInt64))", [None, {}]),
+        ("Array(Nullable(Tuple(element UInt64)))", [[None, {}]]),
+        ("Tuple(Nullable(Tuple(element UInt64)))", [(None,), ({},)]),
+        ("Array(Tuple(Nullable(Tuple(element UInt64))))", [[(None,), ({},)]]),
+    ],
+)
+def test_nullable_tuple_mask_preserves_missing_key_validation(type_name, values):
+    with pytest.raises(TypeError):
+        registry.get_from_name(type_name).write_column(values, bytearray(), InsertContext("", [], []))
+
+
+def test_nullable_tuple_json_mask_preserves_visible_inference():
+    ch_type = registry.get_from_name("Nullable(Tuple(JSON))")
+    visible = [(None,), ('{"k":13}',)]
+    ordinary = bytearray()
+    masked = bytearray()
+    ctx = InsertContext("", [], [])
+    ch_type.write_column_data(visible, ordinary, ctx)
+    ch_type.write_column_data([None, *visible], masked, ctx)
+    assert masked == b"\x01\x00\x00\x04null" + ordinary[2:]
+
+
+@pytest.mark.parametrize("value", [(13, 79, 80), 13])
+def test_nullable_tuple_wrong_length_names_visible_row(value):
+    with pytest.raises(DataError, match="at row 1"):
+        registry.get_from_name("Nullable(Tuple(UInt64, UInt8))").write_column([None, value], bytearray(), InsertContext("", [], []))
+
+
+@pytest.mark.parametrize("value", [None, 13])
+def test_nonnullable_tuple_nonsequence_row_is_data_error(value):
+    with pytest.raises(DataError, match=r"Tuple\(UInt64, UInt8\) expects a sequence with 2 elements at row 1"):
+        registry.get_from_name("Tuple(UInt64, UInt8)").write_column([(13, 79), value], bytearray(), InsertContext("", [], []))
+
+
+@pytest.mark.parametrize("values", [[None], [None, (13,)]])
+def test_nullable_tuple_unsupported_element_still_rejected(values):
+    with pytest.raises(NotSupportedError, match="serialization.*not supported"):
+        registry.get_from_name("Nullable(Tuple(AggregateFunction(sum, UInt64)))").write_column(
+            values, bytearray(), InsertContext("", [], [])
+        )
 
 
 @pytest.mark.parametrize(

@@ -120,10 +120,22 @@ class SimpleAggregateFunction(ClickHouseType):
         return self.element_type.read_column_data(source, num_rows, ctx, read_state)
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
-        self.element_type.write_column_data(column, dest, ctx)
+        if self.nullable:
+            self.element_type._write_masked_column_data(column, dest, ctx, [value is None for value in column])
+        else:
+            self.element_type.write_column_data(column, dest, ctx)
 
-    def write_masked_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        self.element_type.write_masked_column_data(column, dest, ctx)
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
+        if self.nullable:
+            null_map = [hidden or value is None for value, hidden in zip(column, null_map)]
+            dest += bytes(null_map)
+        self.element_type._write_masked_column_data(column, dest, ctx, null_map)
 
 
 class AggregateFunction(UnsupportedType):
