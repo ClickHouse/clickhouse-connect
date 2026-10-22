@@ -16,7 +16,12 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool, PoolProxiedConnecti
 from sqlalchemy.util.concurrency import await_only, greenlet_spawn
 
 from clickhouse_connect import dbapi
-from clickhouse_connect.cc_sqlalchemy.asyncio import ClickHouseAsyncDialect, _AsyncAdaptedConnection, _AsyncClientFacade
+from clickhouse_connect.cc_sqlalchemy.asyncio import (
+    _SQLALCHEMY_VERSION_INFO,
+    ClickHouseAsyncDialect,
+    _AsyncAdaptedConnection,
+    _AsyncClientFacade,
+)
 from clickhouse_connect.cc_sqlalchemy.inspector import with_internal_query_formats
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.dbapi.cursor import Cursor
@@ -625,7 +630,9 @@ async def test_async_pool_cancelled_dispose_restores_accounting_without_requeuei
 
     assert caught.value is close_interruption
     assert connections[0].close_calls == 1
-    assert connections[1].close_calls == 2
+    # SQLAlchemy 2.0.55 and 2.1.5 discard a connection whose close was interrupted, so dispose has none to retry
+    sqlalchemy_retries_close = _SQLALCHEMY_VERSION_INFO < (2, 0, 55) or (2, 1, 0) <= _SQLALCHEMY_VERSION_INFO < (2, 1, 5)
+    assert connections[1].close_calls == (2 if sqlalchemy_retries_close else 1)
     assert pool._clickhouse_accounting_epoch == 0
     assert not pool._clickhouse_disposing
     assert not pool._clickhouse_pending_records

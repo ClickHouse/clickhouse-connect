@@ -235,7 +235,7 @@ def _python_codec_tuple_container(ch_type: ClickHouseType) -> bool:
 
     Streamed column blocks match those containers exactly: read_str_col renders String (nullable
     included) and FixedString as tuples, the dataconv date/datetime/uuid/ipv4 readers render their
-    non-nullable columns as tuples, and unnamed Tuple columns are tuples of row tuples.
+    non-nullable columns as tuples, and non-nullable unnamed Tuple columns are tuples of row tuples.
     """
     if isinstance(ch_type, SimpleAggregateFunction):
         ch_type = ch_type.element_type
@@ -244,7 +244,7 @@ def _python_codec_tuple_container(ch_type: ClickHouseType) -> bool:
     if isinstance(ch_type, String):
         return True
     if isinstance(ch_type, Tuple):
-        return not ch_type.element_names
+        return not ch_type.element_names and not ch_type.nullable
     if ch_type.nullable:
         return False
     return isinstance(ch_type, (FixedString, Date, DateTimeBase, UUID, IPv4))

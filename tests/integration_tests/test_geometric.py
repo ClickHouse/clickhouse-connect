@@ -7,7 +7,7 @@ from clickhouse_connect.datatypes.geometric import Geometry
 from clickhouse_connect.driver import AsyncClient, Client
 from clickhouse_connect.driver.exceptions import DatabaseError, DataError
 from clickhouse_connect.driver.parser import parse_callable
-from tests.integration_tests.conftest import supports_multi_point
+from tests.integration_tests.conftest import nullable_tuple_settings, supports_multi_point
 
 _POINT_COLUMN_TYPE = "Tuple(Float64, Float64)"
 _GEOMETRY_PHYSICAL_TYPES = {
@@ -69,6 +69,32 @@ def test_point_column(param_client: Client, call, table_context: Callable):
         assert len(query_result) == 2
         assert query_result[0] == (1, (3.55, 3.55))
         assert query_result[1] == (2, (4.55, 4.55))
+
+
+def test_nullable_point_column(param_client: Client, call, test_config):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    settings = nullable_tuple_settings(param_client)
+
+    # A table column keeps the Nullable(Point) type name in the Native header.
+    table = "nullable_point_column_test"
+    call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            param_client.command,
+            f"CREATE TABLE {table} (key UInt8, point Nullable(Point)) ENGINE MergeTree ORDER BY key",
+            settings=settings,
+        )
+        call(param_client.command, f"INSERT INTO {table} VALUES (13, NULL), (79, (3.55, -4.5)), (80, NULL), (81, (0, 0))")
+        rows = call(
+            param_client.query,
+            f"SELECT point, [point], tuple(point), [tuple(point)], key FROM {table} ORDER BY key",
+        ).result_rows
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+
+    points = [None, (3.55, -4.5), None, (0.0, 0.0)]
+    assert rows == [(point, [point], (point,), [(point,)], key) for point, key in zip(points, (13, 79, 80, 81))]
 
 
 def test_ring_column(param_client: Client, call, table_context: Callable):

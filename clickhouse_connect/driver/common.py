@@ -37,7 +37,7 @@ int_size = array.array("i").itemsize
 low_card_version = 1
 
 array_map = {1: "b", 2: "h", 4: "i", 8: "q"}
-decimal_prec = {32: 9, 64: 18, 128: 38, 256: 79}
+decimal_prec = {32: 9, 64: 18, 128: 38, 256: 76}
 
 if int_size == 2:
     array_map[4] = "l"
