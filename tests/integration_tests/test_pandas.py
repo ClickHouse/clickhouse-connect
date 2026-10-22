@@ -191,7 +191,7 @@ def test_pandas_enums(param_client: Client, call, table_context: Callable):
 
 
 def test_pandas_datetime64(param_client: Client, call, table_context: Callable):
-    nano_timestamp = pd.Timestamp(1992, 11, 6, 12, 50, 40, 7420, 44)
+    nano_timestamp = pd.Timestamp(1992, 11, 6, 12, 50, 40, 7420, nanosecond=44)
     milli_timestamp = pd.Timestamp(2022, 5, 3, 10, 44, 10, 55000)
     chicago_timestamp = milli_timestamp.tz_localize("America/Chicago")
     with table_context(

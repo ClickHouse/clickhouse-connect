@@ -1216,8 +1216,6 @@ def test_rust_codec_unsupported_aggregate_function_decode(client_factory, call, 
 
 
 def test_rust_codec_nullable_tuple_decode(client_factory, call):
-    # The python codec cannot parse Nullable(Tuple), so the rust path is the
-    # reference here rather than a parity target.
     client = client_factory(native_codec="rust_strict")
     query = "SELECT if(number % 2 = 0, CAST((number, 'x'), 'Nullable(Tuple(UInt64, String))'), NULL) AS t FROM numbers(4)"
     result = call(client.query, query, settings=nullable_tuple_settings(client))
@@ -1231,6 +1229,29 @@ def test_rust_codec_nullable_tuple_aggregate_function_decode(client_factory, cal
     query = "SELECT if(number % 2 = 0, tuple(initializeAggregation('countState', number)), NULL) AS t FROM numbers(4)"
     result = call(client.query, query, settings=nullable_tuple_settings(client))
     assert result.result_rows == [((b"\x01",),), (None,), ((b"\x01",),), (None,)]
+
+
+def test_rust_codec_nullable_tuple_column_block_container_parity(client_factory, call, consume_stream):
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    settings = nullable_tuple_settings(rust_client)
+    query = (
+        "SELECT if(number % 2 = 0, CAST(tuple(number), 'Nullable(Tuple(UInt64))'), NULL) AS t, "
+        "if(number % 2 = 0, CAST(tuple(), 'Nullable(Tuple())'), NULL) AS e FROM numbers(4)"
+    )
+
+    def blocks(client):
+        output = []
+        consume_stream(call(client.query_column_block_stream, query, settings=settings), output.append)
+        return output
+
+    rust_blocks = blocks(rust_client)
+    python_blocks = blocks(python_client)
+    assert python_blocks == [[[(0,), None, (2,), None], [(), None, (), None]]]
+    assert len(rust_blocks) == 1
+    for rust_column, python_column in zip(rust_blocks[0], python_blocks[0]):
+        assert type(rust_column) is type(python_column)
+        assert list(rust_column) == list(python_column)
 
 
 def test_rust_codec_eligibility_routing(client_factory, call):

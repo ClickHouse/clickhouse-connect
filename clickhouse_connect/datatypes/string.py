@@ -50,6 +50,17 @@ class String(ClickHouseType):
             encoding = ctx.encoding or self.encoding
         handle_error(data_conv.write_str_col(column, self.nullable, encoding, dest), ctx)
 
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
+        first = next((value for value, hidden in zip(column, null_map) if not hidden), None)
+        empty = None if self.nullable else b"" if isinstance(first, bytes) else ""
+        self.write_column_data([empty if hidden else value for value, hidden in zip(column, null_map)], dest, ctx)
+
     def _active_null(self, ctx):
         if ctx.use_none:
             return None

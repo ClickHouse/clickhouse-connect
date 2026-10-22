@@ -20,16 +20,29 @@ class Point(ClickHouseType):
     def _data_size(self, sample: Collection) -> int:
         return POINT_DATA_TYPE._data_size(sample)
 
-    def write_column(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        return POINT_DATA_TYPE.write_column(column, dest, ctx)
+    def _write_column_binary(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        # Nullable(Point) rows that are None are hidden by the NULL map the base class writes
+        if self.nullable:
+            POINT_DATA_TYPE._write_masked_column_data(column, dest, ctx, [value is None for value in column])
+        else:
+            POINT_DATA_TYPE.write_column_data(column, dest, ctx)
 
-    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        return POINT_DATA_TYPE.write_column_data(column, dest, ctx)
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
+        if self.nullable:
+            null_map = [hidden or value is None for value, hidden in zip(column, null_map)]
+            dest += bytes(null_map)
+        POINT_DATA_TYPE._write_masked_column_data(column, dest, ctx, null_map)
 
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         return POINT_DATA_TYPE.read_column_prefix(source, ctx)
 
-    def read_column_data(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
+    def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
         return POINT_DATA_TYPE.read_column_data(source, num_rows, ctx, read_state)
 
 
@@ -42,6 +55,15 @@ class Ring(ClickHouseType):
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         return RING_DATA_TYPE.write_column_data(column, dest, ctx)
+
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
+        RING_DATA_TYPE._write_masked_column_data(column, dest, ctx, null_map)
 
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         return RING_DATA_TYPE.read_column_prefix(source, ctx)
@@ -60,6 +82,15 @@ class Polygon(ClickHouseType):
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         return POLYGON_DATA_TYPE.write_column_data(column, dest, ctx)
 
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
+        POLYGON_DATA_TYPE._write_masked_column_data(column, dest, ctx, null_map)
+
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         return POLYGON_DATA_TYPE.read_column_prefix(source, ctx)
 
@@ -76,6 +107,15 @@ class MultiPolygon(ClickHouseType):
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
         return MULTI_POLYGON_DATA_TYPE.write_column_data(column, dest, ctx)
+
+    def _write_masked_column_data(
+        self,
+        column: Sequence[Any],
+        dest: bytearray,
+        ctx: InsertContext,
+        null_map: Sequence[bool],
+    ) -> None:
+        MULTI_POLYGON_DATA_TYPE._write_masked_column_data(column, dest, ctx, null_map)
 
     def read_column_prefix(self, source: ByteSource, ctx: QueryContext):
         return MULTI_POLYGON_DATA_TYPE.read_column_prefix(source, ctx)

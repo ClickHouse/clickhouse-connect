@@ -8,7 +8,7 @@ import pytest
 
 from clickhouse_connect.datatypes.format import clear_default_format, set_default_formats, set_read_format
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.exceptions import DataError
+from clickhouse_connect.driver.exceptions import DatabaseError, DataError
 from tests.integration_tests.conftest import nullable_tuple_settings
 
 
@@ -140,6 +140,70 @@ def test_tuple_inserts(param_client: Client, call, table_context: Callable):
 
 
 @pytest.mark.parametrize(
+    "tuple_type, values_sql, expected_values",
+    [
+        (
+            "Tuple(name Nullable(String))",
+            "NULL, tuple('S'), tuple(NULL), tuple('')",
+            [None, {"name": "S"}, {"name": None}, {"name": ""}],
+        ),
+        (
+            "Tuple(Nullable(String))",
+            "NULL, tuple('S'), tuple(NULL), tuple('')",
+            [None, ("S",), (None,), ("",)],
+        ),
+        (
+            "Tuple(name LowCardinality(String), value UInt8)",
+            "NULL, tuple('S', 13), tuple('', 79), NULL",
+            [None, {"name": "S", "value": 13}, {"name": "", "value": 79}, None],
+        ),
+        (
+            "Tuple(value Nullable(Tuple(name Nullable(String))))",
+            "NULL, tuple(NULL), tuple(tuple('S')), tuple(tuple(NULL))",
+            [None, {"value": None}, {"value": {"name": "S"}}, {"value": {"name": None}}],
+        ),
+        (
+            "Tuple(values Array(String), empty_value Tuple())",
+            "NULL, tuple(['S', ''], tuple()), tuple([], tuple()), NULL",
+            [None, {"values": ["S", ""], "empty_value": ()}, {"values": [], "empty_value": ()}, None],
+        ),
+    ],
+)
+def test_nullable_tuple_queries(param_client: Client, call, test_config, tuple_type, values_sql, expected_values):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    rows = call(
+        param_client.query,
+        "SELECT value, [value], tuple(value), [tuple(value)], toUInt8(79) AS sentinel "
+        f"FROM values('value Nullable({tuple_type})', {values_sql})",
+        settings=nullable_tuple_settings(param_client),
+    ).result_rows
+
+    assert rows == [(value, [value], (value,), [(value,)], 79) for value in expected_values]
+
+
+@pytest.mark.parametrize(
+    "read_format, expected_values",
+    [
+        ("native", [None, {"name": "S"}, {"name": None}, {"name": ""}]),
+        ("tuple", [None, ("S",), (None,), ("",)]),
+        ("json", [None, b'{"name":"S"}', b'{"name":null}', b'{"name":""}']),
+    ],
+)
+def test_nullable_tuple_read_formats(param_client: Client, call, test_config, read_format, expected_values):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    rows = call(
+        param_client.query,
+        "SELECT value FROM values('value Nullable(Tuple(name Nullable(String)))', NULL, tuple('S'), tuple(NULL), tuple(''))",
+        settings=nullable_tuple_settings(param_client),
+        column_formats={"value": read_format},
+    ).result_rows
+
+    assert rows == [(value,) for value in expected_values]
+
+
+@pytest.mark.parametrize(
     "expression, expected_values",
     [
         ("tuple()", [(), (), ()]),
@@ -210,6 +274,203 @@ def test_nullable_empty_tuple(param_client: Client, call, test_config):
         assert rows == [(None, 13), ((), 79), (None, 80)]
     finally:
         call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize(
+    "column_type, values",
+    [
+        ("Nullable(Tuple(UInt64, String))", [None, (13, "user_1"), None]),
+        ("Nullable(Tuple(UInt64, String))", [None, None]),
+        ("Nullable(Tuple(id UInt64, name LowCardinality(String)))", [None, {"id": 13, "name": "user_1"}]),
+        (
+            "Nullable(Tuple(ip IPv4, values Array(Nullable(String)), inner Tuple(String, Map(String, UInt8))))",
+            [{"ip": IPv4Address("10.0.0.1"), "values": ["user_1", None], "inner": ("user_2", {"k": 79})}, None],
+        ),
+        ("Nullable(Tuple(value Nullable(Tuple(String))))", [None, {"value": None}, {"value": ("user_1",)}]),
+        ("Nullable(Point)", [None, (3.55, -4.5), None]),
+        ("Array(Nullable(Tuple(UInt64)))", [[None, (13,)], [], [None]]),
+        ("Tuple(Nullable(Tuple(UInt64)), UInt8)", [(None, 79), ((13,), 80)]),
+    ],
+)
+def test_nullable_tuple_inserts(param_client: Client, call, test_config, column_type, values):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    settings = nullable_tuple_settings(param_client)
+    top_level_null = column_type.startswith("Nullable")
+
+    table = "nullable_tuple_inserts"
+    call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            param_client.command,
+            f"CREATE TABLE {table} (key UInt8, value {column_type}) ENGINE MergeTree ORDER BY key",
+            settings=settings,
+        )
+        call(param_client.insert, table, [[key, value] for key, value in enumerate(values)])
+        rows = call(param_client.query, f"SELECT value FROM {table} ORDER BY key").result_rows
+        hidden = []
+        if top_level_null:
+            # The server keeps the values under a NULL row, so they must match what the server writes for NULL
+            hidden = call(
+                param_client.query,
+                f"SELECT DISTINCT toString(assumeNotNull(value)) = toString(assumeNotNull(CAST(NULL, '{column_type}'))) "
+                f"FROM {table} WHERE isNull(value)",
+                settings=settings,
+            ).result_rows
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+
+    assert rows == [(value,) for value in values]
+    assert hidden == ([(True,)] if top_level_null else [])
+
+
+@pytest.mark.parametrize(
+    "element_type, value",
+    [
+        ("UInt64", None),
+        ("UInt64", ""),
+        ("UInt64", []),
+        ("Int128", None),
+        ("Int128", ""),
+        ("Int128", []),
+        ("Decimal(9, 2)", None),
+        ("Decimal(9, 2)", ""),
+        ("Decimal(38, 2)", []),
+        ("String", None),
+        ("Array(UInt8)", None),
+        ("Tuple(UInt8)", None),
+        ("Tuple(UInt8)", ()),
+        ("LowCardinality(String)", None),
+        ("LowCardinality(UInt64)", ""),
+    ],
+)
+def test_nullable_tuple_visible_invalid_values(param_client: Client, call, test_config, element_type, value):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    settings = nullable_tuple_settings(param_client)
+    table = "nullable_tuple_invalid"
+    call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            param_client.command,
+            f"CREATE TABLE {table} (value Nullable(Tuple(element {element_type}))) ENGINE Memory",
+            settings=settings,
+        )
+        invalid = {"element": value}
+        with pytest.raises((TypeError, ValueError, AttributeError, DataError, decimal.InvalidOperation)) as original:
+            call(param_client.insert, table, [[invalid]])
+        with pytest.raises(type(original.value)):
+            call(param_client.insert, table, [[None], [invalid]])
+        assert call(param_client.command, f"SELECT count() FROM {table}") == 0
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize(
+    "column_type, values",
+    [
+        ("Nullable(Tuple(element UInt64))", [None, {}]),
+        ("Array(Nullable(Tuple(element UInt64)))", [[None, {}]]),
+        ("Tuple(Nullable(Tuple(element UInt64)))", [(None,), ({},)]),
+        ("Array(Tuple(Nullable(Tuple(element UInt64))))", [[(None,), ({},)]]),
+    ],
+)
+def test_nullable_tuple_missing_nonnullable_element(param_client: Client, call, test_config, column_type, values):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    settings = nullable_tuple_settings(param_client)
+    table = "nullable_tuple_missing"
+    call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(param_client.command, f"CREATE TABLE {table} (value {column_type}) ENGINE Memory", settings=settings)
+        with pytest.raises((TypeError, DataError)):
+            call(param_client.insert, table, [[value] for value in values])
+        assert call(param_client.command, f"SELECT count() FROM {table}") == 0
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize(
+    "element_type, values",
+    [
+        ("Decimal32(2)", [None, (decimal.Decimal("13.79"),), None]),
+        ("Decimal64(2)", [None, (decimal.Decimal("13.79"),), None]),
+        ("Decimal128(2)", [None, (decimal.Decimal("13.79"),), None]),
+        ("Decimal256(2)", [None, (decimal.Decimal("13.79"),), None]),
+        ("Decimal32(2)", [None, None]),
+        ("Decimal64(2)", [None, None]),
+        ("Decimal128(2)", [None, None]),
+        ("Decimal256(2)", [None, None]),
+        ("Nullable(SimpleAggregateFunction(anyLast, UInt64))", [None, (13,), (None,)]),
+        ("SimpleAggregateFunction(anyLast, Nullable(UInt64))", [None, (13,), (None,)]),
+        ("SimpleAggregateFunction(anyLast, UInt64)", [None, (13,), None]),
+    ],
+)
+def test_nullable_tuple_alias_payloads(param_client: Client, call, test_config, element_type, values):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    settings = nullable_tuple_settings(param_client)
+    table = "nullable_tuple_aliases"
+    column_type = f"Nullable(Tuple({element_type}))"
+    call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            param_client.command,
+            f"CREATE TABLE {table} (key UInt8, value {column_type}) ENGINE MergeTree ORDER BY key",
+            settings=settings,
+        )
+        call(
+            param_client.insert,
+            table,
+            list(enumerate(values)),
+            column_names=["key", "value"],
+            column_type_names=["UInt8", column_type],
+        )
+        rows = call(param_client.query, f"SELECT value FROM {table} ORDER BY key").result_rows
+        assert rows == [(value,) for value in values]
+        assert (
+            call(
+                param_client.command,
+                f"SELECT count() FROM {table} WHERE isNull(value) AND assumeNotNull(value) != assumeNotNull(CAST(NULL, '{column_type}'))",
+                settings=settings,
+            )
+            == 0
+        )
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+def test_nullable_tuple_json_visible_inference(param_client: Client, call, test_config):
+    if test_config.cloud:
+        pytest.skip("Cloud does not allow the experimental Nullable(Tuple(...)) setting")
+    settings = nullable_tuple_settings(param_client)
+    table = "nullable_tuple_json_inference"
+    call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(
+            param_client.command,
+            f"CREATE TABLE {table} (key UInt8, value Nullable(Tuple(JSON))) ENGINE MergeTree ORDER BY key",
+            settings=settings,
+        )
+        visible = [(None,), ('{"k":13}',)]
+        with pytest.raises(DatabaseError, match="Cannot insert data into JSON column"):
+            call(param_client.insert, table, list(enumerate(visible)))
+        with pytest.raises(DatabaseError, match="Cannot insert data into JSON column"):
+            call(param_client.insert, table, list(enumerate([None, *visible], start=2)))
+        assert call(param_client.command, f"SELECT count() FROM {table}") == 0
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("values", [[None, 13, None], [None, None]])
+def test_nullable_simple_aggregate_function(param_client: Client, call, table_context: Callable, values):
+    with table_context(
+        "nullable_simple_aggregate_function",
+        ["key UInt8", "value Nullable(SimpleAggregateFunction(anyLast, UInt64))"],
+    ):
+        call(param_client.insert, "nullable_simple_aggregate_function", list(enumerate(values)))
+        rows = call(param_client.query, "SELECT value FROM nullable_simple_aggregate_function ORDER BY key").result_rows
+        assert rows == [(value,) for value in values]
 
 
 def test_agg_function(param_client: Client, call, table_context: Callable):
