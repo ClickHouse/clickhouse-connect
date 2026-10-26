@@ -608,3 +608,12 @@ def test_insert_query_id_is_not_shared_with_describe(
     assert rows[0][0] == "Describe"
     assert rows[0][1] and rows[0][1] not in (default_query_id, insert_query_id)
     assert rows[1] == ("Insert", insert_query_id)
+
+
+def test_insert_enum_names_with_backslash_escapes(param_client: Client, call, table_context: Callable):
+    names = ["c\\d", "end\\", "tab\there", "q'x"]
+    enum_type = r"Enum8('c\\d' = 1, 'end\\' = 2, 'tab\there' = 3, 'q\'x' = 4)"
+    with table_context("test_enum_backslash", ["id UInt8", f"e {enum_type}"]):
+        call(param_client.insert, "test_enum_backslash", [[i, name] for i, name in enumerate(names)])
+        result = call(param_client.query, "SELECT e, toString(e) FROM test_enum_backslash ORDER BY id")
+        assert result.result_rows == [(name, name) for name in names]

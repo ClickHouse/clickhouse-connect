@@ -77,6 +77,10 @@ def parse_callable(expr) -> tuple[str, tuple[str | int, ...], str]:
     return name, tuple(values), expr[pos:].strip()
 
 
+# Escapes the server writes in enum key names (writeQuotedString), other than the quote itself
+ENUM_KEY_UNESCAPES = {"\\": "\\", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "0": "\0"}
+
+
 def parse_enum(expr) -> tuple[tuple[str, ...], tuple[int, ...]]:
     """
     Parse a ClickHouse enum definition expression of the form ('key1' = 1, 'key2' = 2)
@@ -103,6 +107,9 @@ def parse_enum(expr) -> tuple[tuple[str, ...], tuple[int, ...]]:
                     in_key = False
             elif char == "\\" and expr[pos] == "'" and expr[pos : pos + 4] != "' = " and expr[pos:] != "')":
                 key.append(expr[pos])
+                pos += 1
+            elif char == "\\" and expr[pos] in ENUM_KEY_UNESCAPES:
+                key.append(ENUM_KEY_UNESCAPES[expr[pos]])
                 pos += 1
             else:
                 key.append(char)

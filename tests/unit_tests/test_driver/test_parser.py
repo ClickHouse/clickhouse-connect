@@ -48,6 +48,29 @@ def test_parse_enum_quote_escapes(expr, expected):
     assert parse_enum(expr) == expected
 
 
+# Server-emitted enum names escape a backslash and some control characters
+# (DataTypeEnum generateName -> writeQuotedString).
+@pytest.mark.parametrize(
+    "expr, expected",
+    [
+        ("Enum8('a\\\\b' = 1)", (("a\\b",), (1,))),
+        ("Enum8('end\\\\' = 1, 'x' = 2)", (("end\\", "x"), (1, 2))),
+        ("Enum8('a\\\\\\'b' = 1)", (("a\\'b",), (1,))),
+        ("Enum8('t\\tn\\nr\\rb\\bf\\fz\\0' = 1)", (("t\tn\nr\rb\bf\fz\0",), (1,))),
+        ("Enum8('a\\qb' = 1)", (("a\\qb",), (1,))),
+    ],
+)
+def test_parse_enum_backslash_escapes(expr, expected):
+    assert parse_enum(expr) == expected
+
+
+def test_enum_name_round_trips_escaped_keys():
+    name = "Enum8('a\\\\b' = 1, 'q\\'x' = 2, 't\\tn\\n' = 3, 'z\\0' = 4)"
+    enum_type = get_from_name(name)
+    assert enum_type.name == name
+    assert enum_type._name_map == {"a\\b": 1, "q'x": 2, "t\tn\n": 3, "z\0": 4}
+
+
 @pytest.mark.parametrize(
     "type_name, expected_name",
     [
