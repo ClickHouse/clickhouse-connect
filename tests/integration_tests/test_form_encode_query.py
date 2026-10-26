@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.binding import MAX_URL_BIND_PARAM_LENGTH, bind_query, use_form_encoding
+from clickhouse_connect.driver.binding import MAX_FORM_QUERY_BYTES, MAX_URL_BIND_PARAM_LENGTH, bind_query, use_form_encoding
 
 
 def test_form_encode_query_basic(client_factory, call, table_context: Callable):
@@ -164,10 +164,22 @@ def test_auto_form_encode_raw_query_large_params(client_factory, call):
 def test_auto_form_encode_skipped_for_large_query(client_factory, call):
     """SQL too large for a form field stays on the body path even with large parameters"""
     default_client = client_factory()
-    big = "x" * 200_000
+    # Exceed the form field cap while staying below max_query_size (262144 bytes).
+    query_size = MAX_FORM_QUERY_BYTES + MAX_FORM_QUERY_BYTES // 2
+    big = "x" * query_size
     result = call(
         default_client.query,
         "SELECT length('" + big + "') AS n, length({p:String}) AS p",
         parameters={"p": "y" * (MAX_URL_BIND_PARAM_LENGTH + 1)},
     )
-    assert result.first_row == (200_000, MAX_URL_BIND_PARAM_LENGTH + 1)
+    assert result.first_row == (query_size, MAX_URL_BIND_PARAM_LENGTH + 1)
+
+
+def test_auto_form_encode_query_near_field_limit(client_factory, call):
+    """SQL below the field cap keeps large parameters out of the URL."""
+    default_client = client_factory()
+    query = "SELECT length({p_0:String}) /*"
+    query += "x" * (130_500 - len(query) - len("*/")) + "*/"
+    parameters = {f"p_{i}": "x" * 4000 for i in range(300)}
+    result = call(default_client.query, query, parameters=parameters)
+    assert result.first_row == (4000,)

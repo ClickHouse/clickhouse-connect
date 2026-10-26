@@ -4,7 +4,7 @@ import pytest
 
 from clickhouse_connect.driver import binding
 from clickhouse_connect.driver.binding import (
-    MAX_FORM_QUERY_LENGTH,
+    MAX_FORM_QUERY_BYTES,
     MAX_URL_BIND_PARAM_LENGTH,
     _binding_keeps_query_structure,
     _contains_insert_bareword,
@@ -106,16 +106,26 @@ def test_use_form_encoding_large_query_not_promoted():
     # The form path puts the SQL in a "query" field capped by http_max_field_value_size,
     # so a query that would not fit there stays on the body path
     big = {"param_big": "x" * (MAX_URL_BIND_PARAM_LENGTH + 1)}
-    query = "SELECT '" + "x" * MAX_FORM_QUERY_LENGTH + "', {big:String}"
+    query = "SELECT '" + "x" * MAX_FORM_QUERY_BYTES + "', {big:String}"
     assert use_form_encoding(query, big) is False
     assert use_form_encoding(query, big, force_form=True) is True
 
 
-def test_use_form_encoding_large_query_counts_utf8_bytes():
-    # The server field limit is in bytes, so multi-byte characters count at their encoded size
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        pytest.param("x" * MAX_FORM_QUERY_BYTES, True, id="ascii-at-limit"),
+        pytest.param("x" * (MAX_FORM_QUERY_BYTES + 1), False, id="ascii-over-limit"),
+        pytest.param("x" * (MAX_FORM_QUERY_BYTES // 4 + 1), True, id="ascii-over-fast-path"),
+        pytest.param("\u00e9" * (MAX_FORM_QUERY_BYTES // 2), True, id="two-byte-at-limit"),
+        pytest.param("\u00e9" * (MAX_FORM_QUERY_BYTES // 2) + "x", False, id="two-byte-over-limit"),
+        pytest.param("\U0001f600" * (MAX_FORM_QUERY_BYTES // 4), True, id="four-byte-at-limit"),
+        pytest.param("\U0001f600" * (MAX_FORM_QUERY_BYTES // 4) + "x", False, id="four-byte-over-limit"),
+    ],
+)
+def test_use_form_encoding_query_byte_boundary(query, expected):
     big = {"param_big": "x" * (MAX_URL_BIND_PARAM_LENGTH + 1)}
-    query = "SELECT '" + "\u00e9" * (MAX_FORM_QUERY_LENGTH // 2 + 1) + "', {big:String}"
-    assert use_form_encoding(query, big) is False
+    assert use_form_encoding(query, big) is expected
 
 
 def test_use_form_encoding_binary_query_not_promoted():

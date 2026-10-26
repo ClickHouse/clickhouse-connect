@@ -920,8 +920,8 @@ MAX_URL_BIND_PARAM_LENGTH = 4096
 
 # The form path moves the SQL itself into a "query" field, which the server caps at
 # http_max_field_value_size (128 KiB by default) while the body path has no such limit.
-# Queries above this size are not promoted; the headroom covers the appended FORMAT clause.
-MAX_FORM_QUERY_LENGTH = 128 * 1024 - 1024
+# Measure the final SQL, including any appended LIMIT and FORMAT clauses.
+MAX_FORM_QUERY_BYTES = 128 * 1024
 
 
 def use_form_encoding(query: str | bytes, bind_params: dict[str, str], force_form: bool = False) -> bool:
@@ -934,9 +934,9 @@ def use_form_encoding(query: str | bytes, bind_params: dict[str, str], force_for
     if not bind_params:
         return False
     # Promoting a query too large for a form field trades a possible URL rejection for a
-    # certain server rejection, so keep it on the body path. UTF-8 uses at most four bytes
+    # certain server rejection, so keep it on the default path. UTF-8 uses at most four bytes
     # per character, so only encode when the query could be over the limit.
-    if len(query) > MAX_FORM_QUERY_LENGTH // 4 and len(query.encode()) > MAX_FORM_QUERY_LENGTH:
+    if len(query) > MAX_FORM_QUERY_BYTES // 4 and len(query.encode()) > MAX_FORM_QUERY_BYTES:
         return False
     # Raw length is a lower bound on the encoded length, so large payloads short-circuit
     # without materializing the encoded string.
