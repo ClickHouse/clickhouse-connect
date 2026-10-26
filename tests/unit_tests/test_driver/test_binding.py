@@ -117,10 +117,10 @@ def test_use_form_encoding_large_query_not_promoted():
         pytest.param("x" * MAX_FORM_QUERY_BYTES, True, id="ascii-at-limit"),
         pytest.param("x" * (MAX_FORM_QUERY_BYTES + 1), False, id="ascii-over-limit"),
         pytest.param("x" * (MAX_FORM_QUERY_BYTES // 4 + 1), True, id="ascii-over-fast-path"),
-        pytest.param("\u00e9" * (MAX_FORM_QUERY_BYTES // 2), True, id="two-byte-at-limit"),
-        pytest.param("\u00e9" * (MAX_FORM_QUERY_BYTES // 2) + "x", False, id="two-byte-over-limit"),
-        pytest.param("\U0001f600" * (MAX_FORM_QUERY_BYTES // 4), True, id="four-byte-at-limit"),
-        pytest.param("\U0001f600" * (MAX_FORM_QUERY_BYTES // 4) + "x", False, id="four-byte-over-limit"),
+        pytest.param("\u00e9" * (MAX_FORM_QUERY_BYTES // 2) + "x", True, id="two-byte-at-limit"),
+        pytest.param("\u00e9" * (MAX_FORM_QUERY_BYTES // 2) + "xx", False, id="two-byte-over-limit"),
+        pytest.param("\U0001f600" * (MAX_FORM_QUERY_BYTES // 4) + "x", True, id="four-byte-at-limit"),
+        pytest.param("\U0001f600" * (MAX_FORM_QUERY_BYTES // 4) + "xx", False, id="four-byte-over-limit"),
     ],
 )
 def test_use_form_encoding_query_byte_boundary(query, expected):

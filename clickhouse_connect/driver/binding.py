@@ -920,8 +920,9 @@ MAX_URL_BIND_PARAM_LENGTH = 4096
 
 # The form path moves the SQL itself into a "query" field, which the server caps at
 # http_max_field_value_size (128 KiB by default) while the body path has no such limit.
-# Measure the final SQL, including any appended LIMIT and FORMAT clauses.
-MAX_FORM_QUERY_BYTES = 128 * 1024
+# The server accepts one byte past that setting. Measure the final SQL, including any
+# appended LIMIT and FORMAT clauses.
+MAX_FORM_QUERY_BYTES = 128 * 1024 + 1
 
 
 def use_form_encoding(query: str | bytes, bind_params: dict[str, str], force_form: bool = False) -> bool:
