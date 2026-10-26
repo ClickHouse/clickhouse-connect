@@ -41,3 +41,13 @@ def test_insert_context_data_cleared_on_failure(param_client: Client, call, tabl
             call(param_client.insert, context=insert_context)
 
         assert insert_context.data is None
+
+
+def test_query_context_command(param_client: Client, call, client_mode):
+    table = f"test_query_context_command_{client_mode}"
+    query_context = param_client.create_query_context(query="CREATE TABLE {t:Identifier} (x UInt8) ENGINE Memory", parameters={"t": table})
+    try:
+        call(param_client.query, context=query_context)
+        assert call(param_client.command, f"EXISTS TABLE {table}") == 1
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {table}")

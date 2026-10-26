@@ -614,7 +614,7 @@ class AsyncClient(Client):
 
         if context.is_command:
             response = await self.command(
-                query,
+                context.query,
                 parameters=context.parameters,
                 settings=context.settings,
                 external_data=context.external_data,

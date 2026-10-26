@@ -14,6 +14,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - The Python codec now inserts `None` into `Nullable(SimpleAggregateFunction(...))` columns as NULL.
 - Tuple serialization now reports non-sequence rows with `DataError` and a row number instead of a raw `TypeError` or `AttributeError`, including `None` rows in dictionary input for a non-nullable named tuple.
 - `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
+- `query(context=...)` now runs a command statement stored in the context, such as `CREATE` or `SET`, when no `query` argument is passed. Previously both the synchronous and asynchronous clients raised `AttributeError: 'NoneType' object has no attribute 'rstrip'`.
 
 ## 1.11.0, 2026-10-16
 

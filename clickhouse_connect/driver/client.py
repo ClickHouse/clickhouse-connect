@@ -454,7 +454,7 @@ class Client(ABC):
         query_context = self.create_query_context(**kwargs)
         if query_context.is_command:
             response = self.command(
-                cast(str, query),
+                cast(str, query_context.query),
                 parameters=query_context.parameters,
                 settings=query_context.settings,
                 external_data=query_context.external_data,
