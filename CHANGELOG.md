@@ -14,6 +14,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - The Python codec now inserts `None` into `Nullable(SimpleAggregateFunction(...))` columns as NULL.
 - Tuple serialization now reports non-sequence rows with `DataError` and a row number instead of a raw `TypeError` or `AttributeError`, including `None` rows in dictionary input for a non-nullable named tuple.
 - `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
+- When the connection drops partway through a streamed query result, the asynchronous client now raises `StreamFailureError: Stream failed during read (connection closed by server)`, matching the synchronous client. Previously, with `show_clickhouse_errors=True`, it reported the buffered result bytes as `unrecognized data found in stream: <hex>`. ClickHouse errors written into the response before the drop are still reported.
 
 ## 1.11.0, 2026-10-16
 
