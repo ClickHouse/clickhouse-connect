@@ -695,6 +695,9 @@ class DT64Param:
         elif tz is not None and _datetime_is_aware(value):
             value = value.astimezone(tz)
         s = value.strftime("%Y-%m-%d %H:%M:%S.%f")
+        nanosecond = getattr(value, "nanosecond", 0)  # pandas.Timestamp
+        if nanosecond:
+            s += f"{nanosecond:03d}"
         if top_level:
             return s
         return f"'{s}'"

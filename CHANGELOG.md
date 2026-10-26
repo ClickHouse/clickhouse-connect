@@ -14,6 +14,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - The Python codec now inserts `None` into `Nullable(SimpleAggregateFunction(...))` columns as NULL.
 - Tuple serialization now reports non-sequence rows with `DataError` and a row number instead of a raw `TypeError` or `AttributeError`, including `None` rows in dictionary input for a non-nullable named tuple.
 - `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
+- `pandas.Timestamp` values keep their nanoseconds when bound to a `DateTime64(9)` query parameter or wrapped in `DT64Param` and when inserted as rows into `DateTime64(7)` through `DateTime64(9)` columns with the Python codec. Previously both paths truncated them to microseconds, so `2024-01-02 03:04:05.123456789` arrived as `2024-01-02 03:04:05.123456000`. Python codec row inserts of a `pandas.Timestamp` whose sub-microsecond part rounds up, such as `03:04:05.999999999`, also no longer store a value one second late in any `DateTime64` column. Related to [#429](https://github.com/ClickHouse/clickhouse-connect/issues/429).
 
 ## 1.11.0, 2026-10-16
 

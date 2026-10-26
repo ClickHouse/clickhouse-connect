@@ -309,6 +309,12 @@ class DateTime64(DateTimeBase):
 
     def _datetime64_ticks(self, value: datetime, active_tz: tzinfo | None = None) -> int:
         timestamp = _localized_timestamp(value, active_tz) if active_tz is not None else value.timestamp()
+        if type(value) is not datetime:
+            # pandas.Timestamp carries nanoseconds, and its timestamp() rounds to microseconds,
+            # which can carry into the next second
+            nanos = value.microsecond * 1000 + getattr(value, "nanosecond", 0)
+            seconds = round(timestamp - nanos / 1000000000)
+            return ((seconds * 1000000000 + nanos) * self.prec) // 1000000000
         seconds = floor(timestamp)
         return ((seconds * 1000000 + value.microsecond) * self.prec) // 1000000
 

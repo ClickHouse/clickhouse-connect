@@ -576,3 +576,24 @@ def test_pandas_time_resolution(test_config: TestConfig, param_client: Client, c
         call(param_client.insert, "test_time_res", data)
         df_res = call(param_client.query_df, "SELECT * FROM test_time_res")
         assert _dtype_unit(df_res["t"].dtype) == "s"
+
+
+PD_TIMESTAMP_NS = "2024-01-02 03:04:05.123456789"
+
+
+def test_pandas_timestamp_datetime64_bind_nanoseconds(param_client: Client, call):
+    ts = pd.Timestamp(PD_TIMESTAMP_NS)
+    result = call(param_client.query, "SELECT toString({d:DateTime64(9)})", parameters={"d": ts})
+    assert result.result_rows[0][0] == PD_TIMESTAMP_NS
+
+
+def test_pandas_timestamp_datetime64_insert_nanoseconds(param_client: Client, call, table_context: Callable):
+    # The last two values round up to the next second in pandas.Timestamp.timestamp()
+    values = [PD_TIMESTAMP_NS, "2024-01-02 03:04:05.999999999", "1960-01-02 03:04:05.999999999"]
+    columns = ["key UInt8", "v DateTime64(9)", "v6 DateTime64(6)", "vn Nullable(DateTime64(9, 'UTC'))"]
+    with table_context("test_pd_timestamp_ns", columns):
+        data = [[key, pd.Timestamp(value), pd.Timestamp(value), pd.Timestamp(value, tz="UTC")] for key, value in enumerate(values)]
+        call(param_client.insert, "test_pd_timestamp_ns", data)
+        query = "SELECT toString(v), toString(v6), toString(vn) FROM test_pd_timestamp_ns ORDER BY key"
+        result = call(param_client.query, query)
+        assert result.result_rows == [(value, value[:-3], value) for value in values]

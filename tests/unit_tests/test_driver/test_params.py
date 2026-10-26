@@ -163,6 +163,16 @@ def test_format_bind_value_time(value, expected):
     assert format_bind_value(value, top_level=False) == f"'{expected}'"
 
 
+def test_dt64param_keeps_pandas_timestamp_nanoseconds():
+    ts = pd.Timestamp("2024-01-02 03:04:05.123456789")
+    assert format_bind_value(DT64Param(ts)) == "2024-01-02 03:04:05.123456789"
+    assert format_query_value(DT64Param(ts)) == "'2024-01-02 03:04:05.123456789'"
+    assert format_bind_value(DT64Param(pd.Timestamp("2024-01-02 03:04:05.000000007"))) == "2024-01-02 03:04:05.000000007"
+    assert format_bind_value(DT64Param(pd.Timestamp("2024-01-02 03:04:05.123456"))) == "2024-01-02 03:04:05.123456"
+    _, params = bind_query("SELECT {d:DateTime64(9)}", {"d": ts}, server_tz=timezone.utc)
+    assert params == {"param_d": "2024-01-02 03:04:05.123456789"}
+
+
 @pytest.mark.parametrize(
     "value, expected",
     [
