@@ -17,6 +17,13 @@ _REMOTE_CLOSE_FAULTS = ["disconnect", "progress_headers", "status_only"]
 _FAULTS = [*_REMOTE_CLOSE_FAULTS, 429, 503, 504]
 
 
+def _dedup_settings(client, enabled: bool) -> dict[str, int | str]:
+    settings: dict[str, int | str] = {"insert_deduplicate": int(enabled)}
+    if "deduplicate_insert" in client.server_settings:
+        settings["deduplicate_insert"] = "enable" if enabled else "disable"
+    return settings
+
+
 class _RetryHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -137,7 +144,7 @@ def test_sql_write_is_not_replayed_after_delivery(retry_proxy, param_client, cal
         error = None
         try:
             statement = "INSERT INTO sql_write_retry VALUES (13)" if method == "query" else "INSERT INTO sql_write_retry SELECT 13"
-            result = call(getattr(client, method), statement, settings={"insert_deduplicate": 0})
+            result = call(getattr(client, method), statement, settings=_dedup_settings(client, False))
             if method == "raw_stream":
                 consume_stream(result)
         except DatabaseError as ex:
@@ -198,10 +205,9 @@ def test_insert_data_retries_after_delivery(retry_proxy, param_client, call, tab
     if method == "insert_df" and pd is None:
         pytest.skip("pandas not available")
     proxy, client = retry_proxy
-    table_settings = {"non_replicated_deduplication_window": 100} if deduplicate else None
-    with table_context("insert_data_retry", ["key Int32"], settings=table_settings):
+    with table_context("insert_data_retry", ["key Int32"], settings={"non_replicated_deduplication_window": 100}):
         proxy.arm(fault)
-        settings = {"insert_deduplicate": int(deduplicate)}
+        settings = _dedup_settings(client, deduplicate)
         if method == "raw_insert_preframed":
             call(client.raw_insert, insert_block=b"INSERT INTO insert_data_retry FORMAT CSV\n13\n79\n", settings=settings)
         elif method == "raw_insert":
