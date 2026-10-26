@@ -14,6 +14,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - The Python codec now inserts `None` into `Nullable(SimpleAggregateFunction(...))` columns as NULL.
 - Tuple serialization now reports non-sequence rows with `DataError` and a row number instead of a raw `TypeError` or `AttributeError`, including `None` rows in dictionary input for a non-nullable named tuple.
 - `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
+- `AsyncClient.query(context=...)` now applies the arguments passed with the call, such as `parameters`, `settings`, and `query`, on a copy of the context, matching the synchronous client. Previously the async client ignored them and ran the stored context unchanged, so concurrent calls that shared one context with different parameters all returned the stored context's result. `query(context=...)` and the other query methods also keep the context's `tz_mode` when the call does not pass one, instead of resetting it to the client default.
 
 ## 1.11.0, 2026-10-16
 

@@ -41,3 +41,23 @@ def test_insert_context_data_cleared_on_failure(param_client: Client, call, tabl
             call(param_client.insert, context=insert_context)
 
         assert insert_context.data is None
+
+
+def test_query_context_call_overrides(param_client: Client, call):
+    query_context = param_client.create_query_context(query="SELECT {v:UInt32} AS v", parameters={"v": 13})
+
+    result = call(param_client.query, context=query_context, parameters={"v": 79})
+    assert result.result_rows == [(79,)]
+
+    result = call(param_client.query, context=query_context, query="SELECT getSetting('max_threads') AS t", settings={"max_threads": 1})
+    assert result.result_rows == [(1,)]
+
+    assert query_context.parameters == {"v": 13}
+    assert call(param_client.query, context=query_context).result_rows == [(13,)]
+
+
+def test_query_context_keeps_tz_mode(param_client: Client, call):
+    query_context = param_client.create_query_context(query="SELECT toDateTime('2024-01-01 00:00:00', 'UTC')", tz_mode="aware")
+
+    result = call(param_client.query, context=query_context)
+    assert result.result_rows[0][0].tzinfo is not None

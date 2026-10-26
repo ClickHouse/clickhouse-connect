@@ -807,7 +807,7 @@ class Client(ABC):
                 max_str_len=max_str_len,
                 query_tz=query_tz,
                 column_tzs=column_tzs,
-                tz_mode=resolved_tz_mode,
+                tz_mode=tz_mode,
                 as_pandas=as_pandas,
                 use_extended_dtypes=use_extended_dtypes,
                 streaming=streaming,
