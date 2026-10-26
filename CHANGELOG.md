@@ -14,6 +14,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - The Python codec now inserts `None` into `Nullable(SimpleAggregateFunction(...))` columns as NULL.
 - Tuple serialization now reports non-sequence rows with `DataError` and a row number instead of a raw `TypeError` or `AttributeError`, including `None` rows in dictionary input for a non-nullable named tuple.
 - `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
+- Queries larger than about 128 KiB are no longer auto-promoted to form encoding when their bound parameters exceed the URL budget. The form path sends the SQL as a form field, which the server caps at `http_max_field_value_size` (128 KiB by default), so these queries failed with `HTML Form Exception: Field value too long` while the same query worked with smaller parameters. They now stay on the default path, with the SQL in the request body. Setting `form_encode_query_params=True` still forces form encoding. Applies to both sync and async clients. Closes [#1105](https://github.com/ClickHouse/clickhouse-connect/issues/1105).
 
 ## 1.11.0, 2026-10-16
 

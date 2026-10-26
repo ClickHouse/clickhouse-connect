@@ -4,6 +4,7 @@ import pytest
 
 from clickhouse_connect.driver import binding
 from clickhouse_connect.driver.binding import (
+    MAX_FORM_QUERY_LENGTH,
     MAX_URL_BIND_PARAM_LENGTH,
     _binding_keeps_query_structure,
     _contains_insert_bareword,
@@ -99,6 +100,22 @@ def test_use_form_encoding_percent_expansion_promotes():
     # Raw length is under the budget but percent-encoding expands each space to %20
     params = {"param_s": " " * (MAX_URL_BIND_PARAM_LENGTH // 2)}
     assert use_form_encoding("SELECT 1", params) is True
+
+
+def test_use_form_encoding_large_query_not_promoted():
+    # The form path puts the SQL in a "query" field capped by http_max_field_value_size,
+    # so a query that would not fit there stays on the body path
+    big = {"param_big": "x" * (MAX_URL_BIND_PARAM_LENGTH + 1)}
+    query = "SELECT '" + "x" * MAX_FORM_QUERY_LENGTH + "', {big:String}"
+    assert use_form_encoding(query, big) is False
+    assert use_form_encoding(query, big, force_form=True) is True
+
+
+def test_use_form_encoding_large_query_counts_utf8_bytes():
+    # The server field limit is in bytes, so multi-byte characters count at their encoded size
+    big = {"param_big": "x" * (MAX_URL_BIND_PARAM_LENGTH + 1)}
+    query = "SELECT '" + "\u00e9" * (MAX_FORM_QUERY_LENGTH // 2 + 1) + "', {big:String}"
+    assert use_form_encoding(query, big) is False
 
 
 def test_use_form_encoding_binary_query_not_promoted():
