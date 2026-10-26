@@ -38,7 +38,7 @@ The `Client.raw_insert` method allows direct inserts of `bytes` objects or `byte
 |-----------|------|---------|-------------|
 | `table` | str | Required | Simple or database-qualified target table. |
 | `column_names` | Sequence[str] | `None` | Column names for the insert block. Required when `fmt` does not include names. |
-| `insert_block` | str, bytes, generator, or `BinaryIO` | Required | Data to insert. Strings are encoded with the client encoding. |
+| `insert_block` | str, bytes, generator, or `BinaryIO` | Required | Data to insert. Strings are encoded with the client encoding. `AsyncClient.raw_insert` takes an async iterable, such as an async generator, instead of a generator. |
 | `settings` | dict | `None` | See [Settings argument](/integrations/language-clients/python/driver-api#settings-argument-1). |
 | `fmt` | str | `None` | ClickHouse input format of the `insert_block` payload. `Native` is used when no format is specified. |
 | `compression` | str | `None` | Compression already applied to `insert_block`, such as `"gzip"`, `"lz4"`, or `"zstd"`. |

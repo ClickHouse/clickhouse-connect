@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Sequence
+from collections.abc import AsyncGenerator, Generator, Sequence
 from typing import Any
 
 import numpy
@@ -74,6 +74,11 @@ async def async_query() -> None:
     )
     async with client:
         assert_type(await client.query("SELECT 13"), QueryResult)
+
+        async def insert_blocks() -> AsyncGenerator[bytes, None]:
+            yield b"13\n"
+
+        assert_type(await client.raw_insert("t", ["v"], insert_blocks(), fmt="TSV"), QuerySummary)
 
 
 def async_sqlalchemy_dialect(connection: DBAPIConnection) -> None:

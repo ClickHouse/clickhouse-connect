@@ -14,6 +14,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - The Python codec now inserts `None` into `Nullable(SimpleAggregateFunction(...))` columns as NULL.
 - Tuple serialization now reports non-sequence rows with `DataError` and a row number instead of a raw `TypeError` or `AttributeError`, including `None` rows in dictionary input for a non-nullable named tuple.
 - `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
+- The `AsyncClient.raw_insert` type annotation now accepts an async iterable of `bytes`, such as an async generator, for `insert_block` instead of a synchronous generator. An async iterable already worked at runtime but failed type checking, while a synchronous generator passed type checking and then failed with `TypeError` from aiohttp.
 
 ## 1.11.0, 2026-10-16
 
