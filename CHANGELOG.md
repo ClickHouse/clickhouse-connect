@@ -14,6 +14,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - The Python codec now inserts `None` into `Nullable(SimpleAggregateFunction(...))` columns as NULL.
 - Tuple serialization now reports non-sequence rows with `DataError` and a row number instead of a raw `TypeError` or `AttributeError`, including `None` rows in dictionary input for a non-nullable named tuple.
 - `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
+- `query_np` and `query_df` now return every row of a numeric `LowCardinality` column, such as `LowCardinality(Int32)`. Previously the column was cut to the size of its dictionary, so 1000 rows with 300 distinct values came back as 300 rows, and a block with fewer rows than dictionary entries raised `ValueError: iterator too short`.
 
 ## 1.11.0, 2026-10-16
 
