@@ -151,6 +151,15 @@ def test_numpy_streams(param_client: Client, call, consume_stream):
         assert stream_count > 2
 
 
+def test_numpy_limit_zero(param_client: Client, call, consume_stream):
+    query = "SELECT 1 AS column1, 'x' AS s LIMIT 0"
+    assert call(param_client.query_np, query).shape == (0,)
+
+    blocks = []
+    consume_stream(call(param_client.query_np_stream, query), blocks.append)
+    assert blocks == []
+
+
 @pytest.mark.asyncio
 async def test_numpy_streams_async(test_native_async_client):
     """Async-only numpy streaming test."""

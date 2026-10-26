@@ -53,6 +53,7 @@ from clickhouse_connect.driver.exceptions import (
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import SettingDef, SettingStatus, setting_status
+from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.options import (
     check_arrow,
     check_numpy,
@@ -372,6 +373,8 @@ class Client(ABC):
                     logger.debug("Failed to rename col '%s'. Skipping rename. Error: %s", name, e)
             names.append(name)
             types.append(get_from_name(col["type"]))
+        if context.use_numpy:
+            return cast(QueryResult, NumpyResult(None, tuple(names), tuple(types)))
         return QueryResult([], None, tuple(names), tuple(types))  # type: ignore[arg-type]
 
     def _check_tz_change(self, new_tz) -> tzinfo | None:
