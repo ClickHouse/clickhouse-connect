@@ -58,6 +58,8 @@ _CONNECTOR_CASES = (
 def _source_kwargs(source: str, options: dict[str, Any]) -> dict[str, Any]:
     if source == "dsn":
         return {"dsn": f"http://localhost:8123/default?{urlencode(options)}"}
+    if source == "kwargs":
+        return {"host": "localhost", **options}
     return {"host": "localhost", "generic_args": options}
 
 
@@ -306,3 +308,29 @@ async def test_invalid_async_numeric_options_raise_programming_error(source, nam
 
     assert name in str(exc_info.value)
     assert repr(bad_value) in str(exc_info.value)
+
+
+@pytest.mark.parametrize("source", ("kwargs", "dsn", "generic"))
+@pytest.mark.parametrize("client_kind", ("sync", "async"))
+@pytest.mark.parametrize("value,expected", _BOOL_CASES + ((True, True), (False, False)))
+@pytest.mark.asyncio
+async def test_dedicated_pool_option_is_coerced(source, client_kind, value, expected):
+    client = await _create_factory_client(client_kind, source, {"dedicated_pool": value})
+    try:
+        if client_kind == "sync":
+            assert client._owns_pool_manager is expected
+        else:
+            assert "dedicated_pool" not in (client._initial_settings or {})
+    finally:
+        if client_kind == "sync":
+            client.close()
+        else:
+            await client.close()
+
+
+@pytest.mark.parametrize("source", ("kwargs", "dsn", "generic"))
+@pytest.mark.parametrize("client_kind", ("sync", "async"))
+@pytest.mark.asyncio
+async def test_invalid_dedicated_pool_option_is_rejected(source, client_kind):
+    with pytest.raises(ProgrammingError, match="Invalid value 'sometimes' for option dedicated_pool"):
+        await _create_factory_client(client_kind, source, {"dedicated_pool": "sometimes"})
