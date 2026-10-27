@@ -74,6 +74,24 @@ def test_numpy_object_type(param_client: Client, call, table_context: Callable):
         assert np.array_equal(source_arr, np_array)
 
 
+def test_numpy_object_columns_keep_row_shape(param_client: Client, call):
+    np_array = call(param_client.query_np, "SELECT [number, number + 1, number + 2] AS v FROM numbers(2)")
+    assert np_array.shape == (2, 1)
+    assert np_array.tolist() == [[[0, 1, 2]], [[1, 2, 3]]]
+
+    np_array = call(param_client.query_np, "SELECT (number, number + 1) AS t, [number] AS v FROM numbers(2)")
+    assert np_array.shape == (2, 2)
+    assert np_array.tolist() == [[(0, 1), [0]], [(1, 2), [1]]]
+
+
+def test_numpy_numeric_low_card(param_client: Client, call):
+    np_array = call(param_client.query_np, "SELECT toLowCardinality(toInt32(number % 3)) AS v FROM numbers(10)")
+    assert np_array.tolist() == [[x % 3] for x in range(10)]
+
+    np_array = call(param_client.query_np, "SELECT toLowCardinality(toInt32(5)) AS v")
+    assert np_array.tolist() == [[5]]
+
+
 def test_numpy_nulls(param_client: Client, call, table_context: Callable):
     np_types = [(col_name, "O") for col_name in null_ds_columns]
     np_array = np.rec.fromrecords(null_ds, dtype=np_types)
@@ -149,6 +167,15 @@ def test_numpy_streams(param_client: Client, call, consume_stream):
 
         assert row_count == query_rows
         assert stream_count > 2
+
+
+def test_numpy_limit_zero(param_client: Client, call, consume_stream):
+    query = "SELECT 1 AS column1, 'x' AS s LIMIT 0"
+    assert call(param_client.query_np, query).shape == (0,)
+
+    blocks = []
+    consume_stream(call(param_client.query_np_stream, query), blocks.append)
+    assert blocks == []
 
 
 @pytest.mark.asyncio
