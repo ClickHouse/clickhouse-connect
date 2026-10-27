@@ -8,7 +8,7 @@ import pytest
 
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.options import np
+from clickhouse_connect.driver.options import np, pd
 from tests.helpers import list_equal, random_query
 from tests.integration_tests.datasets import (
     basic_ds,
@@ -34,6 +34,33 @@ def test_numpy_dates(param_client: Client, call, table_context: Callable):
         new_np_array = call(param_client.query_np, "SELECT * FROM test_numpy_dates")
         assert np.array_equal(np_array, new_np_array)
         assert np.array_equal(source_arr, np_array)
+
+
+@pytest.mark.skipif(pd is None, reason="Pandas package not installed")
+@pytest.mark.parametrize("date_type, value", [("Date", "2023-05-04"), ("Date32", "1968-04-15")])
+@pytest.mark.parametrize("has_null", [False, True])
+def test_numpy_nullable_date_extended_context(param_client: Client, call, consume_stream, date_type, value, has_null):
+    query = f"SELECT if(number % 3 = 1 AND {int(has_null)}, NULL, to{date_type}('{value}')) AS d FROM numbers(13)"
+    context = param_client.create_query_context(
+        query=query,
+        use_numpy=True,
+        use_none=False,
+        use_extended_dtypes=True,
+        settings={"max_block_size": 4, "max_threads": 1},
+    )
+    result = call(param_client.query_np, context=context)
+    expected = np.array(
+        [[None if has_null and row % 3 == 1 else value] for row in range(13)],
+        dtype="datetime64[D]",
+    )
+    assert result.dtype == expected.dtype
+    np.testing.assert_array_equal(result, expected)
+
+    blocks = []
+    consume_stream(call(param_client.query_np_stream, context=context), blocks.append)
+    assert len(blocks) > 1
+    assert all(block.dtype == expected.dtype for block in blocks)
+    np.testing.assert_array_equal(np.concatenate(blocks), expected)
 
 
 def test_invalid_date(param_client: Client, call):

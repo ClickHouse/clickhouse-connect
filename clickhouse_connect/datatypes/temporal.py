@@ -103,7 +103,12 @@ class Date(ClickHouseType):
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
         if ctx.use_extended_dtypes:
-            return options.pd.NA if fmt == "int" else options.pd.NaT
+            if fmt == "int":
+                return options.pd.NA
+            if ctx.use_numpy and not ctx.use_none:
+                # NumPy's datetime64 conversion rejects Pandas NaT.
+                return options.np.datetime64("NaT", self._null_time_unit)
+            return options.pd.NaT
         if ctx.use_none:
             return None
         if fmt == "int":
@@ -116,7 +121,7 @@ class Date(ClickHouseType):
         if self.read_format(ctx) == "int":
             return column
 
-        if ctx.use_numpy and self.nullable and not ctx.use_none and not ctx.use_extended_dtypes:
+        if ctx.use_numpy and self.nullable and not ctx.use_none:
             return options.np.array(column, dtype=self.np_type)
 
         if ctx.use_extended_dtypes:
