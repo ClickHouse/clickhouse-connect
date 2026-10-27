@@ -794,9 +794,9 @@ class Client(ABC):
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: Reusable QueryContext
         """
-        resolved_tz_mode = tz_mode if tz_mode is not None else self.tz_mode
         if context:
-            return context.updated_copy(
+            explicit = tz_mode is not None or context._tz_mode_explicit
+            copy = context.updated_copy(
                 query=query,
                 parameters=parameters,
                 settings=settings,
@@ -810,20 +810,23 @@ class Client(ABC):
                 max_str_len=max_str_len,
                 query_tz=query_tz,
                 column_tzs=column_tzs,
-                tz_mode=tz_mode,
+                tz_mode=tz_mode if explicit else self.tz_mode,
                 as_pandas=as_pandas,
                 use_extended_dtypes=use_extended_dtypes,
                 streaming=streaming,
                 external_data=external_data,
                 transport_settings=transport_settings,
             )
+            copy._tz_mode_explicit = explicit
+            return copy
+        resolved_tz_mode = tz_mode if tz_mode is not None else self.tz_mode
         if use_numpy and max_str_len is None:
             max_str_len = 0
         if use_extended_dtypes is None:
             use_extended_dtypes = use_na_values
         if as_pandas and use_extended_dtypes is None:
             use_extended_dtypes = True
-        return QueryContext(
+        context = QueryContext(
             query=cast(str | bytes, query),
             parameters=parameters,
             settings=settings,
@@ -845,6 +848,8 @@ class Client(ABC):
             external_data=external_data,
             transport_settings=transport_settings,
         )
+        context._tz_mode_explicit = tz_mode is not None
+        return context
 
     def query_arrow(
         self,

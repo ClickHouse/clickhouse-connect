@@ -610,6 +610,8 @@ class AsyncClient(Client):
             transport_settings=transport_settings,
             tz_mode=tz_mode,
             context=context,
+            as_pandas=context.as_pandas if context else False,
+            streaming=context.streaming if context else False,
         )
 
         if context.is_command:
