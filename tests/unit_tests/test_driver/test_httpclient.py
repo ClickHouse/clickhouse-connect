@@ -785,6 +785,7 @@ class TestQuery:
         context.settings = {}
         context.transport_settings = {}
         context.streaming = False
+        context.use_numpy = False
         return context
 
     @staticmethod

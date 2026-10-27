@@ -432,7 +432,7 @@ class ArrayType(ClickHouseType, ABC, registered=False):
     def _build_lc_column(self, index: Sequence, keys: array.array, ctx: QueryContext):
         if ctx.use_numpy:
             # index is a numpy array when ctx.use_numpy is True
-            return options.np.fromiter((index[key] for key in keys), dtype=index.dtype, count=len(index))  # type: ignore[attr-defined]
+            return options.np.fromiter((index[key] for key in keys), dtype=index.dtype, count=len(keys))  # type: ignore[attr-defined]
         return super()._build_lc_column(index, keys, ctx)
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
