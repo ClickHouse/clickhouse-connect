@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from clickhouse_connect import common
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import _DateTime64QueryParam
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.binding import (
     DT64Param,
@@ -324,6 +325,61 @@ class TestBindQueryDateTime64Precision:
         query = "SELECT {vals:Array(Tuple(DateTime64(6), String))}"
         _, params = bind_query(query, {"vals": [(self.dt, "user_1")]}, server_tz=self.utc)
         assert params["param_vals"] == "[('2025-01-01 12:00:00.250306', 'user_1')]"
+
+    def test_named_tuple(self):
+        query = "SELECT {val:Tuple(a DateTime64(6), b String)}"
+        _, params = bind_query(query, {"val": (self.dt, "user_1")}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 12:00:00.250306', 'user_1')"
+
+    def test_named_tuple_tz_hint(self):
+        query = "SELECT {val:Tuple(a DateTime64(6, 'Asia/Tokyo'))}"
+        _, params = bind_query(query, {"val": (self.dt,)}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 21:00:00.250306')"
+
+    def test_tuple_element_tz_hints(self):
+        query = "SELECT {val:Tuple(a DateTime64(6, 'Asia/Tokyo'), b DateTime64(6, 'UTC'))}"
+        _, params = bind_query(query, {"val": (self.dt, self.dt)}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 21:00:00.250306', '2025-01-01 12:00:00.250306')"
+
+    @pytest.mark.parametrize("name", ["`a(b)`", "`a``b`", "`a\\`b`", '"a""b"'])
+    def test_quoted_tuple_element_name(self, name):
+        query = f"SELECT {{val:Tuple({name} DateTime64(6, 'Asia/Tokyo'))}}"
+        _, params = bind_query(query, {"val": (self.dt,)}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 21:00:00.250306')"
+
+    @pytest.mark.parametrize("param_type", [DT64Param, _DateTime64QueryParam])
+    @pytest.mark.parametrize("element_type", ["DateTime64(6, 'Asia/Tokyo')", "Variant(DateTime64(6, 'Asia/Tokyo'), String)"])
+    def test_tuple_element_tz_hint_applies_to_dt64param(self, param_type, element_type):
+        query = f"SELECT {{val:Tuple(a {element_type})}}"
+        wrapped = param_type(self.dt)
+        _, params = bind_query(query, {"val": (wrapped,)}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 21:00:00.250306')"
+        assert wrapped.tz is None
+
+    def test_nested(self):
+        query = "SELECT {vals:Nested(a DateTime64(6), b String)}"
+        _, params = bind_query(query, {"vals": [(self.dt, "user_1")]}, server_tz=self.utc)
+        assert params["param_vals"] == "[('2025-01-01 12:00:00.250306', 'user_1')]"
+
+    def test_variant(self):
+        query = "SELECT {val:Variant(DateTime64(6), String)}"
+        _, params = bind_query(query, {"val": self.dt}, server_tz=self.utc)
+        assert params["param_val"] == "2025-01-01 12:00:00.250306"
+
+    def test_variant_with_datetime_alternative_unchanged(self):
+        query = "SELECT {val:Variant(DateTime, DateTime64(6))}"
+        _, params = bind_query(query, {"val": self.dt}, server_tz=self.utc)
+        assert params["param_val"] == "2025-01-01 12:00:00"
+
+    def test_map(self):
+        query = "SELECT {val:Map(String, DateTime64(6))}"
+        original = common.get_setting("dict_parameter_format")
+        common.set_setting("dict_parameter_format", "map")
+        try:
+            _, params = bind_query(query, {"val": {"user_1": self.dt}}, server_tz=self.utc)
+        finally:
+            common.set_setting("dict_parameter_format", original)
+        assert params["param_val"] == "{'user_1':'2025-01-01 12:00:00.250306'}"
 
     def test_tz_hint_with_precision(self):
         berlin = zoneinfo.ZoneInfo("Europe/Berlin")
