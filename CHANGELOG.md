@@ -7,6 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- Datetime parameters whose names end in `_64` now retain their names in pyformat queries, fixing `KeyError` failures including SQLAlchemy queries with 64 datetime binds. The `_64` precision hint still applies when the query uses the name without the suffix. Closes [#1131](https://github.com/ClickHouse/clickhouse-connect/issues/1131).
 - Eligible compiled SQLAlchemy Core and ORM queries now skip the second `LIMIT 0` query for empty results and preserve result keys. The synthesized DB-API descriptions report `None` for `type_code` and `null_ok`. Plain DB-API and textual queries, raw SQL projections or modifiers, server-expanded columns, custom result processors, rewritten statements, and cursor `execute` wrappers retain the `LIMIT 0` metadata fallback. Closes [#1108](https://github.com/ClickHouse/clickhouse-connect/issues/1108).
 - The Python codec now decodes `Nullable(Tuple(...))` correctly, preserving NULL tuples and non-NULL values, including nested tuples and tuple read formats. Closes [#1102](https://github.com/ClickHouse/clickhouse-connect/issues/1102).
 - The Python codec now decodes `Nullable(Point)` columns, returning `None` for NULL points. Previously the decoder read the NULL map as point data and the query failed.
