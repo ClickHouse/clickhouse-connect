@@ -21,6 +21,8 @@ _DateTime64QuerySignature: TypeAlias = bool | tuple[str, tuple["_DateTime64Query
 class _DateTime64QueryParam(DT64Param):
     def format(self, tz: tzinfo | None, top_level: bool) -> str:
         # Preserve SQL-text datetime timezone rules, including legacy naive UTC values.
+        if self.tz is not None:
+            tz = self.tz
         value = self.value
         if _legacy_naive_datetime_binding():
             if value.tzinfo is not None or not tzutil.is_utc_timezone(tz):

@@ -1,3 +1,4 @@
+import copy
 import ipaddress
 import re
 import uuid
@@ -5,6 +6,7 @@ import zoneinfo
 from collections.abc import Collection, Sequence
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from enum import Enum
+from functools import lru_cache
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -684,10 +686,14 @@ def _legacy_naive_datetime_binding() -> bool:
 
 
 class DT64Param:
-    def __init__(self, value: datetime):
+    def __init__(self, value: datetime, tz: tzinfo | None = None):
         self.value = value
+        # Timezone named in the bound DateTime64 type, which wins over the one passed to format
+        self.tz = tz
 
     def format(self, tz: tzinfo | None, top_level: bool) -> str:
+        if self.tz is not None:
+            tz = self.tz
         value = self.value
         if _legacy_naive_datetime_binding():
             if tz:
@@ -753,6 +759,8 @@ def finalize_query(query: str, parameters: Sequence | dict[str, Any] | None, ser
     return query % tuple(format_query_value(v, server_tz) for v in parameters)
 
 
+# Cached because containers unwrap the same element type for every value
+@lru_cache(maxsize=256)
 def _unwrap_outer(type_str: str) -> tuple[str, tuple]:
     """Strip LowCardinality/Nullable wrappers and return (base_name, args)"""
     base = type_str.strip()
@@ -789,6 +797,32 @@ def _extract_tz_from_type(type_str: str) -> tzinfo | None:
         return None
 
 
+def _strip_element_name(type_str: str) -> str:
+    """Return the type of a named Tuple or Nested element, "name Type", or type_str if unnamed."""
+    element = type_str.strip()
+    quote = element[:1]
+    if quote in ("`", '"'):
+        pos = 1
+        while pos < len(element):
+            if element[pos] == "\\" or element[pos : pos + 2] == quote * 2:
+                pos += 2
+            elif element[pos] == quote:
+                break
+            else:
+                pos += 1
+        return element[pos + 1 :].strip()
+    _, values, rest = parse_callable(element)
+    if rest and not values and not rest.startswith("("):
+        return rest
+    return element
+
+
+@lru_cache(maxsize=256)
+def _datetime64_type_tz(type_str: str) -> tzinfo | None:
+    """Cached _extract_tz_from_type, since containers resolve the same element type for every value."""
+    return _extract_tz_from_type(type_str)
+
+
 def _promote_datetime64(type_str: str, value):
     """Wrap values bound to a DateTime64 hint in DT64Param to preserve precision."""
     if value is None or "datetime64" not in type_str.lower():
@@ -797,12 +831,30 @@ def _promote_datetime64(type_str: str, value):
         base_name, values = _unwrap_outer(type_str)
         base_name = base_name.lower()
         if base_name == "datetime64":
-            return DT64Param(value) if isinstance(value, datetime) else value
+            tz = _datetime64_type_tz(type_str)
+            if isinstance(value, datetime):
+                return DT64Param(value, tz)
+            if isinstance(value, DT64Param) and value.tz is None and tz is not None:
+                promoted = copy.copy(value)
+                promoted.tz = tz
+                return promoted
+            return value
         if base_name == "array" and values and isinstance(value, (list, tuple)):
             inner = str(values[0])
             return type(value)(_promote_datetime64(inner, x) for x in value)
         if base_name == "tuple" and isinstance(value, tuple) and len(values) == len(value):
-            return tuple(_promote_datetime64(str(t), x) for t, x in zip(values, value))
+            return tuple(_promote_datetime64(_strip_element_name(str(t)), x) for t, x in zip(values, value))
+        if base_name == "nested" and isinstance(value, (list, tuple)):
+            element_type = f"Tuple({', '.join(str(t) for t in values)})"
+            return type(value)(_promote_datetime64(element_type, x) for x in value)
+        if base_name == "variant" and isinstance(value, (datetime, DT64Param)):
+            variant_names = {_unwrap_outer(str(t))[0].lower(): str(t) for t in values}
+            # A plain DateTime alternative would no longer be the variant the server picks
+            if "datetime64" in variant_names and "datetime" not in variant_names:
+                return _promote_datetime64(variant_names["datetime64"], value)
+        if base_name == "map" and isinstance(value, dict) and len(values) == 2 and common.get_setting("dict_parameter_format") == "map":
+            key_type, value_type = (str(t) for t in values)
+            return {_promote_datetime64(key_type, k): _promote_datetime64(value_type, v) for k, v in value.items()}
         return value
     except Exception:
         return value
