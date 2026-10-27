@@ -15,7 +15,11 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - Tuple serialization now reports non-sequence rows with `DataError` and a row number instead of a raw `TypeError` or `AttributeError`, including `None` rows in dictionary input for a non-nullable named tuple.
 - `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
 - Sync and async clients no longer automatically use form encoding when the final SQL exceeds 128 KiB, avoiding `HTML Form Exception: Field value too long` for large queries with large bound parameters. Explicit form encoding and queries with external data retain their existing limits. Closes [#1105](https://github.com/ClickHouse/clickhouse-connect/issues/1105).
-- Client creation no longer scans the timezone database to validate the server or local timezone. `normalize_timezone` now looks up the single zone key with `zoneinfo.ZoneInfo`, which speeds up client initialization for non-UTC IANA server timezones. Closes [#1120](https://github.com/ClickHouse/clickhouse-connect/issues/1120).
+- Unreadable timezone files and timezone directory names now follow the existing unrecognized-timezone handling. This prevents an import failure when `TZ` names a directory such as `America` and the `tzdata` package is installed.
+
+### Improvements
+
+- Client creation is faster with non-UTC IANA server timezones because timezone validation no longer scans the timezone database. Closes [#1120](https://github.com/ClickHouse/clickhouse-connect/issues/1120).
 
 ## 1.11.0, 2026-10-16
 

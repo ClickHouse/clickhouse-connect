@@ -1,5 +1,8 @@
+import subprocess
+import sys
 import zoneinfo
 from datetime import timedelta, timezone, tzinfo
+from pathlib import Path
 
 import pyarrow as pa
 import pytest
@@ -550,6 +553,59 @@ def test_resolve_zone_fixed_offset_invalid_falls_through():
             tzutil.resolve_zone(s)
 
 
+@pytest.mark.parametrize("error_type", [ValueError, IsADirectoryError, PermissionError])
+def test_resolve_zone_translates_invalid_zone_errors(monkeypatch, error_type):
+    error = error_type("invalid zone")
+
+    def invalid_zone(key):
+        raise error
+
+    monkeypatch.setattr(tzutil.zoneinfo, "ZoneInfo", invalid_zone)
+    with pytest.raises(zoneinfo.ZoneInfoNotFoundError) as exc:
+        tzutil.resolve_zone("America")
+    assert exc.value.__cause__ is error
+    assert exc.value.args == (str(error),)
+
+
+@pytest.mark.parametrize("error_type", [ValueError, IsADirectoryError, PermissionError])
+@pytest.mark.parametrize("option", ["query_tz", "column_tzs"])
+def test_query_context_translates_invalid_zone_errors(monkeypatch, error_type, option):
+    def invalid_zone(key):
+        raise error_type("invalid zone")
+
+    monkeypatch.setattr(tzutil.zoneinfo, "ZoneInfo", invalid_zone)
+    value = "America" if option == "query_tz" else {"ts": "America"}
+    with pytest.raises(ProgrammingError, match="America is not recognized"):
+        QueryContext(**{option: value})
+
+
+def test_import_with_timezone_directory(monkeypatch):
+    pytest.importorskip("tzdata")
+    repo_root = Path(__file__).resolve().parents[3]
+    monkeypatch.setenv("TZ", "America")
+    monkeypatch.setenv("PYTHONTZPATH", "")
+    monkeypatch.setenv("PYTHONPATH", str(repo_root))
+    code = """
+import sys
+from pathlib import Path
+
+sys.modules["tzlocal"] = None
+import clickhouse_connect
+from clickhouse_connect.driver import tzutil
+
+assert Path(tzutil.__file__).resolve() == Path(sys.argv[1]).resolve()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(repo_root / "clickhouse_connect/driver/tzutil.py")],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_tzutil_normalize_fixed_offset_trusted_for_server():
     """Server-init paths pass trust_fixed_offset=True; the offset is taken at face value."""
     tz = timezone(timedelta(hours=5, minutes=30))
@@ -597,6 +653,15 @@ def _reject_available_timezones():
 def test_tzutil_normalize_named_zone_does_not_scan_tz_database(monkeypatch):
     monkeypatch.setattr(tzutil.zoneinfo, "available_timezones", _reject_available_timezones)
     tz = zoneinfo.ZoneInfo("Europe/Berlin")
+    normalized, is_valid = tzutil.normalize_timezone(tz)
+    assert normalized is tz
+    assert is_valid is True
+
+
+def test_tzutil_normalize_named_fixed_offset_keeps_identity(monkeypatch):
+    monkeypatch.setattr(tzutil.zoneinfo, "available_timezones", _reject_available_timezones)
+    monkeypatch.setattr(tzutil, "tzlocal", None)
+    tz = timezone(timedelta(hours=1), "CET")
     normalized, is_valid = tzutil.normalize_timezone(tz)
     assert normalized is tz
     assert is_valid is True

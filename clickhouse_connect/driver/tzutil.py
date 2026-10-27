@@ -78,9 +78,9 @@ def resolve_zone(tz_name: str) -> tzinfo:
             return timezone.utc if offset == timedelta(0) else timezone(offset)
     try:
         return zoneinfo.ZoneInfo(tz_name)
-    except ValueError as ex:
-        # ZoneInfo raises ValueError for empty strings, absolute paths, and non-normalized
-        # keys; funnel those into ZoneInfoNotFoundError so callers only need one except clause.
+    except (ValueError, OSError) as ex:
+        # Invalid keys and unreadable zone files raise ValueError or OSError; translate them
+        # to ZoneInfoNotFoundError so callers only need one except clause.
         raise zoneinfo.ZoneInfoNotFoundError(str(ex)) from ex
 
 
@@ -93,8 +93,8 @@ def normalize_timezone(tz: tzinfo, trust_fixed_offset: bool = False) -> tuple[tz
     #
     # The local-init path (bottom of this module) deliberately does NOT set this flag because
     # a stdlib datetime.timezone returned from datetime.now().astimezone().tzinfo is the current
-    # local offset (e.g. PDT), and we want the tzlocal-recovery branch below to upgrade it to
-    # a real IANA zone so the local time tracks across DST.
+    # local offset. If its name is not a recognized IANA key, tzlocal can recover a real IANA
+    # zone so the local time tracks across DST. Recognized names such as CET pass through.
     if trust_fixed_offset and isinstance(tz, timezone):
         return tz, True
 
@@ -118,8 +118,7 @@ def normalize_timezone(tz: tzinfo, trust_fixed_offset: bool = False) -> tuple[tz
 
 
 def _load_iana_zone(key: str | None) -> zoneinfo.ZoneInfo | None:
-    # Look up a single key instead of scanning zoneinfo.available_timezones(), which walks the
-    # whole tz database on every call. ZoneInfo caches successful lookups.
+    # ZoneInfo caches successful lookups.
     if not key:
         return None
     try:
