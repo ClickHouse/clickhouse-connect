@@ -661,3 +661,65 @@ def test_pandas_time_resolution(test_config: TestConfig, param_client: Client, c
         call(param_client.insert, "test_time_res", data)
         df_res = call(param_client.query_df, "SELECT * FROM test_time_res")
         assert _dtype_unit(df_res["t"].dtype) == "s"
+
+
+def test_pandas_map_values(param_client: Client, call):
+    """Map columns in query_df match the decoded keys and values across blocks, including NULL values."""
+    query = (
+        "SELECT map('k', number, 'v', number * 13) AS m,"
+        " CAST(if(number % 2 = 0, map(), map('n', if(number = 1, NULL, number))), 'Map(String, Nullable(Int32))') AS nm"
+        " FROM numbers(5) ORDER BY number"
+    )
+    df = call(param_client.query_df, query, settings={"max_block_size": 2})
+    assert df["m"].tolist() == [{"k": x, "v": x * 13} for x in range(5)]
+    assert all(type(v) is np.uint64 for row in df["m"] for v in row.values())
+    assert df["nm"].tolist()[0] == {}
+    assert df["nm"][1]["n"] is pd.NA
+    assert df["nm"].tolist()[2:] == [{}, {"n": 3}, {}]
+
+
+@pytest.mark.parametrize(
+    "type_name,dtype",
+    [
+        ("DateTime('Asia/Tokyo')", "datetime64[s, Asia/Tokyo]"),
+        ("DateTime64(3, 'Asia/Tokyo')", "datetime64[ms, Asia/Tokyo]"),
+        ("DateTime", "datetime64[s]"),
+        ("DateTime64(6)", "datetime64[us]"),
+        ("Date", "datetime64[s]"),
+        ("Date32", "datetime64[s]"),
+    ],
+)
+def test_pandas_nullable_temporal(param_client: Client, call, type_name: str, dtype: str):
+    """Nullable temporal columns keep their dtype, values, and NULL positions across blocks."""
+    escaped = type_name.replace("'", "\\'")
+    query = f"SELECT if(number % 3 = 1, NULL, CAST(toDate('2024-03-10') + number, '{escaped}')) AS c FROM numbers(7) ORDER BY number"
+    df = call(param_client.query_df, query, settings={"max_block_size": 2})
+    assert str(df["c"].dtype) == dtype
+    expected = pd.Series([pd.Timestamp("2024-03-10") + pd.Timedelta(days=x) for x in range(7)])
+    if "Tokyo" in type_name:
+        expected = expected.dt.tz_localize("Asia/Tokyo")
+    assert df["c"].isna().tolist() == [x % 3 == 1 for x in range(7)]
+    assert df["c"][~df["c"].isna()].tolist() == expected[[x % 3 != 1 for x in range(7)]].tolist()
+
+
+@pytest.mark.parametrize(
+    "type_name,dtype,query_formats",
+    [
+        ("Int8", "Int8", None),
+        ("UInt8", "UInt8", None),
+        ("Int16", "Int16", None),
+        ("UInt16", "UInt16", None),
+        ("Int32", "Int32", None),
+        ("UInt32", "UInt32", None),
+        ("Int64", "Int64", None),
+        ("UInt64", "UInt64", None),
+        ("UInt64", "Int64", {"UInt64": "signed"}),
+    ],
+)
+def test_pandas_nullable_int(param_client: Client, call, type_name: str, dtype: str, query_formats):
+    """Nullable integer columns keep their pandas dtype, values, and NULL positions across blocks."""
+    query = f"SELECT if(number % 3 = 1, NULL, CAST(number * 13, '{type_name}')) AS c FROM numbers(7) ORDER BY number"
+    df = call(param_client.query_df, query, settings={"max_block_size": 2}, query_formats=query_formats)
+    assert str(df["c"].dtype) == dtype
+    assert df["c"].tolist() == [pd.NA if x % 3 == 1 else x * 13 for x in range(7)]
+    assert type(df["c"].array[0]) is getattr(np, dtype.lower())

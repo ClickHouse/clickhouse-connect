@@ -5,6 +5,7 @@ from typing import Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, _TypeArgs
 from clickhouse_connect.datatypes.registry import _canonicalize_variant_name, get_from_name
+from clickhouse_connect.driver import options
 from clickhouse_connect.driver.binding import _format_identifier
 from clickhouse_connect.driver.common import first_value, must_swap
 from clickhouse_connect.driver.ctypes import data_conv
@@ -323,6 +324,14 @@ class Map(ClickHouseType):
         total_rows = 0 if len(offsets) == 0 else offsets[-1]
         keys = self.key_type.read_column_data(source, total_rows, ctx, read_state[0])
         values = self.value_type.read_column_data(source, total_rows, ctx, read_state[1])
+        if ctx.as_pandas:
+            # Slicing a pandas array once per row is much slower than slicing a list of the same elements
+            pandas_arrays = (options.pd.api.extensions.ExtensionArray, options.pd.Index)
+            try:
+                keys, values = [list(x) if isinstance(x, pandas_arrays) else x for x in (keys, values)]
+            except Exception:
+                # An element pandas can't box: the per-row slices below raise for the first one in row order
+                pass
         map_type = list if self.read_format(ctx) == "pairs" else dict
         column = []
         prev = 0
