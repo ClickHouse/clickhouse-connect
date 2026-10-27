@@ -15,6 +15,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - Tuple serialization now reports non-sequence rows with `DataError` and a row number instead of a raw `TypeError` or `AttributeError`, including `None` rows in dictionary input for a non-nullable named tuple.
 - `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
 - Sync and async clients no longer automatically use form encoding when the final SQL exceeds 128 KiB, avoiding `HTML Form Exception: Field value too long` for large queries with large bound parameters. Explicit form encoding and queries with external data retain their existing limits. Closes [#1105](https://github.com/ClickHouse/clickhouse-connect/issues/1105).
+- `query_df` with `use_none=False` no longer fails with `TypeError: 'float' object cannot be interpreted as an integer` on `Nullable(Date)` and `Nullable(Date32)` columns. With extended dtypes (the default), NULLs now come back as `NaT`, matching `Nullable(DateTime)`.
 
 ## 1.11.0, 2026-10-16
 

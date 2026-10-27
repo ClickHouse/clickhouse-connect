@@ -284,6 +284,15 @@ def test_pandas_date32(param_client: Client, call, table_context: Callable):
         assert _dtype_unit(result_df["dt"].dtype) == "s"
 
 
+@pytest.mark.parametrize("date_type", ["Date", "Date32"])
+def test_pandas_nullable_date_use_none_false(param_client: Client, call, date_type: str):
+    query = f"SELECT CAST(d, 'Nullable({date_type})') AS d FROM (SELECT arrayJoin([toDate('2023-05-04'), NULL]) AS d)"
+    result_df = call(param_client.query_df, query, use_none=False)
+    assert result_df.iloc[0]["d"] == pd.Timestamp(2023, 5, 4)
+    assert pd.isnull(result_df.iloc[1]["d"])
+    assert _dtype_unit(result_df["d"].dtype) == "s"
+
+
 def test_pandas_row_df(param_client: Client, call, table_context: Callable):
     with table_context("test_pandas_row_df", ["key UInt64", "dt DateTime64(6)", "fs FixedString(5)"]):
         df = pd.DataFrame(
