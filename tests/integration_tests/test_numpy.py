@@ -74,22 +74,65 @@ def test_numpy_object_type(param_client: Client, call, table_context: Callable):
         assert np.array_equal(source_arr, np_array)
 
 
-def test_numpy_object_columns_keep_row_shape(param_client: Client, call):
-    np_array = call(param_client.query_np, "SELECT [number, number + 1, number + 2] AS v FROM numbers(2)")
-    assert np_array.shape == (2, 1)
-    assert np_array.tolist() == [[[0, 1, 2]], [[1, 2, 3]]]
+@pytest.mark.parametrize(
+    "select, expected",
+    [
+        ("[number, number + 1, number + 2] AS v", [[[x, x + 1, x + 2]] for x in range(13)]),
+        ("(number, number + 1) AS t", [[(x, x + 1)] for x in range(13)]),
+        ("(number, number + 1) AS t, [number] AS v", [[(x, x + 1), [x]] for x in range(13)]),
+        ("arrayMap(x -> [number, x], range(number % 3 + 1)) AS v", [[[[x, y] for y in range(x % 3 + 1)]] for x in range(13)]),
+        ("[(number, number + 1)] AS v", [[[(x, x + 1)]] for x in range(13)]),
+    ],
+)
+def test_numpy_object_columns_keep_row_shape(param_client: Client, call, consume_stream, select, expected):
+    query = f"SELECT {select} FROM numbers(13)"
+    settings = {"max_block_size": 4, "max_threads": 1}
+    np_array = call(param_client.query_np, query, settings=settings)
+    assert np_array.shape == (13, len(expected[0]))
+    assert np_array.dtype == np.dtype("O")
+    assert np_array.tolist() == expected
 
-    np_array = call(param_client.query_np, "SELECT (number, number + 1) AS t, [number] AS v FROM numbers(2)")
-    assert np_array.shape == (2, 2)
-    assert np_array.tolist() == [[(0, 1), [0]], [(1, 2), [1]]]
+    blocks = []
+    consume_stream(call(param_client.query_np_stream, query, settings=settings), blocks.append)
+    assert len(blocks) > 1
+    assert all(block.ndim == 2 and block.dtype == np.dtype("O") for block in blocks)
+    assert np.concatenate(blocks).tolist() == expected
 
 
-def test_numpy_numeric_low_card(param_client: Client, call):
-    np_array = call(param_client.query_np, "SELECT toLowCardinality(toInt32(number % 3)) AS v FROM numbers(10)")
-    assert np_array.tolist() == [[x % 3] for x in range(10)]
+@pytest.mark.parametrize("column_count", [1, 2])
+@pytest.mark.parametrize("max_str_len", [0, 7])
+def test_numpy_string_columns_keep_row_shape(param_client: Client, call, consume_stream, column_count, max_str_len):
+    select = ", ".join(f"toString(number) AS s{x}" for x in range(column_count))
+    query = f"SELECT {select} FROM numbers(13)"
+    kwargs = {"settings": {"max_block_size": 4, "max_threads": 1}, "max_str_len": max_str_len}
+    expected = [[str(x)] * column_count for x in range(13)]
+    dtype = np.dtype(f"U{max_str_len}" if max_str_len else "O")
+    np_array = call(param_client.query_np, query, **kwargs)
+    assert np_array.shape == (13, column_count)
+    assert np_array.dtype == dtype
+    assert np_array.tolist() == expected
 
-    np_array = call(param_client.query_np, "SELECT toLowCardinality(toInt32(5)) AS v")
-    assert np_array.tolist() == [[5]]
+    blocks = []
+    consume_stream(call(param_client.query_np_stream, query, **kwargs), blocks.append)
+    assert len(blocks) > 1
+    assert all(block.ndim == 2 and block.dtype == dtype for block in blocks)
+    assert np.concatenate(blocks).tolist() == expected
+
+
+@pytest.mark.parametrize("row_count", [1, 13])
+@pytest.mark.parametrize("expression", ["13", "number % 3", "number"])
+def test_numpy_numeric_low_card(param_client: Client, call, consume_stream, row_count, expression):
+    query = f"SELECT toLowCardinality(toInt32({expression})) AS v FROM numbers({row_count})"
+    expected = [[13 if expression == "13" else x % 3 if expression == "number % 3" else x] for x in range(row_count)]
+    settings = {"max_block_size": 4, "max_threads": 1}
+    np_array = call(param_client.query_np, query, settings=settings)
+    assert np_array.tolist() == expected
+
+    blocks = []
+    consume_stream(call(param_client.query_np_stream, query, settings=settings), blocks.append)
+    if row_count > 4:
+        assert len(blocks) > 1
+    assert np.concatenate(blocks).tolist() == expected
 
 
 def test_numpy_nulls(param_client: Client, call, table_context: Callable):
