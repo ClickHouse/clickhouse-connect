@@ -106,15 +106,28 @@ def normalize_timezone(tz: tzinfo, trust_fixed_offset: bool = False) -> tuple[tz
     if tz_key in UTC_EQUIVALENTS:
         return timezone.utc, True
 
-    if tz_key in zoneinfo.available_timezones():
+    if _load_iana_zone(tz_key) is not None:
         return tz, True
 
     if tzlocal is not None:  # Maybe we can use the tzlocal module to get a safe timezone
-        local_name = tzlocal.get_localzone_name()
-        if local_name in zoneinfo.available_timezones():
-            return zoneinfo.ZoneInfo(local_name), True
+        local_zone = _load_iana_zone(tzlocal.get_localzone_name())
+        if local_zone is not None:
+            return local_zone, True
 
     return tz, False
+
+
+def _load_iana_zone(key: str | None) -> zoneinfo.ZoneInfo | None:
+    # Look up a single key instead of scanning zoneinfo.available_timezones(), which walks the
+    # whole tz database on every call. ZoneInfo caches successful lookups.
+    if not key:
+        return None
+    try:
+        return zoneinfo.ZoneInfo(key)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
+        # ValueError covers absolute paths, non-normalized keys, and non-TZif files in the tz
+        # directory; OSError covers directory names such as "America".
+        return None
 
 
 def is_utc_timezone(tz: tzinfo | str | None) -> bool:

@@ -1,5 +1,5 @@
 import zoneinfo
-from datetime import timedelta, timezone
+from datetime import timedelta, timezone, tzinfo
 
 import pyarrow as pa
 import pytest
@@ -588,6 +588,71 @@ def test_tzutil_normalize_named_iana_zones_are_dst_safe():
         normalized, is_valid = tzutil.normalize_timezone(tz)
         assert normalized == tz
         assert is_valid is True
+
+
+def _reject_available_timezones():
+    raise AssertionError("normalize_timezone must not scan the timezone database")
+
+
+def test_tzutil_normalize_named_zone_does_not_scan_tz_database(monkeypatch):
+    monkeypatch.setattr(tzutil.zoneinfo, "available_timezones", _reject_available_timezones)
+    tz = zoneinfo.ZoneInfo("Europe/Berlin")
+    normalized, is_valid = tzutil.normalize_timezone(tz)
+    assert normalized is tz
+    assert is_valid is True
+
+
+class _NamedTz(tzinfo):
+    """A non-ZoneInfo tzinfo whose tzname(None) is an arbitrary string."""
+
+    def __init__(self, name):
+        self._name = name
+
+    def utcoffset(self, dt):
+        return timedelta(hours=1)
+
+    def dst(self, dt):
+        return timedelta(0)
+
+    def tzname(self, dt):
+        return self._name
+
+
+class _FakeTzlocal:
+    def __init__(self, name):
+        self._name = name
+
+    def get_localzone_name(self):
+        return self._name
+
+
+@pytest.mark.parametrize("tz_name", ["Not/A_Zone", "America", "zone.tab", "/etc/passwd", "../Europe/Berlin", "", None])
+def test_tzutil_normalize_invalid_key_does_not_scan_tz_database(monkeypatch, tz_name):
+    monkeypatch.setattr(tzutil.zoneinfo, "available_timezones", _reject_available_timezones)
+    monkeypatch.setattr(tzutil, "tzlocal", None)
+    tz = _NamedTz(tz_name)
+    normalized, is_valid = tzutil.normalize_timezone(tz)
+    assert normalized is tz
+    assert is_valid is False
+
+
+def test_tzutil_normalize_local_fallback_does_not_scan_tz_database(monkeypatch):
+    monkeypatch.setattr(tzutil.zoneinfo, "available_timezones", _reject_available_timezones)
+    monkeypatch.setattr(tzutil, "tzlocal", _FakeTzlocal("Asia/Tokyo"))
+    tz = timezone(timedelta(hours=9))
+    normalized, is_valid = tzutil.normalize_timezone(tz)
+    assert normalized == zoneinfo.ZoneInfo("Asia/Tokyo")
+    assert is_valid is True
+
+
+@pytest.mark.parametrize("local_name", ["Not/A_Zone", "America", "", None])
+def test_tzutil_normalize_invalid_local_fallback_keeps_tz(monkeypatch, local_name):
+    monkeypatch.setattr(tzutil.zoneinfo, "available_timezones", _reject_available_timezones)
+    monkeypatch.setattr(tzutil, "tzlocal", _FakeTzlocal(local_name))
+    tz = timezone(timedelta(hours=9))
+    normalized, is_valid = tzutil.normalize_timezone(tz)
+    assert normalized is tz
+    assert is_valid is False
 
 
 def test_etc_uct_returns_naive_when_tz_mode_naive_utc():
