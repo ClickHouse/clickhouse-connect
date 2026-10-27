@@ -300,11 +300,9 @@ def plan_query_request(
         params["client_protocol_version"] = str(runtime.protocol_version)
     params.update(runtime.settings)
     headers: dict[str, Any] = {}
-    use_form = use_form_encoding(context.final_query, context.bind_params, form_encode_query_params)
-
     if is_columns_only_query(context):
         fmt_json_query = f"{context.final_query}\n FORMAT JSON"
-        if use_form:
+        if use_form_encoding(fmt_json_query, context.bind_params, form_encode_query_params):
             form_values: dict[str, Any] = {"query": fmt_json_query}
             form_values.update(context.bind_params)
             form_files: dict[str, Any] = {}
@@ -328,7 +326,7 @@ def plan_query_request(
     if not context.is_insert:
         fmt = f"\n FORMAT {read_format}"
         final_query = prepped_query + fmt.encode() if isinstance(prepped_query, bytes) else prepped_query + fmt
-    if use_form:
+    if use_form_encoding(final_query, context.bind_params, form_encode_query_params):
         form_values = {"query": final_query}
         form_values.update(context.bind_params)
         form_files = {}
