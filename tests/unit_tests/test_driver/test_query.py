@@ -11,6 +11,7 @@ from clickhouse_connect.driver import query as query_module
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
 from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.httpclient import HttpClient
 from clickhouse_connect.driver.query import QueryContext
 
 
@@ -37,6 +38,51 @@ def test_copy_context():
     assert context_copy.settings["max_execution_time"] == 120
     assert context_copy.settings["max_bytes_for_external_group_by"] == 25165824
     assert context_copy.final_query == "SELECT source_ip FROM table WHERE user_id = 'user_2'"
+
+
+@pytest.mark.parametrize("tz_mode", [None, "naive_utc", "aware", "schema"])
+@pytest.mark.parametrize("override", [None, "naive_utc", "aware", "schema"])
+def test_copy_context_tz_mode_defaults(tz_mode, override):
+    client = HttpClient.__new__(HttpClient)
+    client.server_tz = timezone.utc
+    client._apply_server_tz = True
+    client.tz_mode = "aware"
+    context = client.create_query_context(query="SELECT 13", tz_mode=tz_mode)
+    copy = context.updated_copy(tz_mode=override).updated_copy()
+    copy = client.create_query_context(context=copy)
+    client.tz_mode = "naive_utc"
+    copy = client.create_query_context(context=copy)
+    assert copy.tz_mode == (override or tz_mode or client.tz_mode)
+    assert context.tz_mode == (tz_mode or "aware")
+
+
+@pytest.mark.parametrize("tz_mode", ["naive_utc", "aware", "schema"])
+def test_copy_context_tz_mode_assignment(tz_mode):
+    client = HttpClient.__new__(HttpClient)
+    client.server_tz = timezone.utc
+    client._apply_server_tz = True
+    client.tz_mode = "aware" if tz_mode == "naive_utc" else "naive_utc"
+    context = client.create_query_context(query="SELECT 13")
+    context.tz_mode = tz_mode
+    copy = context.updated_copy().updated_copy()
+    assert client.create_query_context(context=context).tz_mode == tz_mode
+    assert client.create_query_context(context=copy).tz_mode == tz_mode
+
+
+@pytest.mark.parametrize("initial_mode", [None, "aware"])
+@pytest.mark.parametrize("tz_mode", ["naive_utc", "aware", "schema", "naive", "", None])
+def test_query_context_tz_mode_assignment_validation(initial_mode, tz_mode):
+    context = QueryContext(tz_mode=initial_mode)
+    if tz_mode in ("naive_utc", "aware", "schema"):
+        context.tz_mode = tz_mode
+        assert context.tz_mode == tz_mode
+        assert context._tz_mode_explicit
+    else:
+        with pytest.raises(ProgrammingError) as error:
+            context.tz_mode = tz_mode
+        assert str(error.value) == f'tz_mode must be "naive_utc", "aware", or "schema", got "{tz_mode}"'
+        assert context.tz_mode == (initial_mode or "naive_utc")
+        assert context._tz_mode_explicit == (initial_mode is not None)
 
 
 @pytest.mark.parametrize(
