@@ -269,7 +269,34 @@ def test_transport_failure_with_native_last_message_does_not_leak_binary_data():
     context.show_clickhouse_errors = True
     with pytest.raises(StreamFailureError) as ex:
         NativeTransform.parse_response(FailedSource(), context)
-    assert str(ex.value) == "unrecognized data found in stream: `" + "ff" * 16 + "`"
+    assert str(ex.value) == "Stream failed during read (connection closed by server)"
+
+
+@pytest.mark.parametrize("client_mode", ["sync", "async"])
+@pytest.mark.parametrize("mode", [True, "scrub", False])
+def test_transport_failure_after_result_data_uses_connection_drop_message(client_mode, mode):
+    if client_mode == "sync":
+        transport_error = OperationalError("transport failed")
+    else:
+        aiohttp = pytest.importorskip("aiohttp")
+        transport_error = aiohttp.ClientPayloadError("Response payload is not completed")
+
+    class FailedSource:
+        # The buffered chunk holds Native result data received before the connection dropped.
+        last_message = bytes(range(256)) * 4
+
+        def read_leb128(self):
+            raise transport_error
+
+        def close(self):
+            pass
+
+    context = QueryContext()
+    context.show_clickhouse_errors = mode
+    with pytest.raises(StreamFailureError) as ex:
+        NativeTransform.parse_response(FailedSource(), context)
+    assert str(ex.value) == "Stream failed during read (connection closed by server)"
+    assert ex.value.__cause__ is transport_error
 
 
 def test_existing_stream_failure_preserves_identity_and_metadata():

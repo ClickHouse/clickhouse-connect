@@ -610,3 +610,40 @@ def test_insert_df_retry_on_connection_reset(param_client, call, client_mode, ta
 
         rows = call(param_client.query, "SELECT key, name FROM insert_df_retry_reset ORDER BY key").result_rows
         assert rows == [(13, "user_1"), (79, "user_2")]
+
+
+def _install_truncated_body_mock(client, client_mode, mocker):
+    """Fail every response body read the way each transport reports a connection lost mid-body."""
+    if client_mode == "sync":
+
+        def truncated_request(method, url, **kwargs):
+            raise urllib3.exceptions.ProtocolError(
+                "Connection broken: IncompleteRead(0 bytes read, 13 more expected)", urllib3.exceptions.IncompleteRead(0, 13)
+            )
+
+        mocker.patch.object(client.http, "request", side_effect=truncated_request)
+    else:
+        real_request = client._session.request
+
+        async def truncated_request(*args, **kwargs):
+            response = await real_request(*args, **kwargs)
+            response.read = mocker.AsyncMock(side_effect=aiohttp.ClientPayloadError("Response payload is not completed"))
+            return response
+
+        mocker.patch.object(client._session, "request", side_effect=truncated_request)
+
+
+@pytest.mark.parametrize(
+    "method, statement",
+    [("raw_query", "SELECT 13"), ("command", "SELECT 13"), ("query", "SELECT 13 LIMIT 0")],
+    ids=["raw_query", "command", "columns_only_query"],
+)
+def test_truncated_response_body_raises_operational_error(param_client, call, client_mode, mocker, method, statement):
+    """A connection lost while reading a full response body surfaces as OperationalError from both clients."""
+    _install_truncated_body_mock(param_client, client_mode, mocker)
+
+    with pytest.raises(OperationalError) as excinfo:
+        call(getattr(param_client, method), statement)
+
+    expected_cause = urllib3.exceptions.ProtocolError if client_mode == "sync" else aiohttp.ClientPayloadError
+    assert isinstance(excinfo.value.__cause__, expected_cause)

@@ -15,6 +15,8 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - Tuple serialization now reports non-sequence rows with `DataError` and a row number instead of a raw `TypeError` or `AttributeError`, including `None` rows in dictionary input for a non-nullable named tuple.
 - `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
 - Sync and async clients no longer automatically use form encoding when the final SQL exceeds 128 KiB, avoiding `HTML Form Exception: Field value too long` for large queries with large bound parameters. Explicit form encoding and queries with external data retain their existing limits. Closes [#1105](https://github.com/ClickHouse/clickhouse-connect/issues/1105).
+- The asynchronous client now raises `OperationalError` when the connection drops while `raw_query`, `command`, or a `LIMIT 0` metadata query reads the response body, matching the synchronous client. Previously it leaked `aiohttp.ClientPayloadError`.
+- When the connection drops partway through a streamed query result, the asynchronous client now raises `StreamFailureError: Stream failed during read (connection closed by server)`, matching the synchronous client. Previously, with `show_clickhouse_errors=True`, it reported the buffered result bytes as `unrecognized data found in stream: <hex>`. ClickHouse errors written into the response before the drop are still reported.
 
 ## 1.11.0, 2026-10-16
 
