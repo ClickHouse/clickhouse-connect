@@ -151,6 +151,22 @@ def test_pandas_low_card(param_client: Client, call, table_context: Callable):
         assert df.equals(source_df)
 
 
+@pytest.mark.parametrize("row_count", [1, 13])
+@pytest.mark.parametrize("expression", ["13", "number % 3", "number"])
+def test_pandas_numeric_low_card(param_client: Client, call, consume_stream, row_count, expression):
+    query = f"SELECT toLowCardinality(toInt32({expression})) AS v FROM numbers({row_count})"
+    expected = [13 if expression == "13" else x % 3 if expression == "number % 3" else x for x in range(row_count)]
+    settings = {"max_block_size": 4, "max_threads": 1}
+    df = call(param_client.query_df, query, settings=settings)
+    assert df["v"].tolist() == expected
+
+    blocks = []
+    consume_stream(call(param_client.query_df_stream, query, settings=settings), blocks.append)
+    if row_count > 4:
+        assert len(blocks) > 1
+    assert pd.concat(blocks, ignore_index=True)["v"].tolist() == expected
+
+
 def test_pandas_large_types(param_client: Client, call, table_context: Callable):
     columns = ["key String", "value Int256", "u_value UInt256"]
     key2_value = 30000000000000000000000000000000000
@@ -241,6 +257,15 @@ def test_pandas_streams(param_client: Client, call, consume_stream):
         consume_stream(stream, process)
         assert row_count == query_rows
         assert stream_count > 2
+
+
+def test_pandas_limit_zero(param_client: Client, call, consume_stream):
+    query = "SELECT 1 AS column1, 'x' AS s LIMIT 0"
+    assert call(param_client.query_df, query).empty
+
+    blocks = []
+    consume_stream(call(param_client.query_df_stream, query), blocks.append)
+    assert blocks == []
 
 
 def test_pandas_date(param_client: Client, call, table_context: Callable):
