@@ -1,4 +1,6 @@
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping, Sequence
+from functools import partial
+from types import MethodType
 from typing import Any, cast
 
 import sqlalchemy.schema as sa_schema
@@ -7,13 +9,18 @@ from sqlalchemy import __version__ as sa_version
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.default import DefaultDialect
 from sqlalchemy.exc import NoResultFound, NoSuchTableError
+from sqlalchemy.sql import operators, visitors
 from sqlalchemy.sql.dml import Insert
+from sqlalchemy.sql.elements import ClauseElement, ColumnClause, TextClause
+from sqlalchemy.sql.functions import FunctionElement
+from sqlalchemy.sql.selectable import CompoundSelect, SelectStatementGrouping
 from sqlalchemy.sql.sqltypes import TupleType, TypeEngine
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy import dialect_name, ischema_names
 from clickhouse_connect.cc_sqlalchemy._schema import COLUMN_OPTIONS, TABLE_OPTIONS
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import (
+    ChSqlaType,
     _datetime64_bind_signature,
     _datetime64_query_value,
     _DateTime64QuerySignature,
@@ -32,7 +39,7 @@ from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.compiler import ChStatementCompiler
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ChDDLCompiler
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
-from clickhouse_connect.dbapi.cursor import Cursor, _NativeInsertPlan
+from clickhouse_connect.dbapi.cursor import _CURSOR_EXECUTE, Cursor, _NativeInsertPlan
 from clickhouse_connect.driver.binding import quote_identifier
 
 _MISSING = object()
@@ -117,6 +124,77 @@ class ClickHouseDialect(DefaultDialect):
         if compiled is None:
             return True
         return bool(getattr(compiled.preparer, "_double_percents", True))
+
+    @staticmethod
+    def _ch_result_columns(context: Any) -> tuple[str, ...] | None:
+        compiled = getattr(context, "compiled", None)
+        if compiled is None:
+            return None
+        result_columns = getattr(compiled, "_result_columns", None)
+        if (
+            not result_columns
+            or not getattr(compiled, "_ordered_columns", False)
+            or getattr(compiled, "_textual_ordered_columns", False)
+            or getattr(compiled, "_ad_hoc_textual", False)
+        ):
+            return None
+        names = tuple(column[0] for column in result_columns)
+        if len(names) != len(set(names)):
+            return None
+        statement = getattr(getattr(compiled, "compile_state", None), "statement", None)
+        while isinstance(statement, (CompoundSelect, SelectStatementGrouping)):
+            statement = statement.selects[0] if isinstance(statement, CompoundSelect) else statement.element
+        if (
+            statement is None
+            or getattr(statement, "_prefixes", False)
+            or getattr(statement, "_suffixes", False)
+            or any(name in ("*", compiled.dialect.name) for name, _ in getattr(statement, "_statement_hints", ()))
+        ):
+            return None
+        # SQLAlchemy's positional mapping requires one server column per compiled expression.
+        for column in result_columns:
+            # Custom processors may require the server's type code, even for empty results.
+            processor = column[3].dialect_impl(compiled.dialect).result_processor
+            if type(processor) is not MethodType or processor.__func__ not in (
+                TypeEngine.result_processor,
+                String.result_processor,
+                ChSqlaType.result_processor,
+            ):
+                return None
+            pending = list(column[2])
+            seen: set[int] = set()
+            while pending:
+                obj = pending.pop()
+                if not isinstance(obj, ClauseElement):
+                    continue
+                if id(obj) in seen:
+                    continue
+                seen.add(id(obj))
+                for element in visitors.iterate(obj):
+                    if isinstance(element, TextClause) or isinstance(element, ColumnClause) and element.is_literal:
+                        return None
+                    if getattr(getattr(element, "name", None), "quote", None) is False:
+                        return None
+                    if isinstance(getattr(element, "operator", None), operators.custom_op):
+                        return None
+                    if isinstance(element, FunctionElement):
+                        name = getattr(element, "name", None)
+                        if not isinstance(name, str) or name.casefold() in ("untuple", "columns"):
+                            return None
+                    if isinstance(element, ColumnClause):
+                        pending.extend(proxy for proxy in element.proxy_set if proxy is not element)
+        return names
+
+    def _ch_result_column_provider(self, cursor: Cursor, statement: str, context: Any) -> Callable[[], Sequence[str] | None] | None:
+        execute = cursor.execute
+        if (
+            isinstance(cursor, Cursor)
+            and type(execute) is MethodType
+            and execute.__func__ is _CURSOR_EXECUTE
+            and statement == getattr(context, "statement", None)
+        ):
+            return partial(self._ch_result_columns, context)
+        return None
 
     @staticmethod
     def _ch_native_insert_plan(context: Any, settings: dict[str, Any] | None) -> _NativeInsertPlan | None:
@@ -294,7 +372,9 @@ class ClickHouseDialect(DefaultDialect):
         ch_cursor = cast(Cursor, cursor)
         if parameters:
             parameters = self._ch_datetime64_parameters(parameters, self._ch_datetime64_parameter_plan(context))
-        if self._ch_internal_query(context):
+        internal = self._ch_internal_query(context)
+        result_columns = self._ch_result_column_provider(ch_cursor, statement, context)
+        if internal or result_columns is not None:
             Cursor._execute(
                 ch_cursor,
                 statement,
@@ -302,7 +382,8 @@ class ClickHouseDialect(DefaultDialect):
                 settings=self._ch_query_settings(context),
                 query_formats=self._ch_query_formats(context),
                 pyformat_encoded=self._ch_pyformat_encoded(context),
-                internal=True,
+                internal=internal,
+                result_columns=result_columns,
             )
         else:
             ch_cursor.execute(
@@ -335,14 +416,17 @@ class ClickHouseDialect(DefaultDialect):
 
     def do_execute_no_params(self, cursor, statement, context=None):
         ch_cursor = cast(Cursor, cursor)
-        if self._ch_internal_query(context):
+        internal = self._ch_internal_query(context)
+        result_columns = self._ch_result_column_provider(ch_cursor, statement, context)
+        if internal or result_columns is not None:
             Cursor._execute(
                 ch_cursor,
                 statement,
                 settings=self._ch_query_settings(context),
                 query_formats=self._ch_query_formats(context),
                 pyformat_encoded=self._ch_pyformat_encoded(context),
-                internal=True,
+                internal=internal,
+                result_columns=result_columns,
             )
         else:
             ch_cursor.execute(

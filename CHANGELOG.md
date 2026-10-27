@@ -7,6 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- Eligible compiled SQLAlchemy Core and ORM queries now skip the second `LIMIT 0` query for empty results and preserve result keys. The synthesized DB-API descriptions report `None` for `type_code` and `null_ok`. Plain DB-API and textual queries, raw SQL projections or modifiers, server-expanded columns, custom result processors, rewritten statements, and cursor `execute` wrappers retain the `LIMIT 0` metadata fallback. Closes [#1108](https://github.com/ClickHouse/clickhouse-connect/issues/1108).
 - The Python codec now decodes `Nullable(Tuple(...))` correctly, preserving NULL tuples and non-NULL values, including nested tuples and tuple read formats. Closes [#1102](https://github.com/ClickHouse/clickhouse-connect/issues/1102).
 - The Python codec now decodes `Nullable(Point)` columns, returning `None` for NULL points. Previously the decoder read the NULL map as point data and the query failed.
 - With the Rust codec, `query_column_block_stream` now returns unnamed `Nullable(Tuple(...))` columns, including `Nullable(Tuple())`, as lists instead of tuples, matching the Python codec. Row results are unchanged.
