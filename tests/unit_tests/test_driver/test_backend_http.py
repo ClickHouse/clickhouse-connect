@@ -25,6 +25,7 @@ from clickhouse_connect.driver._backend.httpcommon import (
     plan_raw_query_request,
 )
 from clickhouse_connect.driver._backend.models import Capabilities, QueryRuntime
+from clickhouse_connect.driver.binding import MAX_FORM_QUERY_BYTES, MAX_URL_BIND_PARAM_LENGTH
 from clickhouse_connect.driver.exceptions import InternalError, OperationalError, ProgrammingError
 from tests.helpers import run_in_new_loop
 
@@ -69,6 +70,35 @@ def plan(context, runtime=RUNTIME, **overrides):
     }
     kwargs.update(overrides)
     return plan_query_request(context, runtime, **kwargs)
+
+
+@pytest.mark.parametrize("query_bytes", [130_500, MAX_FORM_QUERY_BYTES, MAX_FORM_QUERY_BYTES + 1])
+@pytest.mark.parametrize("path", ["query", "limited", "probe", "raw"])
+def test_auto_form_encoding_measures_final_query(query_bytes, path):
+    bind_params = {"param_p": "x" * (MAX_URL_BIND_PARAM_LENGTH + 1)}
+    suffix = {
+        "query": "\n FORMAT Native",
+        "limited": "\n LIMIT 13\n FORMAT Native",
+        "probe": " LIMIT 0\n FORMAT JSON",
+        "raw": "",
+    }[path]
+    query = "SELECT 13" + " " * (query_bytes - len("SELECT 13") - len(suffix))
+    expected_query = query + suffix
+    if path == "raw":
+        result = plan_raw_query_request(query, bind_params, None, RUNTIME, False, None)
+    else:
+        final_query = query + " LIMIT 0" if path == "probe" else query
+        prepped_query = query + "\n LIMIT 13" if path == "limited" else final_query
+        result = plan(make_context(final_query=final_query, bind_params=bind_params), prepped_query=prepped_query)
+
+    if query_bytes <= MAX_FORM_QUERY_BYTES:
+        assert result.form_values == {"query": expected_query, **bind_params}
+        assert result.body is None
+        assert "param_p" not in result.params
+    else:
+        assert result.form_values is None
+        assert result.body == expected_query
+        assert result.params["param_p"] == bind_params["param_p"]
 
 
 class TestMainPathPlan:
