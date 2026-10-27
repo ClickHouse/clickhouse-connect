@@ -16,6 +16,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - `Decimal256(S)` now resolves to the supported precision of 76 instead of 79. Explicit Decimal256 type names now produce valid Native insert headers, and SQLAlchemy Decimal256 types report the correct precision.
 - Sync and async clients no longer automatically use form encoding when the final SQL exceeds 128 KiB, avoiding `HTML Form Exception: Field value too long` for large queries with large bound parameters. Explicit form encoding and queries with external data retain their existing limits. Closes [#1105](https://github.com/ClickHouse/clickhouse-connect/issues/1105).
 
+### Improvements
+
+- `AsyncClient.query_rows_stream` now reads each result block in the executor once and yields its rows on the event loop. Previously it made one executor call per row, so streaming rows asynchronously was far slower than the synchronous `query_rows_stream`.
+
 ## 1.11.0, 2026-10-16
 
 ### Bug Fixes

@@ -5,7 +5,7 @@ import ipaddress
 import logging
 import struct
 import sys
-from collections.abc import Callable, Generator, MutableSequence, Sequence
+from collections.abc import Callable, Generator, Iterator, MutableSequence, Sequence
 from io import IOBase
 from typing import Any, Literal, Protocol
 
@@ -320,6 +320,9 @@ class SliceView(Sequence):
         return True
 
 
+_END_OF_BLOCK = object()
+
+
 class StreamContext:
     """
     Wraps a generator and its "source" in a Context.  This ensures that the source will be "closed" even if the
@@ -327,12 +330,16 @@ class StreamContext:
     asynchronous usage.
     """
 
-    __slots__ = "source", "gen", "_in_context"
+    __slots__ = "source", "gen", "_in_context", "_block_gen", "_block_rows"
 
-    def __init__(self, source: Closable | IOBase, gen: Generator):
+    def __init__(self, source: Closable | IOBase, gen: Generator, block_gen: Generator | None = None):
         self.source = source
         self.gen = gen
         self._in_context = False
+        # Set when gen yields the rows of block_gen one by one.  Async iteration then reads whole blocks
+        # in the executor and yields their rows on the event loop, instead of one executor call per row
+        self._block_gen = block_gen
+        self._block_rows: Iterator = iter(())
 
     def __iter__(self):
         return self
@@ -351,7 +358,8 @@ class StreamContext:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._in_context = False
         self.source.close()
-        self.gen = None
+        self.gen = self._block_gen = None
+        self._block_rows = iter(())
 
     def __aiter__(self):
         return self
@@ -363,24 +371,34 @@ class StreamContext:
             if hasattr(self.gen, "__anext__"):
                 return await self.gen.__anext__()
 
-            def _next_wrapper():
+            def _next_wrapper(gen: Generator):
                 try:
-                    return True, self.gen.__next__()
+                    return True, gen.__next__()
                 except StopIteration:
                     return False, None
 
             loop = asyncio.get_running_loop()
-            has_value, value = await loop.run_in_executor(None, _next_wrapper)
-            if not has_value:
-                raise StopAsyncIteration from None
-            return value
+            if self._block_gen is None:
+                has_value, value = await loop.run_in_executor(None, _next_wrapper, self.gen)
+                if not has_value:
+                    raise StopAsyncIteration from None
+                return value
+            row = next(self._block_rows, _END_OF_BLOCK)
+            while row is _END_OF_BLOCK:
+                has_block, block = await loop.run_in_executor(None, _next_wrapper, self._block_gen)
+                if not has_block:
+                    raise StopAsyncIteration from None
+                self._block_rows = iter(block)
+                row = next(self._block_rows, _END_OF_BLOCK)
+            return row
         except (StopAsyncIteration, StopIteration):
             raise StopAsyncIteration from None
         except Exception as ex:
             if not isinstance(ex, StreamClosedError):
                 self._in_context = False
                 await _close_async(self.source)
-                self.gen = None
+                self.gen = self._block_gen = None
+                self._block_rows = iter(())
             raise ex
 
     async def __aenter__(self):
@@ -394,7 +412,8 @@ class StreamContext:
         try:
             await _close_async(self.source)
         finally:
-            self.gen = None
+            self.gen = self._block_gen = None
+            self._block_rows = iter(())
 
 
 def get_rename_method(method: str | None) -> Callable[[str], str] | None:
