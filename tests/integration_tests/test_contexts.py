@@ -41,3 +41,33 @@ def test_insert_context_data_cleared_on_failure(param_client: Client, call, tabl
             call(param_client.insert, context=insert_context)
 
         assert insert_context.data is None
+
+
+def test_query_context_call_overrides(param_client: Client, call):
+    query_context = param_client.create_query_context(query="SELECT {v:UInt32} AS v", parameters={"v": 13})
+
+    result = call(param_client.query, context=query_context, parameters={"v": 79})
+    assert result.result_rows == [(79,)]
+
+    result = call(param_client.query, context=query_context, query="SELECT getSetting('max_threads') AS t", settings={"max_threads": 1})
+    assert result.result_rows == [(1,)]
+
+    assert query_context.parameters == {"v": 13}
+    assert call(param_client.query, context=query_context).result_rows == [(13,)]
+
+
+def test_query_context_keeps_tz_mode(param_client: Client, call):
+    query_context = param_client.create_query_context(query="SELECT toDateTime('2024-01-01 00:00:00', 'UTC')", tz_mode="aware")
+
+    result = call(param_client.query, context=query_context)
+    assert result.result_rows[0][0].tzinfo is not None
+
+
+def test_query_context_command(param_client: Client, call, client_mode):
+    table = f"test_query_context_command_{client_mode}"
+    query_context = param_client.create_query_context(query="CREATE TABLE {t:Identifier} (x UInt8) ENGINE Memory", parameters={"t": table})
+    try:
+        call(param_client.query, context=query_context)
+        assert call(param_client.command, f"EXISTS TABLE {table}") == 1
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {table}")

@@ -457,7 +457,7 @@ class Client(ABC):
         query_context = self.create_query_context(**kwargs)
         if query_context.is_command:
             response = self.command(
-                cast(str, query),
+                cast(str, query_context.query),
                 parameters=query_context.parameters,
                 settings=query_context.settings,
                 external_data=query_context.external_data,
@@ -810,7 +810,7 @@ class Client(ABC):
                 max_str_len=max_str_len,
                 query_tz=query_tz,
                 column_tzs=column_tzs,
-                tz_mode=resolved_tz_mode,
+                tz_mode=tz_mode,
                 as_pandas=as_pandas,
                 use_extended_dtypes=use_extended_dtypes,
                 streaming=streaming,
