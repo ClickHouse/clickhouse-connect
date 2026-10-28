@@ -420,13 +420,7 @@ class QueryResult(Closable):
 
     @property
     def rows_stream(self) -> StreamContext:
-        row_blocks = self._row_block_stream()
-
-        def stream():
-            for block in row_blocks:
-                yield from block
-
-        return StreamContext(self, stream(), row_blocks)
+        return StreamContext(self, self._row_block_stream(), row_stream=True)
 
     def named_results(self) -> Generator[dict, None, None]:
         for row in zip(*self.result_set) if self.column_oriented else self.result_set:

@@ -33,9 +33,6 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - `query_np`, `query_df`, `query_np_stream`, and `query_df_stream` no longer raise `AttributeError` for a query that ends in `LIMIT 0`. They now return an empty result, the same as a query that matches no rows. Related to [#257](https://github.com/ClickHouse/clickhouse-connect/issues/257). Empty results still don't include column names.
 - `query_np` now returns one row per result row when every column is returned as Python objects and some values are lists or tuples, for example a single `Array` or `Tuple` column. Previously numpy unpacked those values into extra dimensions, so `SELECT [number, number + 1, number + 2] FROM numbers(2)` came back with shape `(3, 2, 1)` instead of `(2, 1)`. This also fixes a concatenation error for nested `Array` or `Tuple` results spread across multiple blocks.
 - `query_np` and `query_df` now return every row of a numeric `LowCardinality` column, such as `LowCardinality(Int32)`. Previously the column was cut to the size of its dictionary, so 1000 rows with 300 distinct values came back as 300 rows, and a block with fewer rows than dictionary entries raised `ValueError: iterator too short`.
-
-### Improvements
-
 - `AsyncClient.query_rows_stream` now reads each result block in the executor once and yields its rows on the event loop. Previously it made one executor call per row, so streaming rows asynchronously was far slower than the synchronous `query_rows_stream`.
 
 ## 1.11.0, 2026-10-16
