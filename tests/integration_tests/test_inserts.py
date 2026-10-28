@@ -608,3 +608,39 @@ def test_insert_query_id_is_not_shared_with_describe(
     assert rows[0][0] == "Describe"
     assert rows[0][1] and rows[0][1] not in (default_query_id, insert_query_id)
     assert rows[1] == ("Insert", insert_query_id)
+
+
+@pytest.mark.parametrize("enum_name, last_code", [("Enum8", 13), ("Enum16", 300)])
+@pytest.mark.parametrize(
+    "wrapper, wrap_value, leaf",
+    [
+        ("{}", lambda name: name, "e"),
+        ("Nullable({})", lambda name: name, "e"),
+        ("Array({})", lambda name: [name], "e[1]"),
+        ("Tuple({}, String)", lambda name: (name, "user_1"), "e.1"),
+        ("Array(Tuple({}, String))", lambda name: [(name, "user_1")], "e[1].1"),
+    ],
+)
+def test_insert_enum_names_with_backslash_escapes(
+    param_client: Client, call, table_context: Callable, enum_name, last_code, wrapper, wrap_value, leaf
+):
+    names = ["unknown", "c\\d", "end\\", "tab\there", "q'x", "t\tn\nr\rb\bf\fz\0", r"literal\n\b\f\0", "雪"]
+    codes = [0, -1, 2, 3, 4, 5, 6, last_code]
+    enum_type = (
+        rf"{enum_name}('unknown' = 0, 'c\\d' = -1, 'end\\' = 2, 'tab\there' = 3, "
+        rf"'q\'x' = 4, 't\tn\nr\rb\bf\fz\0' = 5, 'literal\\n\\b\\f\\0' = 6, '雪' = {last_code})"
+    )
+    values = [wrap_value(name) for name in names]
+    if wrapper == "Nullable({})":
+        values.append(None)
+    elif wrapper.startswith("Array"):
+        values.append([])
+    with table_context("test_enum_backslash", ["id UInt8", f"e {wrapper.format(enum_type)}"]):
+        call(param_client.insert, "test_enum_backslash", list(enumerate(values)))
+        result = call(param_client.query, "SELECT e FROM test_enum_backslash ORDER BY id")
+        assert result.result_rows == [(value,) for value in values]
+        result = call(
+            param_client.query,
+            f"SELECT toString({leaf}), toInt16({leaf}) FROM test_enum_backslash WHERE id < {len(names)} ORDER BY id",
+        )
+        assert result.result_rows == list(zip(names, codes))

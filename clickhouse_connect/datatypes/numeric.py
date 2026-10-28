@@ -11,6 +11,7 @@ from clickhouse_connect.driver import options
 from clickhouse_connect.driver.common import array_type, decimal_prec, decimal_size, first_value, write_array
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.parser import escape_enum_key
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
 
@@ -332,7 +333,7 @@ class Enum(ClickHouseType):
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        escaped_keys = [key.replace("'", "\\'") for key in type_def.keys]
+        escaped_keys = [escape_enum_key(key) for key in type_def.keys]
         self._name_map = dict(zip(type_def.keys, type_def.values))
         self._int_map = dict(zip(type_def.values, type_def.keys))
         val_str = ", ".join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
