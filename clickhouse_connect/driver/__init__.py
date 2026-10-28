@@ -22,6 +22,7 @@ _BOOL_OPTIONS = frozenset(
     {
         "autogenerate_query_id",
         "autogenerate_session_id",
+        "dedicated_pool",
         "form_encode_query_params",
     }
 )
@@ -310,6 +311,8 @@ def create_client(
       is True, the client will generate a UUID1 session id
     :param pool_mgr: Optional urllib3 PoolManager for this client.  Useful for creating separate connection
       pools for multiple client endpoints for applications with many clients
+    :param dedicated_pool: Create a separate connection pool owned and closed by this client. Default: False.
+      Cannot be combined with pool_mgr.
     :param http_proxy: http proxy address.  Equivalent to setting the HTTP_PROXY environment variable
     :param https_proxy: https proxy address.  Equivalent to setting the HTTPS_PROXY environment variable
     :param server_host_name: This is the server host name that will be checked against a TLS certificate for
@@ -475,6 +478,8 @@ async def create_async_client(
       is not included the Client Certificate key file
     :param session_id: ClickHouse session id.  If not specified and the common setting 'autogenerate_session_id'
       is True, the client will generate a UUID1 session id
+    :param dedicated_pool: Accepted for compatibility. Async clients always own a separate connection pool,
+      regardless of this option.
     :param http_proxy: http proxy address.  Equivalent to setting the HTTP_PROXY environment variable
     :param https_proxy: https proxy address.  Equivalent to setting the HTTPS_PROXY environment variable
     :param server_host_name: This is the server host name that will be checked against a TLS certificate for
