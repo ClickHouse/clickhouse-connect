@@ -111,11 +111,15 @@ class HttpClient(SyncBackendClient):
         rename_response_column: str | None = None,
         headers: dict[str, str] | None = None,
         native_codec: NativeCodec | None = None,
+        *,
+        dedicated_pool: bool = False,
     ):
         """
         Create an HTTP ClickHouse Connect client
         See clickhouse_connect.get_client for parameters
         """
+        if dedicated_pool and pool_mgr is not None:
+            raise ProgrammingError("dedicated_pool cannot be used with pool_mgr")
         proxy_path = proxy_path.lstrip("/")
         if proxy_path:
             proxy_path = "/" + proxy_path
@@ -153,7 +157,10 @@ class HttpClient(SyncBackendClient):
             if not pool:
                 if not http_proxy:
                     http_proxy = check_env_proxy("http", host, port)
-                if http_proxy:
+                if dedicated_pool:
+                    pool = owned_pool = get_pool_manager(http_proxy=http_proxy)
+                    self._owns_pool_manager = True
+                elif http_proxy:
                     pool = get_proxy_manager(host, http_proxy)
                 else:
                     pool = default_pool_manager()

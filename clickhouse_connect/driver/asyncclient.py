@@ -183,9 +183,12 @@ class AsyncClient(Client):
         rename_response_column: str | None = None,
         headers: dict[str, str] | None = None,
         native_codec: NativeCodec | None = None,
+        *,
+        dedicated_pool: bool = False,
     ):
         """
         Async HTTP Client using aiohttp. Initialization is handled via _initialize().
+        dedicated_pool is accepted for compatibility; each client owns its connector.
         """
         proxy_path = proxy_path.lstrip("/")
         if proxy_path:
