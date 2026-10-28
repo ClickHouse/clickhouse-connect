@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import aiohttp
 import pytest
 
+from clickhouse_connect.driver import options
 from clickhouse_connect.driver._backend import http_async
 from clickhouse_connect.driver._backend.http_async import HttpAsyncBackend, SessionLease, _one_shot
 from clickhouse_connect.driver._backend.httpcommon import QueryRequestPlan
@@ -359,6 +360,41 @@ class _FailingTransform:
 
     def parse_response(self, source, context) -> QueryResult:
         raise self.error
+
+
+@pytest.mark.parametrize("result_mode", ["pandas", "streaming"])
+@pytest.mark.asyncio
+async def test_query_context_preserves_result_mode_with_overrides(result_mode):
+    client = AsyncClient(interface="http", host="localhost", port=8123)
+    source = _StaticSource()
+    client._backend.execute_query = AsyncMock(return_value=QueryExecution(source=source))
+
+    def parse_response(source, context):
+        def blocks():
+            yield [[context.parameters["v"]]]
+
+        if context.use_numpy:
+            options.check_numpy()
+            options.check_pandas()
+            return NumpyResult(block_gen=blocks(), column_names=("value",), d_types=("i8",))
+        return QueryResult(block_gen=blocks(), column_names=("value",))
+
+    client._transform = Mock(parse_response=parse_response)
+    context = client.create_query_context(
+        query="SELECT {v:UInt8} AS value",
+        parameters={"v": 13},
+        use_numpy=result_mode == "pandas",
+        as_pandas=result_mode == "pandas",
+        streaming=result_mode == "streaming",
+    )
+    result = await client.query(context=context, parameters={"v": 79})
+
+    if result_mode == "pandas":
+        assert result.df_result.iloc[0, 0] == 79
+    else:
+        async with result.rows_stream as stream:
+            assert [row async for row in stream] == [(79,)]
+    assert context.parameters == {"v": 13}
 
 
 @pytest.mark.asyncio

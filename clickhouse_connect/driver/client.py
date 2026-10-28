@@ -53,6 +53,7 @@ from clickhouse_connect.driver.exceptions import (
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.models import SettingDef, SettingStatus, setting_status
+from clickhouse_connect.driver.npquery import NumpyResult
 from clickhouse_connect.driver.options import (
     check_arrow,
     check_numpy,
@@ -372,6 +373,8 @@ class Client(ABC):
                     logger.debug("Failed to rename col '%s'. Skipping rename. Error: %s", name, e)
             names.append(name)
             types.append(get_from_name(col["type"]))
+        if context.use_numpy:
+            return cast(QueryResult, NumpyResult(None, tuple(names), tuple(types)))
         return QueryResult([], None, tuple(names), tuple(types))  # type: ignore[arg-type]
 
     def _check_tz_change(self, new_tz) -> tzinfo | None:
@@ -454,7 +457,7 @@ class Client(ABC):
         query_context = self.create_query_context(**kwargs)
         if query_context.is_command:
             response = self.command(
-                cast(str, query),
+                cast(str, query_context.query),
                 parameters=query_context.parameters,
                 settings=query_context.settings,
                 external_data=query_context.external_data,
@@ -791,9 +794,9 @@ class Client(ABC):
         :param transport_settings: Optional dictionary of transport level settings (HTTP headers, etc.)
         :return: Reusable QueryContext
         """
-        resolved_tz_mode = tz_mode if tz_mode is not None else self.tz_mode
         if context:
-            return context.updated_copy(
+            explicit = tz_mode is not None or context._tz_mode_explicit
+            copy = context.updated_copy(
                 query=query,
                 parameters=parameters,
                 settings=settings,
@@ -807,20 +810,23 @@ class Client(ABC):
                 max_str_len=max_str_len,
                 query_tz=query_tz,
                 column_tzs=column_tzs,
-                tz_mode=resolved_tz_mode,
+                tz_mode=tz_mode if explicit else self.tz_mode,
                 as_pandas=as_pandas,
                 use_extended_dtypes=use_extended_dtypes,
                 streaming=streaming,
                 external_data=external_data,
                 transport_settings=transport_settings,
             )
+            copy._tz_mode_explicit = explicit
+            return copy
+        resolved_tz_mode = tz_mode if tz_mode is not None else self.tz_mode
         if use_numpy and max_str_len is None:
             max_str_len = 0
         if use_extended_dtypes is None:
             use_extended_dtypes = use_na_values
         if as_pandas and use_extended_dtypes is None:
             use_extended_dtypes = True
-        return QueryContext(
+        context = QueryContext(
             query=cast(str | bytes, query),
             parameters=parameters,
             settings=settings,
@@ -842,6 +848,8 @@ class Client(ABC):
             external_data=external_data,
             transport_settings=transport_settings,
         )
+        context._tz_mode_explicit = tz_mode is not None
+        return context
 
     def query_arrow(
         self,

@@ -631,6 +631,51 @@ def test_execute_empty_with_query_fetches_metadata():
     )
 
 
+def test_execute_empty_uses_compiled_result_columns_without_metadata_probe():
+    client = Mock()
+    client.query.return_value = create_mock_query_result([])
+    cursor = Cursor(client)
+
+    cursor._execute("SELECT value_1 WHERE 0", result_columns=("value_1",))
+
+    assert cursor.description == [("value_1", None, None, None, None, None, None)]
+    assert cursor.fetchall() == []
+    assert cursor.rowcount == 0
+    client.query.assert_called_once()
+
+
+@pytest.mark.parametrize("columns", [None, ("value_1",)])
+def test_execute_empty_resolves_result_columns_provider_once(columns):
+    client = Mock()
+    client.query.side_effect = [
+        create_mock_query_result([]),
+        create_mock_query_result([], column_names=["value_1"], column_types=[SimpleNamespace(name="UInt64")]),
+    ]
+    provider = Mock(return_value=columns)
+    cursor = Cursor(client)
+
+    cursor._execute("SELECT value_1 WHERE 0", result_columns=provider)
+
+    provider.assert_called_once_with()
+    assert cursor.names == ["value_1"]
+    assert cursor.types == (["UInt64"] if columns is None else [None])
+    assert client.query.call_count == (2 if columns is None else 1)
+
+
+@pytest.mark.parametrize("rows", [[], [(13,)]])
+def test_execute_preserves_server_metadata_with_compiled_result_columns(rows):
+    client = Mock()
+    client.query.return_value = create_mock_query_result(rows, column_names=["server_value"], column_types=[SimpleNamespace(name="UInt64")])
+    cursor = Cursor(client)
+    provider = Mock(side_effect=AssertionError("Result column provider must not run when server metadata is available"))
+
+    cursor._execute("SELECT 13", result_columns=provider)
+
+    assert cursor.description == [("server_value", "UInt64", None, None, None, None, False)]
+    provider.assert_not_called()
+    client.query.assert_called_once()
+
+
 @pytest.mark.parametrize(
     "type_code, expected_null_ok",
     [
