@@ -1,4 +1,6 @@
+import asyncio
 import threading
+from itertools import islice
 
 import pytest
 
@@ -145,6 +147,39 @@ def test_row_stream(param_client, call, consume_stream):
         consume_stream(stream, lambda x: None)
 
     assert total == 49995000
+
+
+@pytest.mark.parametrize("native_codec", ["python", "rust_strict"])
+@pytest.mark.parametrize("consumption", ["mixed", "concurrent"])
+def test_row_stream_shared_cursor(client_factory, call, shared_loop, native_codec, consumption):
+    if native_codec == "rust_strict":
+        pytest.importorskip("_ch_core")
+    client = client_factory(native_codec=native_codec)
+    stream = call(
+        client.query_rows_stream,
+        "SELECT number FROM numbers(160)",
+        settings={"max_block_size": 8, "max_threads": 1},
+    )
+    rows = []
+
+    async def consume():
+        async for row in stream:
+            rows.append(row)
+            await asyncio.sleep(0)
+
+    async def run():
+        async with stream:
+            if consumption == "concurrent":
+                await asyncio.gather(consume(), consume())
+            else:
+                rows.append(await anext(stream))
+                rows.extend(await asyncio.to_thread(lambda: list(islice(stream, 9))))
+                rows.extend([await anext(stream) for _ in range(17)])
+                rows.extend(await asyncio.to_thread(list, stream))
+
+    shared_loop.run_until_complete(asyncio.wait_for(run(), timeout=10))
+    assert rows == [(value,) for value in range(160)]
+    assert call(client.command, "SELECT 13") == 13
 
 
 def test_column_block_stream(param_client, call, consume_stream):

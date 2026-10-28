@@ -860,6 +860,32 @@ def _promote_datetime64(type_str: str, value):
         return value
 
 
+def _pyformat_bind_names(query: str) -> set[str]:
+    """Read mapping keys using Python percent formatting rules."""
+    names: set[str] = set()
+    index = query.find("%")
+    end = len(query)
+    while index != -1:
+        index += 1
+        if query.startswith("%", index):
+            index += 1
+        elif query.startswith("(", index):
+            start = index + 1
+            index = start
+            depth = 1
+            while index < end and depth:
+                char = query[index]
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                index += 1
+            if depth == 0:
+                names.add(query[start : index - 1])
+        index = query.find("%", index)
+    return names
+
+
 def bind_query(
     query: str,
     parameters: Sequence | dict[str, Any] | None,
@@ -912,18 +938,20 @@ def bind_query(
 
         binary_names = binary_binds.keys()
         matches = _server_bind_matches(query, binary_names)
-        placeholder_names = {name for name, _ in matches}
+        placeholder_names: set[str] | None = None
         final_params = {}
         for k, v in params_copy.items():
             # The _64 suffix is a precision hint, not part of the name, unless the
             # query binds the full name itself.
-            if k.endswith("_64") and k not in placeholder_names:
-                if isinstance(v, datetime):
+            if k.endswith("_64") and (isinstance(v, datetime) or (isinstance(v, list) and len(v) > 0 and isinstance(v[0], datetime))):
+                referenced = False
+                if k in query:
+                    if placeholder_names is None:
+                        placeholder_names = {name for name, _ in matches} if matches else _pyformat_bind_names(query)
+                    referenced = k in placeholder_names
+                if not referenced:
                     k = k[:-3]
-                    v = DT64Param(v)
-                elif isinstance(v, list) and len(v) > 0 and isinstance(v[0], datetime):
-                    k = k[:-3]
-                    v = [DT64Param(x) for x in v]
+                    v = DT64Param(v) if isinstance(v, datetime) else [DT64Param(x) for x in v]
             final_params[k] = v
         if not matches:
             query, bound_params = finalize_query(query, final_params, server_tz), {}

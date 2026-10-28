@@ -55,7 +55,11 @@ def close_managers():
 
 def _close_pool_manager(manager: PoolManager) -> None:
     try:
-        manager.clear()
+        with manager.pools.lock:
+            pools = [manager.pools[key] for key in manager.pools.keys()]
+            manager.clear()
+        for pool in pools:
+            pool.close()
     finally:
         all_managers.pop(manager, None)
 

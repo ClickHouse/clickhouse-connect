@@ -161,6 +161,27 @@ def test_datetime64_params_in_map(param_client: Client, call):
     assert result.first_row[0] == "{'k':'2024-01-02 03:04:05.123456'}"
 
 
+def test_pyformat_64_datetime_params(param_client: Client, call):
+    parameters = {f"stamp_{index}": datetime(2026, 1, 1, 12, 0, index % 60, 250306) for index in range(1, 65)}
+    query = "SELECT " + ", ".join(f"%({name})s" for name in parameters)
+    result = call(param_client.query, query, parameters=parameters)
+    assert result.first_row == tuple(value.strftime("%Y-%m-%d %H:%M:%S") for value in parameters.values())
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT %(dt)s, '%%(dt_64)s'",
+        "SELECT toString({dt:DateTime64(6)}), '%(dt_64)s'",
+    ],
+    ids=["client-side", "server-side"],
+)
+def test_datetime_precision_hint_with_pyformat_literal(param_client: Client, call, query):
+    stamp = datetime(2026, 1, 1, 12, 0, 0, 250306)
+    result = call(param_client.query, query, parameters={"dt_64": stamp})
+    assert result.first_row == ("2026-01-01 12:00:00.250306", "%(dt_64)s")
+
+
 @pytest.mark.skipif(not HAS_TZSET, reason="time.tzset is required")
 def test_naive_datetime_wall_binding_live(param_client: Client, call, monkeypatch):
     original_tz = _force_process_timezone(monkeypatch, NON_UTC_HOST_TZ)

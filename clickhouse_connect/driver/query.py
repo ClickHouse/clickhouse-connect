@@ -127,8 +127,7 @@ class QueryContext(BaseQueryContext):
         self.apply_server_tz = apply_server_tz
         self.external_data = external_data
         self.tz_mode = tz_mode if tz_mode is not None else "naive_utc"
-        if self.tz_mode not in _VALID_TZ_MODES:
-            raise ProgrammingError(f'tz_mode must be "naive_utc", "aware", or "schema", got "{self.tz_mode}"')
+        self._tz_mode_explicit = tz_mode is not None
         if isinstance(query_tz, str):
             try:
                 query_tz = tzutil.resolve_zone(query_tz)
@@ -158,6 +157,17 @@ class QueryContext(BaseQueryContext):
         self._rename_response_column: str | None = rename_response_column
         self.column_renamer = get_rename_method(rename_response_column)
         self._update_query()
+
+    @property
+    def tz_mode(self) -> TzMode:
+        return self._tz_mode
+
+    @tz_mode.setter
+    def tz_mode(self, tz_mode: TzMode) -> None:
+        if tz_mode not in _VALID_TZ_MODES:
+            raise ProgrammingError(f'tz_mode must be "naive_utc", "aware", or "schema", got "{tz_mode}"')
+        self._tz_mode = tz_mode
+        self._tz_mode_explicit = True
 
     @property
     def rename_response_column(self) -> str | None:
@@ -277,6 +287,7 @@ class QueryContext(BaseQueryContext):
             transport_settings=self.transport_settings if transport_settings is None else transport_settings,
             rename_response_column=self.rename_response_column if rename_response_column is None else rename_response_column,
         )
+        copy._tz_mode_explicit = tz_mode is not None or self._tz_mode_explicit
         copy.internal = self.internal
         return copy
 
@@ -409,11 +420,7 @@ class QueryResult(Closable):
 
     @property
     def rows_stream(self) -> StreamContext:
-        def stream():
-            for block in self._row_block_stream():
-                yield from block
-
-        return StreamContext(self, stream())
+        return StreamContext(self, self._row_block_stream(), row_stream=True)
 
     def named_results(self) -> Generator[dict, None, None]:
         for row in zip(*self.result_set) if self.column_oriented else self.result_set:

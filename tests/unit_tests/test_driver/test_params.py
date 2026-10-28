@@ -429,6 +429,74 @@ class TestBindQuerySuffixCollision:
         _, params = bind_query(query, {"dts_64": [self.dt]}, server_tz=self.utc)
         assert params == {"param_dts_64": "['2026-01-01 12:00:00.250306']"}
 
+    @pytest.mark.parametrize("specifier", ["s", "-25s"])
+    @pytest.mark.parametrize("percent_count", [1, 3, 5])
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (dt, "'2026-01-01 12:00:00'"),
+            ([dt], "['2026-01-01 12:00:00']"),
+        ],
+        ids=["scalar", "list"],
+    )
+    def test_pyformat_full_name(self, specifier, percent_count, value, expected):
+        query = "SELECT " + "%" * percent_count + f"(dt_64){specifier}"
+        parameters = {"dt_64": value}
+        q, params = bind_query(query, parameters, server_tz=self.utc)
+        assert q == "SELECT " + "%" * (percent_count // 2) + (expected.ljust(25) if specifier == "-25s" else expected)
+        assert params == {}
+        assert parameters == {"dt_64": value}
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_pyformat_both_names(self, reverse):
+        parameters = {"dt": self.dt, "dt_64": self.dt + timedelta(seconds=13)}
+        if reverse:
+            parameters = dict(reversed(parameters.items()))
+        q, params = bind_query("SELECT %(dt)s, %(dt_64)s", parameters, server_tz=self.utc)
+        assert q == "SELECT '2026-01-01 12:00:00', '2026-01-01 12:00:13'"
+        assert params == {}
+
+    @pytest.mark.parametrize(
+        "query, parameters, expected",
+        [
+            ("SELECT %(dt)s, %(n_64)s", {"dt": dt, "n_64": 13}, "SELECT '2026-01-01 12:00:00', 13"),
+            ("SELECT %(dt)s", {"dt_64": dt}, "SELECT '2026-01-01 12:00:00.250306'"),
+        ],
+        ids=["no_precision_hint", "unreferenced_full_name"],
+    )
+    def test_pyformat_scan_skipped(self, monkeypatch, query, parameters, expected):
+        def fail(_query):
+            raise AssertionError("placeholder scan should not run")
+
+        monkeypatch.setattr("clickhouse_connect.driver.binding._pyformat_bind_names", fail)
+        q, params = bind_query(query, parameters, server_tz=self.utc)
+        assert q == expected
+        assert params == {}
+
+    def test_pyformat_missing_name(self):
+        with pytest.raises(KeyError, match="missing_64"):
+            bind_query("SELECT %(dt_64)s, %(missing_64)s", {"dt_64": self.dt}, server_tz=self.utc)
+
+    @pytest.mark.parametrize("name", ["other(dt)_64", "outer(inner(dt))_64", r"other'\(dt)_64"])
+    def test_pyformat_parenthesized_name(self, name):
+        q, params = bind_query(f"SELECT %({name})s", {name: self.dt}, server_tz=self.utc)
+        assert q == "SELECT '2026-01-01 12:00:00'"
+        assert params == {}
+
+    @pytest.mark.parametrize("name", ["other%(dt_64)", "outer(inner%(dt_64))"])
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (dt, "'2026-01-01 12:00:00.250306'"),
+            ([dt], "['2026-01-01 12:00:00.250306']"),
+        ],
+        ids=["scalar", "list"],
+    )
+    def test_pyformat_nested_key_keeps_precision_hint(self, name, value, expected):
+        q, params = bind_query(f"SELECT %(dt)s, %({name})s", {"dt_64": value, name: 13}, server_tz=self.utc)
+        assert q == f"SELECT {expected}, 13"
+        assert params == {}
+
     def test_suffix_strips_when_stripped_name_is_bound(self):
         query = "SELECT {dt:DateTime64(6)}"
         _, params = bind_query(query, {"dt_64": self.dt}, server_tz=self.utc)
@@ -439,6 +507,33 @@ class TestBindQuerySuffixCollision:
         q, params = bind_query(query, {"dt_64": self.dt}, server_tz=self.utc)
         assert q == "SELECT '2026-01-01 12:00:00.250306'"
         assert params == {}
+
+    def test_pyformat_list_precision_hint(self):
+        q, params = bind_query("SELECT %(dts)s", {"dts_64": [self.dt]}, server_tz=self.utc)
+        assert q == "SELECT ['2026-01-01 12:00:00.250306']"
+        assert params == {}
+
+    @pytest.mark.parametrize("percent_count", [2, 4])
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (dt, "'2026-01-01 12:00:00.250306'"),
+            ([dt], "['2026-01-01 12:00:00.250306']"),
+        ],
+        ids=["scalar", "list"],
+    )
+    def test_pyformat_escaped_name_keeps_precision_hint(self, percent_count, value, expected):
+        query = "SELECT %(dt)s, '" + "%" * percent_count + "(dt_64)s'"
+        q, params = bind_query(query, {"dt_64": value}, server_tz=self.utc)
+        assert q == "SELECT " + expected + ", '" + "%" * (percent_count // 2) + "(dt_64)s'"
+        assert params == {}
+
+    @pytest.mark.parametrize("percent_count", [1, 2, 3, 4, 5])
+    def test_server_binding_ignores_pyformat_text(self, percent_count):
+        query = "SELECT {dt:DateTime64(6)}, '" + "%" * percent_count + "(dt_64)s'"
+        q, params = bind_query(query, {"dt_64": self.dt}, server_tz=self.utc)
+        assert q == query
+        assert params == {"param_dt": "2026-01-01 12:00:00.250306"}
 
 
 class TestBindQueryDollarInParamName:

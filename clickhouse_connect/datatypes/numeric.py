@@ -11,12 +11,25 @@ from clickhouse_connect.driver import options
 from clickhouse_connect.driver.common import array_type, decimal_prec, decimal_size, first_value, write_array
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.parser import escape_enum_key
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
 
 
 class IntBase(ArrayType, registered=False):
     _array_type: str
+
+    def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
+        # Matches _active_null, which only returns pd.NA for pandas results with extended dtypes
+        if not (ctx.use_numpy and ctx.as_pandas and ctx.use_extended_dtypes) or self.read_format(ctx) == "string":
+            return super()._read_nullable_column(source, num_rows, ctx, read_state)
+        # Build the masked array from the NULL map and the NumPy values instead of one Python object per row.
+        # _finalize_column copies it into the column's pandas dtype.
+        np = options.np
+        null_map = np.frombuffer(source.read_bytes(num_rows), dtype=np.bool_)
+        values = self._read_column_binary(source, num_rows, ctx, read_state)
+        # dtype.str maps platform aliases such as "<q" to the sized NumPy type pandas uses for a list of ints
+        return options.pd.arrays.IntegerArray(values.view(values.dtype.str), null_map)
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         if len(column) == 0:
@@ -89,7 +102,9 @@ class UInt64(IntBase):
         arr_type = "q" if fmt == "signed" else "Q"
         return source.read_array(arr_type, num_rows)
 
-    def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any) -> Sequence:
+    def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
+        if ctx.use_numpy and ctx.as_pandas and ctx.use_extended_dtypes:
+            return super()._read_nullable_column(source, num_rows, ctx, read_state)
         return data_conv.read_nullable_array(source, "q" if self.read_format(ctx) == "signed" else "Q", num_rows, self._active_null(ctx))
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
@@ -318,7 +333,7 @@ class Enum(ClickHouseType):
 
     def __init__(self, type_def: TypeDef):
         super().__init__(type_def)
-        escaped_keys = [key.replace("'", "\\'") for key in type_def.keys]
+        escaped_keys = [escape_enum_key(key) for key in type_def.keys]
         self._name_map = dict(zip(type_def.keys, type_def.values))
         self._int_map = dict(zip(type_def.values, type_def.keys))
         val_str = ", ".join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))

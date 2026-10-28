@@ -6,7 +6,7 @@ import ssl
 import sys
 import uuid
 from base64 import b64encode
-from collections.abc import Awaitable, Callable, Generator, Sequence
+from collections.abc import AsyncIterable, Awaitable, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from datetime import tzinfo
@@ -183,9 +183,12 @@ class AsyncClient(Client):
         rename_response_column: str | None = None,
         headers: dict[str, str] | None = None,
         native_codec: NativeCodec | None = None,
+        *,
+        dedicated_pool: bool = False,
     ):
         """
         Async HTTP Client using aiohttp. Initialization is handled via _initialize().
+        dedicated_pool is accepted for compatibility; each client owns its connector.
         """
         proxy_path = proxy_path.lstrip("/")
         if proxy_path:
@@ -593,28 +596,30 @@ class AsyncClient(Client):
                 ("connect_version",),
                 (get_from_name("String"),),  # type: ignore[arg-type]
             )
-        if not context:
-            context = self.create_query_context(
-                query=query,
-                parameters=parameters,
-                settings=settings,
-                query_formats=query_formats,
-                column_formats=column_formats,
-                encoding=encoding,
-                use_none=use_none,
-                column_oriented=column_oriented,
-                use_numpy=use_numpy,
-                max_str_len=max_str_len,
-                query_tz=query_tz,
-                column_tzs=column_tzs,
-                external_data=external_data,
-                transport_settings=transport_settings,
-                tz_mode=tz_mode,
-            )
+        context = self.create_query_context(
+            query=query,
+            parameters=parameters,
+            settings=settings,
+            query_formats=query_formats,
+            column_formats=column_formats,
+            encoding=encoding,
+            use_none=use_none,
+            column_oriented=column_oriented,
+            use_numpy=use_numpy,
+            max_str_len=max_str_len,
+            query_tz=query_tz,
+            column_tzs=column_tzs,
+            external_data=external_data,
+            transport_settings=transport_settings,
+            tz_mode=tz_mode,
+            context=context,
+            as_pandas=context.as_pandas if context else False,
+            streaming=context.streaming if context else False,
+        )
 
         if context.is_command:
             response = await self.command(
-                query,
+                context.query,
                 parameters=context.parameters,
                 settings=context.settings,
                 external_data=context.external_data,
@@ -1381,7 +1386,7 @@ class AsyncClient(Client):
         self,
         table: str | None = None,
         column_names: Sequence[str] | None = None,
-        insert_block: str | bytes | Generator[bytes, None, None] | BinaryIO | None = None,
+        insert_block: str | bytes | AsyncIterable[bytes] | BinaryIO | None = None,
         settings: dict | None = None,
         fmt: str | None = None,
         compression: str | None = None,

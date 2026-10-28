@@ -1,6 +1,6 @@
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, cast
@@ -346,6 +346,7 @@ class Cursor:
         *,
         pyformat_encoded: bool = True,
         internal: bool = False,
+        result_columns: Sequence[str] | Callable[[], Sequence[str] | None] | None = None,
     ) -> None:
         if pyformat_encoded and not parameters and isinstance(operation, str):
             # Per PEP 249 pyformat paramstyle, callers (e.g. SQLAlchemy) escape
@@ -385,6 +386,12 @@ class Cursor:
             self.names = [f"col_{x}" for x in range(len(self.data[0]))]
             self.types = [x.__class__ for x in self.data[0]]
         else:
+            if callable(result_columns):
+                result_columns = result_columns()
+            if result_columns is not None:
+                self.names = list(result_columns)
+                self.types = [None] * len(result_columns)
+                return
             stripped = operation.strip().rstrip(";").strip()
             if _leading_keyword(stripped) in ("SELECT", "WITH"):
                 # Introspection re-query carries the same settings/formats so the derived column shape matches.
@@ -593,3 +600,6 @@ class Cursor:
 
     def callproc(self, *args, **kwargs) -> None:
         raise NotImplementedError
+
+
+_CURSOR_EXECUTE = Cursor.execute

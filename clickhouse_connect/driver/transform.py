@@ -62,7 +62,7 @@ class NativeTransform:
                 name=name,
             )
 
-        def extract_source_error(tagged_only: bool = False) -> str | None:
+        def extract_source_error(tagged_only: bool = False, require_error_code: bool = False) -> str | None:
             if not source.last_message:
                 return None
             exception_tag = getattr(source, "exception_tag", None)
@@ -72,7 +72,7 @@ class NativeTransform:
                     return error_msg
             if tagged_only:
                 return None
-            if show_clickhouse_errors is not True and b"Code: " not in source.last_message[-1024:]:
+            if (require_error_code or show_clickhouse_errors is not True) and b"Code: " not in source.last_message[-1024:]:
                 return None
             return extract_error_message(source.last_message)
 
@@ -123,8 +123,9 @@ class NativeTransform:
                 # A read failure partway through the stream: OperationalError from the sync reader,
                 # ClientPayloadError from aiohttp. ClickHouse may have written the real error into the
                 # response body before the connection dropped, so prefer that over the transport error.
+                # Without an error marker the buffered bytes are ordinary result data, not an error message.
                 if isinstance(ex, OperationalError) or ex.__class__.__name__ == "ClientPayloadError":
-                    error_msg = extract_source_error()
+                    error_msg = extract_source_error(require_error_code=True)
                     if error_msg:
                         raise stream_failure(error_msg) from None
                     raise StreamFailureError("Stream failed during read (connection closed by server)") from ex
