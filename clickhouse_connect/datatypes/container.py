@@ -327,11 +327,7 @@ class Map(ClickHouseType):
         if ctx.as_pandas:
             # Slicing a pandas array once per row is much slower than slicing a list of the same elements
             pandas_arrays = (options.pd.api.extensions.ExtensionArray, options.pd.Index)
-            try:
-                keys, values = [list(x) if isinstance(x, pandas_arrays) else x for x in (keys, values)]
-            except Exception:
-                # An element pandas can't box: the per-row slices below raise for the first one in row order
-                pass
+            keys, values = [list(x) if isinstance(x, pandas_arrays) else x for x in (keys, values)]
         map_type = list if self.read_format(ctx) == "pairs" else dict
         column = []
         prev = 0

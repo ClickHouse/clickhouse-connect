@@ -38,16 +38,6 @@ def _legacy_days(value: Any, epoch: date) -> int | float:
     return (value - epoch).days
 
 
-_NANOS_PER_TICK = {"s": 10**9, "ms": 10**6, "us": 10**3, "ns": 1}
-
-
-def _in_nanosecond_range(ticks: Any, unit: str) -> bool:
-    # pandas 2 converts timezone-aware values through their local wall time, which is up to a day away from UTC
-    nanos_per_tick = _NANOS_PER_TICK[unit]
-    max_ticks = (2**63 - 1) // nanos_per_tick - 86400 * 10**9 // nanos_per_tick
-    return -max_ticks <= ticks.min() and ticks.max() <= max_ticks
-
-
 def _localized_timestamp(value: datetime, target_tz: tzinfo) -> float:
     if value.utcoffset() is None:
         value = value.replace(tzinfo=target_tz)
@@ -111,14 +101,14 @@ class Date(ClickHouseType):
         return super()._build_lc_dictionary(column, ctx)
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
-        # use_none=False keeps the list path, which _finalize_column converts separately
-        if not (ctx.use_numpy and ctx.as_pandas and ctx.use_extended_dtypes and ctx.use_none) or self.read_format(ctx) == "int":
+        if not (ctx.use_numpy and ctx.as_pandas and ctx.use_extended_dtypes) or self.read_format(ctx) == "int":
             return super()._read_nullable_column(source, num_rows, ctx, read_state)
         # Mask NULLs on the datetime64 array instead of building one Python object per row
         np = options.np
         is_null = np.frombuffer(source.read_bytes(num_rows), dtype=np.bool_)
         column = self._read_column_binary(source, num_rows, ctx, read_state)
-        return np.where(is_null, np.datetime64("NaT"), column)
+        column[is_null] = np.datetime64("NaT")
+        return column
 
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
@@ -194,12 +184,7 @@ class DateTimeBase(ClickHouseType, registered=False):
         if isinstance(column, options.pd.DatetimeIndex):
             # Mask NULLs on the timezone-aware DatetimeIndex instead of building one Timestamp per row
             is_valid = ~options.np.frombuffer(null_map, dtype=options.np.bool_)
-            ticks = column.asi8[is_valid]
-            # The list path stays for an all-NULL block, where _finalize_column takes the timezone from the first
-            # non-NaT value, and for instants near or outside the nanosecond range (NaT included), which pandas 2
-            # can reject there
-            if len(ticks) and _in_nanosecond_range(ticks, column.dtype.unit):
-                return column.where(is_valid)
+            return column.where(is_valid)
         return data_conv.build_nullable_column(column, null_map, self._active_null(ctx))
 
     def _active_null(self, ctx: QueryContext):

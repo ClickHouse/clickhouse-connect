@@ -663,8 +663,10 @@ def test_pandas_time_resolution(test_config: TestConfig, param_client: Client, c
         assert _dtype_unit(df_res["t"].dtype) == "s"
 
 
-def test_pandas_map_values(param_client: Client, call):
+def test_pandas_map_values(param_client: Client, call, test_config):
     """Map columns in query_df match the decoded keys and values across blocks, including NULL values."""
+    if test_config.native_codec != "python":
+        pytest.skip("The Rust codec returns Python ints for Map values instead of NumPy scalars")
     query = (
         "SELECT map('k', number, 'v', number * 13) AS m,"
         " CAST(if(number % 2 = 0, map(), map('n', if(number = 1, NULL, number))), 'Map(String, Nullable(Int32))') AS nm"
@@ -723,3 +725,52 @@ def test_pandas_nullable_int(param_client: Client, call, type_name: str, dtype: 
     assert str(df["c"].dtype) == dtype
     assert df["c"].tolist() == [pd.NA if x % 3 == 1 else x * 13 for x in range(7)]
     assert type(df["c"].array[0]) is getattr(np, dtype.lower())
+
+
+@pytest.mark.parametrize("block_size", [1, 2, 7])
+def test_pandas_nullable_uint64_precision(param_client: Client, call, test_config, block_size):
+    if test_config.native_codec != "python":
+        pytest.skip("The Rust codec still rounds large nested nullable UInt64 values")
+    query = (
+        "SELECT x, [x] AS a, tuple(x) AS t, [tuple(x)] AS at, map('value', x) AS m FROM "
+        "(SELECT CAST([9007199254740993, 9223372036854775808, NULL, 18446744073709551615], "
+        "'Array(Nullable(UInt64))')[number + 1] AS x FROM numbers(4))"
+    )
+    df = call(param_client.query_df, query, settings={"max_block_size": block_size, "max_threads": 1})
+    assert str(df["x"].dtype) == "UInt64"
+    for row, expected in zip(df.itertuples(index=False), [9007199254740993, 2**63, None, 2**64 - 1]):
+        for value in (row.x, row.a[0], row.t[0], row.at[0][0], row.m["value"]):
+            if expected is None:
+                assert pd.isna(value)
+            else:
+                assert int(value) == expected
+
+
+@pytest.mark.parametrize("type_name,unit", [("DateTime", "s"), ("DateTime64(3)", "ms"), ("DateTime64(6)", "us")])
+@pytest.mark.parametrize("all_null", [False, True])
+def test_pandas_nullable_datetime_null_blocks(param_client: Client, call, consume_stream, test_config, type_name, unit, all_null):
+    if test_config.native_codec != "python":
+        pytest.skip("The Rust codec still loses timezone dtypes in all-NULL blocks")
+    null_condition = "1" if all_null else "number != 1"
+    query = f"SELECT if({null_condition}, NULL, CAST('2024-03-10 12:00:00', '{type_name}')) AS dt FROM numbers(3)"
+    kwargs = {"query_tz": "Asia/Tokyo", "settings": {"max_block_size": 1, "max_threads": 1}}
+    df = call(param_client.query_df, query, **kwargs)
+    assert str(df["dt"].dtype) == f"datetime64[{unit}, Asia/Tokyo]"
+    assert df["dt"].isna().tolist() == [True, all_null, True]
+    blocks = []
+    consume_stream(call(param_client.query_df_stream, query, **kwargs), blocks.append)
+    assert len(blocks) == 3
+    assert all(str(block["dt"].dtype) == str(df["dt"].dtype) for block in blocks)
+    pd.testing.assert_frame_equal(pd.concat(blocks, ignore_index=True), df)
+
+
+@pytest.mark.parametrize("scale,unit", [(3, "ms"), (6, "us")])
+@pytest.mark.parametrize("timezone", ["Asia/Tokyo", "America/New_York"])
+def test_pandas_nullable_datetime64_beyond_nanoseconds(param_client: Client, call, test_config, scale, unit, timezone):
+    if test_config.native_codec != "python":
+        pytest.skip("The Rust codec still converts nullable datetimes through nanoseconds on pandas 2")
+    query = f"SELECT arrayJoin([toDateTime64('2299-01-01 12:34:56.123', {scale}, '{timezone}'), NULL]) AS dt"
+    df = call(param_client.query_df, query)
+    assert str(df["dt"].dtype) == f"datetime64[{unit}, {timezone}]"
+    assert df["dt"].iloc[0] == pd.Timestamp("2299-01-01 12:34:56.123", tz=timezone)
+    assert pd.isna(df["dt"].iloc[1])

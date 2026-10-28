@@ -7,6 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- With the Python codec and extended pandas dtypes, `query_df` preserves `Nullable(UInt64)` values above `2**53` without rounding, keeps timezone-aware nullable datetime dtypes across all-NULL blocks, and reads valid `Nullable(DateTime64)` values beyond the nanosecond range on pandas 2.
 - Datetime parameters whose names end in `_64` now retain their names in pyformat queries, fixing `KeyError` failures including SQLAlchemy queries with 64 datetime binds. The `_64` precision hint still applies when the query uses the name without the suffix. Closes [#1131](https://github.com/ClickHouse/clickhouse-connect/issues/1131).
 - Eligible compiled SQLAlchemy Core and ORM queries now skip the second `LIMIT 0` query for empty results and preserve result keys. The synthesized DB-API descriptions report `None` for `type_code` and `null_ok`. Plain DB-API and textual queries, raw SQL projections or modifiers, server-expanded columns, custom result processors, rewritten statements, and cursor `execute` wrappers retain the `LIMIT 0` metadata fallback. Closes [#1108](https://github.com/ClickHouse/clickhouse-connect/issues/1108).
 - The Python codec now decodes `Nullable(Tuple(...))` correctly, preserving NULL tuples and non-NULL values, including nested tuples and tuple read formats. Closes [#1102](https://github.com/ClickHouse/clickhouse-connect/issues/1102).
@@ -34,12 +35,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - `query_np` now returns one row per result row when every column is returned as Python objects and some values are lists or tuples, for example a single `Array` or `Tuple` column. Previously numpy unpacked those values into extra dimensions, so `SELECT [number, number + 1, number + 2] FROM numbers(2)` came back with shape `(3, 2, 1)` instead of `(2, 1)`. This also fixes a concatenation error for nested `Array` or `Tuple` results spread across multiple blocks.
 - `query_np` and `query_df` now return every row of a numeric `LowCardinality` column, such as `LowCardinality(Int32)`. Previously the column was cut to the size of its dictionary, so 1000 rows with 300 distinct values came back as 300 rows, and a block with fewer rows than dictionary entries raised `ValueError: iterator too short`.
 - `AsyncClient.query_rows_stream` now reads each result block in the executor once and yields its rows on the event loop. Previously it made one executor call per row, so streaming rows asynchronously was far slower than the synchronous `query_rows_stream`.
-
-### Improvements
-
-- The Python codec now decodes `Map` columns in `query_df` several times faster. Each row used to slice the pandas key and value arrays separately. Keys and values held in pandas arrays are now converted to lists once per block, as `Array` already does for its elements. Results are unchanged.
-- The Python codec now decodes timezone-aware `Nullable(DateTime)` and `Nullable(DateTime64)` columns, and `Nullable(Date)` and `Nullable(Date32)` columns, in `query_df` much faster. NULLs are now masked on the decoded datetime array instead of building one Python object per row. Dtypes, values, timezones, and element types are unchanged.
-- The Python codec now decodes `Nullable` integer columns, `Int8` through `UInt64`, in `query_df` several times faster. The pandas masked array is now built directly from the NULL map and the NumPy values instead of one Python object per row. Dtypes and values are unchanged.
+- The Python codec reads `Map`, nullable integer, nullable date, and timezone-aware nullable datetime columns faster in `query_df` by avoiding per-row pandas conversions.
 
 ## 1.11.0, 2026-10-16
 

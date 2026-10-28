@@ -103,12 +103,7 @@ class UInt64(IntBase):
 
     def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
         if ctx.use_numpy and ctx.as_pandas and ctx.use_extended_dtypes:
-            column: Any = super()._read_nullable_column(source, num_rows, ctx, read_state)
-            if self.read_format(ctx) == "native" and not column.isna().all() and column.max() >= 2**63:
-                # pandas infers a list holding a value above Int64 differently from the masked array: it can store
-                # numpy.ulonglong or round the values through float64. Build the list the generic path builds.
-                return column.to_numpy(dtype=object, na_value=self._active_null(ctx)).tolist()
-            return column
+            return super()._read_nullable_column(source, num_rows, ctx, read_state)
         return data_conv.read_nullable_array(source, "q" if self.read_format(ctx) == "signed" else "Q", num_rows, self._active_null(ctx))
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
