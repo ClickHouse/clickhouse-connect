@@ -64,13 +64,6 @@ def test_parse_enum_backslash_escapes(expr, expected):
     assert parse_enum(expr) == expected
 
 
-def test_enum_name_round_trips_escaped_keys():
-    name = "Enum8('a\\\\b' = 1, 'q\\'x' = 2, 't\\tn\\n' = 3, 'z\\0' = 4)"
-    enum_type = get_from_name(name)
-    assert enum_type.name == name
-    assert enum_type._name_map == {"a\\b": 1, "q'x": 2, "t\tn\n": 3, "z\0": 4}
-
-
 @pytest.mark.parametrize(
     "type_name, expected_name",
     [
@@ -89,6 +82,8 @@ REPEATED_NON_FIRST_ENUM = "Enum16('user_1' = 1, 'user\\'2\\'3' = 2)"
 # generateName -> writeQuotedString).
 BACKSLASH_ENUM = "Enum8('a\\\\b' = 1, 'user_2' = 2)"
 TRAILING_BACKSLASH_ENUM = "Enum8('user\\\\' = 1, 'user_2' = 2)"
+CONTROL_ENUM = r"Enum8('a\\b' = 1, 'q\'x' = 2, 't\tn\nr\rb\bf\f' = 3, 'z\0' = 4)"
+CONTROL_ENUM16 = CONTROL_ENUM.replace("Enum8", "Enum16").replace("= 4", "= 300")
 
 
 def test_parse_columns_escaped_quote_in_scalar_enum():
@@ -116,23 +111,29 @@ def test_parse_columns_can_preserve_identifier_quoting():
 
 
 @pytest.mark.parametrize(
-    "type_name, expected_name",
+    "type_name, expected_name, expected_keys",
     [
-        (ESCAPED_ENUM, ESCAPED_ENUM),
-        (f"Array({ESCAPED_ENUM})", f"Array({ESCAPED_ENUM})"),
-        (f"Tuple({ESCAPED_ENUM}, UInt32)", f"Tuple({ESCAPED_ENUM}, UInt32)"),
-        (f"Array(Tuple({ESCAPED_ENUM}, UInt32))", f"Array(Tuple({ESCAPED_ENUM}, UInt32))"),
-        (f"Nullable({ESCAPED_ENUM})", f"Nullable({ESCAPED_ENUM})"),
-        (f"Variant({ESCAPED_ENUM}, String)", f"Variant({ESCAPED_ENUM}, String)"),
-        (f"Nested(status {ESCAPED_ENUM}, value UInt32)", f"Nested(status {ESCAPED_ENUM}, value UInt32)"),
-        (f"JSON(status {ESCAPED_ENUM})", f"JSON(`status` {ESCAPED_ENUM})"),
-        (f"Tuple({REPEATED_NON_FIRST_ENUM}, UInt32)", f"Tuple({REPEATED_NON_FIRST_ENUM}, UInt32)"),
-        (BACKSLASH_ENUM, BACKSLASH_ENUM),
-        (f"Tuple({TRAILING_BACKSLASH_ENUM}, UInt32)", f"Tuple({TRAILING_BACKSLASH_ENUM}, UInt32)"),
+        (ESCAPED_ENUM, ESCAPED_ENUM, ("user'1", "user_2")),
+        (f"Array({ESCAPED_ENUM})", f"Array({ESCAPED_ENUM})", None),
+        (f"Tuple({ESCAPED_ENUM}, UInt32)", f"Tuple({ESCAPED_ENUM}, UInt32)", None),
+        (f"Array(Tuple({ESCAPED_ENUM}, UInt32))", f"Array(Tuple({ESCAPED_ENUM}, UInt32))", None),
+        (f"Nullable({ESCAPED_ENUM})", f"Nullable({ESCAPED_ENUM})", ("user'1", "user_2")),
+        (f"Variant({ESCAPED_ENUM}, String)", f"Variant({ESCAPED_ENUM}, String)", None),
+        (f"Nested(status {ESCAPED_ENUM}, value UInt32)", f"Nested(status {ESCAPED_ENUM}, value UInt32)", None),
+        (f"JSON(status {ESCAPED_ENUM})", f"JSON(`status` {ESCAPED_ENUM})", None),
+        (f"Tuple({REPEATED_NON_FIRST_ENUM}, UInt32)", f"Tuple({REPEATED_NON_FIRST_ENUM}, UInt32)", None),
+        (BACKSLASH_ENUM, BACKSLASH_ENUM, ("a\\b", "user_2")),
+        (f"Tuple({TRAILING_BACKSLASH_ENUM}, UInt32)", f"Tuple({TRAILING_BACKSLASH_ENUM}, UInt32)", None),
+        (CONTROL_ENUM, CONTROL_ENUM, ("a\\b", "q'x", "t\tn\nr\rb\bf\f", "z\0")),
+        (CONTROL_ENUM16, CONTROL_ENUM16, ("a\\b", "q'x", "t\tn\nr\rb\bf\f", "z\0")),
     ],
 )
-def test_get_from_name_preserves_escaped_quote_in_enum(type_name, expected_name):
-    assert get_from_name(type_name).name == expected_name
+def test_get_from_name_preserves_escaped_quote_in_enum(type_name, expected_name, expected_keys):
+    ch_type = get_from_name(type_name)
+    assert ch_type.name == expected_name
+    if expected_keys is not None:
+        assert ch_type.type_def.keys == expected_keys
+        assert ch_type._name_map == dict(zip(expected_keys, ch_type.type_def.values))
 
 
 def test_unescape_identifier():

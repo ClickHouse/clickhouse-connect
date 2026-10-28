@@ -78,7 +78,12 @@ def parse_callable(expr) -> tuple[str, tuple[str | int, ...], str]:
 
 
 # Escapes the server writes in enum key names (writeQuotedString), other than the quote itself
-ENUM_KEY_UNESCAPES = {"\\": "\\", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "0": "\0"}
+_ENUM_KEY_UNESCAPES = {"\\": "\\", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "0": "\0"}
+_ENUM_KEY_ESCAPES = str.maketrans({char: f"\\{code}" for code, char in _ENUM_KEY_UNESCAPES.items()} | {"'": "\\'"})
+
+
+def escape_enum_key(key: str) -> str:
+    return key.translate(_ENUM_KEY_ESCAPES)
 
 
 def parse_enum(expr) -> tuple[tuple[str, ...], tuple[int, ...]]:
@@ -108,8 +113,8 @@ def parse_enum(expr) -> tuple[tuple[str, ...], tuple[int, ...]]:
             elif char == "\\" and expr[pos] == "'" and expr[pos : pos + 4] != "' = " and expr[pos:] != "')":
                 key.append(expr[pos])
                 pos += 1
-            elif char == "\\" and expr[pos] in ENUM_KEY_UNESCAPES:
-                key.append(ENUM_KEY_UNESCAPES[expr[pos]])
+            elif char == "\\" and expr[pos] in _ENUM_KEY_UNESCAPES:
+                key.append(_ENUM_KEY_UNESCAPES[expr[pos]])
                 pos += 1
             else:
                 key.append(char)

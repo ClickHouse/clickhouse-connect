@@ -11,7 +11,7 @@ from clickhouse_connect.driver import options
 from clickhouse_connect.driver.common import array_type, decimal_prec, decimal_size, first_value, write_array
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
-from clickhouse_connect.driver.parser import ENUM_KEY_UNESCAPES
+from clickhouse_connect.driver.parser import escape_enum_key
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
 
@@ -322,13 +322,6 @@ class Bool(ClickHouseType):
 
 class Boolean(Bool):
     pass
-
-
-_ENUM_KEY_ESCAPES = str.maketrans({char: f"\\{code}" for code, char in ENUM_KEY_UNESCAPES.items()} | {"'": "\\'"})
-
-
-def escape_enum_key(key: str) -> str:
-    return key.translate(_ENUM_KEY_ESCAPES)
 
 
 class Enum(ClickHouseType):
