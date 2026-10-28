@@ -78,9 +78,9 @@ def resolve_zone(tz_name: str) -> tzinfo:
             return timezone.utc if offset == timedelta(0) else timezone(offset)
     try:
         return zoneinfo.ZoneInfo(tz_name)
-    except ValueError as ex:
-        # ZoneInfo raises ValueError for empty strings, absolute paths, and non-normalized
-        # keys; funnel those into ZoneInfoNotFoundError so callers only need one except clause.
+    except (ValueError, OSError) as ex:
+        # Invalid keys and unreadable zone files raise ValueError or OSError; translate them
+        # to ZoneInfoNotFoundError so callers only need one except clause.
         raise zoneinfo.ZoneInfoNotFoundError(str(ex)) from ex
 
 
@@ -93,8 +93,8 @@ def normalize_timezone(tz: tzinfo, trust_fixed_offset: bool = False) -> tuple[tz
     #
     # The local-init path (bottom of this module) deliberately does NOT set this flag because
     # a stdlib datetime.timezone returned from datetime.now().astimezone().tzinfo is the current
-    # local offset (e.g. PDT), and we want the tzlocal-recovery branch below to upgrade it to
-    # a real IANA zone so the local time tracks across DST.
+    # local offset. If its name is not a recognized IANA key, tzlocal can recover a real IANA
+    # zone so the local time tracks across DST. Recognized names such as CET pass through.
     if trust_fixed_offset and isinstance(tz, timezone):
         return tz, True
 
@@ -106,15 +106,27 @@ def normalize_timezone(tz: tzinfo, trust_fixed_offset: bool = False) -> tuple[tz
     if tz_key in UTC_EQUIVALENTS:
         return timezone.utc, True
 
-    if tz_key in zoneinfo.available_timezones():
+    if _load_iana_zone(tz_key) is not None:
         return tz, True
 
     if tzlocal is not None:  # Maybe we can use the tzlocal module to get a safe timezone
-        local_name = tzlocal.get_localzone_name()
-        if local_name in zoneinfo.available_timezones():
-            return zoneinfo.ZoneInfo(local_name), True
+        local_zone = _load_iana_zone(tzlocal.get_localzone_name())
+        if local_zone is not None:
+            return local_zone, True
 
     return tz, False
+
+
+def _load_iana_zone(key: str | None) -> zoneinfo.ZoneInfo | None:
+    # ZoneInfo caches successful lookups.
+    if not key:
+        return None
+    try:
+        return zoneinfo.ZoneInfo(key)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
+        # ValueError covers absolute paths, non-normalized keys, and non-TZif files in the tz
+        # directory; OSError covers directory names such as "America".
+        return None
 
 
 def is_utc_timezone(tz: tzinfo | str | None) -> bool:

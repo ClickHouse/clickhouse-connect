@@ -100,10 +100,25 @@ class Date(ClickHouseType):
         column = [x.date() if isinstance(x, datetime) and x.tzinfo is not None else x for x in column]
         return super()._build_lc_dictionary(column, ctx)
 
+    def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
+        if not (ctx.use_numpy and ctx.as_pandas and ctx.use_extended_dtypes) or self.read_format(ctx) == "int":
+            return super()._read_nullable_column(source, num_rows, ctx, read_state)
+        # Mask NULLs on the datetime64 array instead of building one Python object per row
+        np = options.np
+        is_null = np.frombuffer(source.read_bytes(num_rows), dtype=np.bool_)
+        column = self._read_column_binary(source, num_rows, ctx, read_state)
+        column[is_null] = np.datetime64("NaT")
+        return column
+
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)
         if ctx.use_extended_dtypes:
-            return options.pd.NA if fmt == "int" else options.pd.NaT
+            if fmt == "int":
+                return options.pd.NA
+            if ctx.use_numpy and not ctx.use_none:
+                # NumPy's datetime64 conversion rejects Pandas NaT.
+                return options.np.datetime64("NaT", self._null_time_unit)
+            return options.pd.NaT
         if ctx.use_none:
             return None
         if fmt == "int":
@@ -160,6 +175,17 @@ class DateTimeBase(ClickHouseType, registered=False):
     def pandas_dtype(self):
         """Sets dtype for pandas datetime objects"""
         return "datetime64[s]"
+
+    def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
+        if not (ctx.use_numpy and ctx.as_pandas and ctx.use_extended_dtypes) or self.read_format(ctx) == "int":
+            return super()._read_nullable_column(source, num_rows, ctx, read_state)
+        null_map = source.read_bytes(num_rows)
+        column = self._read_column_binary(source, num_rows, ctx, read_state)
+        if isinstance(column, options.pd.DatetimeIndex):
+            # Mask NULLs on the timezone-aware DatetimeIndex instead of building one Timestamp per row
+            is_valid = ~options.np.frombuffer(null_map, dtype=options.np.bool_)
+            return column.where(is_valid)
+        return data_conv.build_nullable_column(column, null_map, self._active_null(ctx))
 
     def _active_null(self, ctx: QueryContext):
         fmt = self.read_format(ctx)

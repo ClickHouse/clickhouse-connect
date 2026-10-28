@@ -151,6 +151,22 @@ def test_pandas_low_card(param_client: Client, call, table_context: Callable):
         assert df.equals(source_df)
 
 
+@pytest.mark.parametrize("row_count", [1, 13])
+@pytest.mark.parametrize("expression", ["13", "number % 3", "number"])
+def test_pandas_numeric_low_card(param_client: Client, call, consume_stream, row_count, expression):
+    query = f"SELECT toLowCardinality(toInt32({expression})) AS v FROM numbers({row_count})"
+    expected = [13 if expression == "13" else x % 3 if expression == "number % 3" else x for x in range(row_count)]
+    settings = {"max_block_size": 4, "max_threads": 1}
+    df = call(param_client.query_df, query, settings=settings)
+    assert df["v"].tolist() == expected
+
+    blocks = []
+    consume_stream(call(param_client.query_df_stream, query, settings=settings), blocks.append)
+    if row_count > 4:
+        assert len(blocks) > 1
+    assert pd.concat(blocks, ignore_index=True)["v"].tolist() == expected
+
+
 def test_pandas_large_types(param_client: Client, call, table_context: Callable):
     columns = ["key String", "value Int256", "u_value UInt256"]
     key2_value = 30000000000000000000000000000000000
@@ -243,6 +259,15 @@ def test_pandas_streams(param_client: Client, call, consume_stream):
         assert stream_count > 2
 
 
+def test_pandas_limit_zero(param_client: Client, call, consume_stream):
+    query = "SELECT 1 AS column1, 'x' AS s LIMIT 0"
+    assert call(param_client.query_df, query).empty
+
+    blocks = []
+    consume_stream(call(param_client.query_df_stream, query), blocks.append)
+    assert blocks == []
+
+
 def test_pandas_date(param_client: Client, call, table_context: Callable):
     with table_context("test_pandas_date", ["key UInt32", "dt Date", "null_dt Nullable(Date)"]):
         df = pd.DataFrame(
@@ -282,6 +307,66 @@ def test_pandas_date32(param_client: Client, call, table_context: Callable):
         assert result_df.iloc[2]["null_dt"] == pd.Timestamp(2101, 12, 31)
         assert result_df.iloc[2]["dt"] == pd.Timestamp(1968, 4, 15)
         assert _dtype_unit(result_df["dt"].dtype) == "s"
+
+
+@pytest.mark.parametrize("date_type, value", [("Date", "2023-05-04"), ("Date32", "1968-04-15")])
+@pytest.mark.parametrize("nulls, row_count", [("mixed", 13), ("none", 13), ("all", 13), ("mixed", 0)])
+def test_pandas_nullable_date_use_none_false(param_client: Client, call, consume_stream, date_type, value, nulls, row_count):
+    null_condition = {"mixed": "number % 3 = 1", "none": "0", "all": "1"}[nulls]
+    query = (
+        "SELECT d, [d] AS a, tuple(d) AS t, [tuple(d)] AS at, map('day', d) AS m, toLowCardinality(d) AS lc "
+        f"FROM (SELECT if({null_condition}, NULL, to{date_type}('{value}')) AS d FROM numbers({row_count}))"
+    )
+    settings = {"max_block_size": 4, "max_threads": 1}
+    result_df = call(param_client.query_df, query, use_none=False, settings=settings)
+    expected_df = call(param_client.query_df, query, use_none=True, settings=settings)
+    assert len(result_df) == row_count
+    if row_count:
+        pd.testing.assert_frame_equal(result_df[["d", "lc"]], expected_df[["d", "lc"]])
+        assert _dtype_unit(result_df["d"].dtype) == "s"
+        assert _dtype_unit(result_df["lc"].dtype) == "s"
+        for row in range(row_count):
+            is_null = nulls == "all" or (nulls == "mixed" and row % 3 == 1)
+            nested = result_df.iloc[row]
+            if is_null:
+                assert pd.isna(nested["d"])
+            else:
+                assert nested["d"] == pd.Timestamp(value)
+            for scalar in (nested["a"][0], nested["t"][0], nested["at"][0][0], nested["m"]["day"]):
+                assert scalar.dtype == np.dtype("datetime64[D]")
+                if is_null:
+                    assert np.isnat(scalar)
+                else:
+                    assert scalar.item() == date.fromisoformat(value)
+
+    blocks = []
+    consume_stream(call(param_client.query_df_stream, query, use_none=False, settings=settings), blocks.append)
+    if row_count:
+        assert len(blocks) > 1
+        pd.testing.assert_frame_equal(pd.concat(blocks, ignore_index=True), result_df)
+        if nulls != "all":
+            for block in blocks:
+                assert block.iloc[0]["a"][0].dtype == np.dtype("datetime64[D]")
+    else:
+        assert all(block.empty for block in blocks)
+
+
+@pytest.mark.parametrize("read_format", ["native", "int"])
+@pytest.mark.parametrize("extended", [False, True])
+def test_pandas_nullable_date_formats(param_client: Client, call, read_format, extended):
+    query = "SELECT arrayJoin([toDate('1970-01-14'), NULL]) AS d"
+    result_df = call(
+        param_client.query_df,
+        query,
+        use_none=False,
+        use_extended_dtypes=extended,
+        query_formats={"Date": read_format},
+    )
+    assert result_df.iloc[0]["d"] == (13 if read_format == "int" else pd.Timestamp("1970-01-14"))
+    if extended:
+        assert pd.isna(result_df.iloc[1]["d"])
+    else:
+        assert result_df.iloc[1]["d"] == (0 if read_format == "int" else pd.Timestamp("1970-01-01"))
 
 
 def test_pandas_row_df(param_client: Client, call, table_context: Callable):
@@ -576,3 +661,116 @@ def test_pandas_time_resolution(test_config: TestConfig, param_client: Client, c
         call(param_client.insert, "test_time_res", data)
         df_res = call(param_client.query_df, "SELECT * FROM test_time_res")
         assert _dtype_unit(df_res["t"].dtype) == "s"
+
+
+def test_pandas_map_values(param_client: Client, call, test_config):
+    """Map columns in query_df match the decoded keys and values across blocks, including NULL values."""
+    if test_config.native_codec != "python":
+        pytest.skip("The Rust codec returns Python ints for Map values instead of NumPy scalars")
+    query = (
+        "SELECT map('k', number, 'v', number * 13) AS m,"
+        " CAST(if(number % 2 = 0, map(), map('n', if(number = 1, NULL, number))), 'Map(String, Nullable(Int32))') AS nm"
+        " FROM numbers(5) ORDER BY number"
+    )
+    df = call(param_client.query_df, query, settings={"max_block_size": 2})
+    assert df["m"].tolist() == [{"k": x, "v": x * 13} for x in range(5)]
+    assert all(type(v) is np.uint64 for row in df["m"] for v in row.values())
+    assert df["nm"].tolist()[0] == {}
+    assert df["nm"][1]["n"] is pd.NA
+    assert df["nm"].tolist()[2:] == [{}, {"n": 3}, {}]
+
+
+@pytest.mark.parametrize(
+    "type_name,dtype",
+    [
+        ("DateTime('Asia/Tokyo')", "datetime64[s, Asia/Tokyo]"),
+        ("DateTime64(3, 'Asia/Tokyo')", "datetime64[ms, Asia/Tokyo]"),
+        ("DateTime", "datetime64[s]"),
+        ("DateTime64(6)", "datetime64[us]"),
+        ("Date", "datetime64[s]"),
+        ("Date32", "datetime64[s]"),
+    ],
+)
+def test_pandas_nullable_temporal(param_client: Client, call, type_name: str, dtype: str):
+    """Nullable temporal columns keep their dtype, values, and NULL positions across blocks."""
+    escaped = type_name.replace("'", "\\'")
+    query = f"SELECT if(number % 3 = 1, NULL, CAST(toDate('2024-03-10') + number, '{escaped}')) AS c FROM numbers(7) ORDER BY number"
+    df = call(param_client.query_df, query, settings={"max_block_size": 2})
+    assert str(df["c"].dtype) == dtype
+    expected = pd.Series([pd.Timestamp("2024-03-10") + pd.Timedelta(days=x) for x in range(7)])
+    if "Tokyo" in type_name:
+        expected = expected.dt.tz_localize("Asia/Tokyo")
+    assert df["c"].isna().tolist() == [x % 3 == 1 for x in range(7)]
+    assert df["c"][~df["c"].isna()].tolist() == expected[[x % 3 != 1 for x in range(7)]].tolist()
+
+
+@pytest.mark.parametrize(
+    "type_name,dtype,query_formats",
+    [
+        ("Int8", "Int8", None),
+        ("UInt8", "UInt8", None),
+        ("Int16", "Int16", None),
+        ("UInt16", "UInt16", None),
+        ("Int32", "Int32", None),
+        ("UInt32", "UInt32", None),
+        ("Int64", "Int64", None),
+        ("UInt64", "UInt64", None),
+        ("UInt64", "Int64", {"UInt64": "signed"}),
+    ],
+)
+def test_pandas_nullable_int(param_client: Client, call, type_name: str, dtype: str, query_formats):
+    """Nullable integer columns keep their pandas dtype, values, and NULL positions across blocks."""
+    query = f"SELECT if(number % 3 = 1, NULL, CAST(number * 13, '{type_name}')) AS c FROM numbers(7) ORDER BY number"
+    df = call(param_client.query_df, query, settings={"max_block_size": 2}, query_formats=query_formats)
+    assert str(df["c"].dtype) == dtype
+    assert df["c"].tolist() == [pd.NA if x % 3 == 1 else x * 13 for x in range(7)]
+    assert type(df["c"].array[0]) is getattr(np, dtype.lower())
+
+
+@pytest.mark.parametrize("block_size", [1, 2, 7])
+def test_pandas_nullable_uint64_precision(param_client: Client, call, test_config, block_size):
+    if test_config.native_codec != "python":
+        pytest.skip("The Rust codec still rounds large nested nullable UInt64 values")
+    query = (
+        "SELECT x, [x] AS a, tuple(x) AS t, [tuple(x)] AS at, map('value', x) AS m FROM "
+        "(SELECT CAST([9007199254740993, 9223372036854775808, NULL, 18446744073709551615], "
+        "'Array(Nullable(UInt64))')[number + 1] AS x FROM numbers(4))"
+    )
+    df = call(param_client.query_df, query, settings={"max_block_size": block_size, "max_threads": 1})
+    assert str(df["x"].dtype) == "UInt64"
+    for row, expected in zip(df.itertuples(index=False), [9007199254740993, 2**63, None, 2**64 - 1]):
+        for value in (row.x, row.a[0], row.t[0], row.at[0][0], row.m["value"]):
+            if expected is None:
+                assert pd.isna(value)
+            else:
+                assert int(value) == expected
+
+
+@pytest.mark.parametrize("type_name,unit", [("DateTime", "s"), ("DateTime64(3)", "ms"), ("DateTime64(6)", "us")])
+@pytest.mark.parametrize("all_null", [False, True])
+def test_pandas_nullable_datetime_null_blocks(param_client: Client, call, consume_stream, test_config, type_name, unit, all_null):
+    if test_config.native_codec != "python":
+        pytest.skip("The Rust codec still loses timezone dtypes in all-NULL blocks")
+    null_condition = "1" if all_null else "number != 1"
+    query = f"SELECT if({null_condition}, NULL, CAST('2024-03-10 12:00:00', '{type_name}')) AS dt FROM numbers(3)"
+    kwargs = {"query_tz": "Asia/Tokyo", "settings": {"max_block_size": 1, "max_threads": 1}}
+    df = call(param_client.query_df, query, **kwargs)
+    assert str(df["dt"].dtype) == f"datetime64[{unit}, Asia/Tokyo]"
+    assert df["dt"].isna().tolist() == [True, all_null, True]
+    blocks = []
+    consume_stream(call(param_client.query_df_stream, query, **kwargs), blocks.append)
+    assert len(blocks) == 3
+    assert all(str(block["dt"].dtype) == str(df["dt"].dtype) for block in blocks)
+    pd.testing.assert_frame_equal(pd.concat(blocks, ignore_index=True), df)
+
+
+@pytest.mark.parametrize("scale,unit", [(3, "ms"), (6, "us")])
+@pytest.mark.parametrize("timezone", ["Asia/Tokyo", "America/New_York"])
+def test_pandas_nullable_datetime64_beyond_nanoseconds(param_client: Client, call, test_config, scale, unit, timezone):
+    if test_config.native_codec != "python":
+        pytest.skip("The Rust codec still converts nullable datetimes through nanoseconds on pandas 2")
+    query = f"SELECT arrayJoin([toDateTime64('2299-01-01 12:34:56.123', {scale}, '{timezone}'), NULL]) AS dt"
+    df = call(param_client.query_df, query)
+    assert str(df["dt"].dtype) == f"datetime64[{unit}, {timezone}]"
+    assert df["dt"].iloc[0] == pd.Timestamp("2299-01-01 12:34:56.123", tz=timezone)
+    assert pd.isna(df["dt"].iloc[1])

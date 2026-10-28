@@ -46,10 +46,12 @@ class NumpyResult(Closable):
         first_type = d_types[0]
         if first_type != options.np.object_ and all(options.np.dtype(np_type) == first_type for np_type in d_types):
             self.np_types = first_type
+            # Fill object columns one at a time so numpy does not unpack list or tuple values into extra dimensions
+            fill_by_column = self._preserve_object_rows or options.np.dtype(first_type) == options.np.object_
 
             def numpy_blocks():
                 for block in block_gen:
-                    if self._preserve_object_rows:
+                    if fill_by_column:
                         np_array = options.np.empty((len(block[0]), len(block)), dtype=first_type)
                         for col_num, data in enumerate(block):
                             np_array[:, col_num] = data

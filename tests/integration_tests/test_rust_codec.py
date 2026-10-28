@@ -749,7 +749,7 @@ def test_rust_codec_time64_zero_numpy_parity(client_factory, call, test_config):
     rust_np = call(rust_client.query_np, nested_query)
     python_np = call(python_client.query_np, nested_query)
     np.testing.assert_array_equal(rust_np, python_np)
-    nested_item = rust_np.flatten()[0]
+    nested_item = rust_np[0, 0][0]
     assert isinstance(nested_item["v"], np.timedelta64)
     assert nested_item["v"].dtype == np.dtype("timedelta64[s]")
 
