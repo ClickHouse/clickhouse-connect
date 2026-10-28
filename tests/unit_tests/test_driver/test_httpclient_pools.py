@@ -76,10 +76,13 @@ def test_invalid_configuration_releases_owned_pool(pools, options, error_type):
 
 @pytest.mark.parametrize("stage", ["token", "backend", "initialization"])
 @pytest.mark.parametrize("error_type", [OperationalError, KeyboardInterrupt])
-def test_constructor_error_releases_owned_pool(pools, monkeypatch, stage, error_type):
+@pytest.mark.parametrize("dedicated_pool", [False, True])
+def test_constructor_error_releases_owned_pool(pools, monkeypatch, stage, error_type, dedicated_pool):
     error = error_type("construction failed")
     fail = Mock(side_effect=error)
-    options = {}
+    options = {"dedicated_pool": dedicated_pool}
+    if dedicated_pool:
+        options["server_host_name"] = None
     if stage == "token":
         options["token_provider"] = fail
     elif stage == "backend":
@@ -129,7 +132,7 @@ def test_cleanup_failure_preserves_construction_error(pools, monkeypatch, cleanu
 @pytest.mark.parametrize("fail_construction", [False, True])
 def test_borrowed_pool_stays_open(pools, monkeypatch, pool_kind, fail_construction):
     manager = httputil.get_pool_manager()
-    options = {}
+    options = {"dedicated_pool": False}
     if pool_kind == "supplied":
         options["pool_mgr"] = manager
     elif pool_kind == "proxy":
@@ -224,3 +227,102 @@ def test_concurrent_failure_preserves_new_successful_client_pool(pools):
     finally:
         if client is not None:
             client.close()
+
+
+@pytest.mark.parametrize("interface", ["http", "https"])
+@pytest.mark.parametrize("proxy_source", ["none", "explicit_http", "explicit_https", "env_http", "env_https", "no_proxy"])
+def test_dedicated_pools_preserve_proxy_selection(pools, monkeypatch, interface, proxy_source):
+    for name in ("http_proxy", "https_proxy", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(name.upper(), raising=False)
+    monkeypatch.setattr(httpclient, "check_env_proxy", httputil.check_env_proxy)
+    options = {"interface": interface, "server_host_name": None, "dedicated_pool": True}
+    proxy = "http://proxy.test:8080"
+    if proxy_source.startswith("explicit_"):
+        options[f"{proxy_source.removeprefix('explicit_')}_proxy"] = proxy
+    elif proxy_source.startswith("env_"):
+        monkeypatch.setenv(f"{proxy_source.removeprefix('env_').upper()}_PROXY", proxy)
+    elif proxy_source == "no_proxy":
+        monkeypatch.setenv("HTTP_PROXY", proxy)
+        monkeypatch.setenv("HTTPS_PROXY", proxy)
+        monkeypatch.setenv("NO_PROXY", "localhost")
+    expected_proxy = (
+        proxy
+        if proxy_source in ("explicit_http", "env_http") or (interface == "https" and proxy_source in ("explicit_https", "env_https"))
+        else None
+    )
+
+    first = make_client(**options)
+    second = make_client(**options)
+    try:
+        assert first.http is not second.http
+        assert pools == [first.http, second.http]
+        assert httputil._proxy_managers == {}
+        for manager in pools:
+            if expected_proxy:
+                assert manager.proxy.url.rstrip("/") == expected_proxy
+            else:
+                assert manager.proxy is None
+        first.close()
+        first.close()
+        assert first.http not in httputil.all_managers
+        assert second.http in httputil.all_managers
+        assert len(second.http.pools) == 1
+    finally:
+        first.close()
+        second.close()
+
+
+@pytest.mark.parametrize(
+    "tls_options",
+    [
+        {"server_host_name": "localhost"},
+        {"ca_cert": "test-ca.pem"},
+        {"client_cert": "test-client.pem"},
+        {"verify": False},
+        {"https_proxy": "http://proxy.test:8080"},
+    ],
+)
+def test_dedicated_pool_reuses_owned_tls_path(pools, tls_options):
+    client = make_client(**{"server_host_name": None, "dedicated_pool": True, **tls_options})
+    try:
+        assert pools == [client.http]
+        assert client._owns_pool_manager
+    finally:
+        client.close()
+
+
+def test_dedicated_pool_conflicts_with_supplied_manager_before_allocation(pools, monkeypatch):
+    manager = httputil.get_pool_manager()
+    allocate = Mock(side_effect=AssertionError("must not allocate"))
+    monkeypatch.setattr(httpclient, "get_pool_manager", allocate)
+
+    with pytest.raises(ProgrammingError, match="dedicated_pool.*pool_mgr"):
+        make_client(dedicated_pool=True, pool_mgr=manager)
+
+    allocate.assert_not_called()
+    manager.clear.assert_not_called()
+    assert pools == [manager]
+
+
+@pytest.mark.parametrize("checked_out", [False, True])
+def test_close_manager_closes_retained_connections_on_return(pools, checked_out):
+    client = make_client()
+    manager = client.http
+    pool = manager.connection_from_host("retained.test", 8443, scheme="https")
+    connection = pool._get_conn()
+    connection.close = Mock(wraps=connection.close)
+    if not checked_out:
+        pool._put_conn(connection)
+
+    client.close()
+
+    assert pool.pool is None
+    assert len(manager.pools) == 0
+    assert manager not in httputil.all_managers
+    if checked_out:
+        connection.close.assert_not_called()
+        pool._put_conn(connection)
+    connection.close.assert_called_once_with()
+    client.close()
+    connection.close.assert_called_once_with()

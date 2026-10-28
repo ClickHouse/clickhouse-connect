@@ -22,6 +22,17 @@ def datetime_engine(request, test_engine):
     engine.dispose()
 
 
+@pytest.mark.parametrize("expanding", [False, True], ids=["predicates", "in"])
+def test_datetime_64_anonymous_binds(datetime_engine, expanding):
+    stamp = STAMP.replace(microsecond=0)
+    source = sa.select(sa.cast(sa.literal_column("'2024-06-13 07:08:09'"), DateTime("UTC")).label("created_at")).subquery()
+    column = source.c.created_at
+    values = [stamp + timedelta(seconds=offset) for offset in range(1, 64)] + [stamp]
+    predicate = column.in_(values) if expanding else sa.or_(*(column == value for value in values))
+    with datetime_engine.connect() as conn:
+        assert conn.execute(sa.select(column).where(predicate)).all() == [(stamp.replace(tzinfo=None),)]
+
+
 @pytest.mark.parametrize("precision", [0, 3, 6, 9])
 @pytest.mark.parametrize("route", ["single", "native", "multivalues", "fallback", "orm"])
 def test_datetime64_insert_precision(datetime_engine, table_context, test_db, precision, route):
