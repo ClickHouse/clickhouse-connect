@@ -6,7 +6,7 @@ import ssl
 import sys
 import uuid
 from base64 import b64encode
-from collections.abc import Awaitable, Callable, Generator, Sequence
+from collections.abc import AsyncIterable, Awaitable, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from datetime import tzinfo
@@ -1386,7 +1386,7 @@ class AsyncClient(Client):
         self,
         table: str | None = None,
         column_names: Sequence[str] | None = None,
-        insert_block: str | bytes | Generator[bytes, None, None] | BinaryIO | None = None,
+        insert_block: str | bytes | AsyncIterable[bytes] | BinaryIO | None = None,
         settings: dict | None = None,
         fmt: str | None = None,
         compression: str | None = None,
