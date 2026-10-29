@@ -151,13 +151,17 @@ def test_datetime64_params_in_containers(param_client: Client, call, type_hint, 
 
 
 @pytest.mark.parametrize("reverse", [False, True])
-def test_datetime64_variant_single_alternative(param_client: Client, call, reverse):
-    alternatives = ["DateTime64(6, 'Asia/Tokyo')", "String"]
+@pytest.mark.parametrize("other_type", ["String", "Enum8('datetime' = 1)", "Tuple(last_datetime String)"])
+def test_datetime64_variant_single_alternative(param_client: Client, call, reverse, other_type):
+    alternatives = ["DateTime64(6, 'Asia/Tokyo')", other_type]
     if reverse:
         alternatives.reverse()
     type_hint = f"Variant({', '.join(alternatives)})"
     value = datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc)
-    query = f"SELECT variantType(v), toUnixTimestamp64Micro(v::DateTime64(6, 'Asia/Tokyo')) FROM (SELECT {{p:{type_hint}}} AS v)"
+    query = (
+        "SELECT variantType(v), toUnixTimestamp64Micro(variantElement(v, 'DateTime64(6, \\'Asia/Tokyo\\')')) "
+        f"FROM (SELECT {{p:{type_hint}}} AS v)"
+    )
     result = call(param_client.query, query, parameters={"p": value})
     assert result.first_row == ("DateTime64(6, 'Asia/Tokyo')", 1704164645123456)
 

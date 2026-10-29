@@ -398,13 +398,46 @@ class TestBindQueryDateTime64Precision:
         assert params["param_val"] == "2025-01-01 12:00:00"
 
     @pytest.mark.parametrize("reverse", [False, True])
-    def test_variant_single_datetime64_alternative_promotes(self, reverse):
-        alternatives = ["DateTime64(6, 'Asia/Tokyo')", "String"]
+    @pytest.mark.parametrize(
+        "other_type",
+        [
+            "String",
+            "Enum8('datetime' = 1)",
+            "Tuple(last_datetime String)",
+            "Array(Tuple(`last_datetime` String))",
+            "Nested(last_datetime String)",
+            "Map(String, Array(Tuple(last_datetime String)))",
+            "LowCardinality(Nullable(Enum8('datetime' = 1)))",
+        ],
+    )
+    def test_variant_single_datetime64_alternative_promotes(self, reverse, other_type):
+        alternatives = ["DateTime64(6, 'Asia/Tokyo')", other_type]
         if reverse:
             alternatives.reverse()
         type_hint = f"Variant({', '.join(alternatives)})"
         _, params = bind_query(f"SELECT {{val:{type_hint}}}", {"val": self.dt}, server_tz=self.utc)
         assert params["param_val"] == "2025-01-01 21:00:00.250306"
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.parametrize(
+        "other_type",
+        [
+            "DateTime",
+            "DateTime32",
+            "Nullable(DateTime64(3))",
+            "Array(Tuple(last_datetime DateTime64(3)))",
+            "Nested(last_datetime DateTime64(3))",
+            "Map(String, Array(DateTime64(3)))",
+            "Variant(DateTime64(3), String)",
+            "Tuple(last_datetime dAtEtImE64(3))",
+        ],
+    )
+    def test_variant_nested_datetime_alternative_unchanged(self, reverse, other_type):
+        alternatives = ["DateTime64(6)", other_type]
+        if reverse:
+            alternatives.reverse()
+        _, params = bind_query(f"SELECT {{val:Variant({', '.join(alternatives)})}}", {"val": self.dt}, server_tz=self.utc)
+        assert params["param_val"] == "2025-01-01 12:00:00"
 
     def test_variant_nested_single_alternative_promotes(self):
         query = "SELECT {val:Array(Variant(DateTime64(6), String))}"

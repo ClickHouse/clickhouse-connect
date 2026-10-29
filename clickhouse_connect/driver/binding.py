@@ -782,6 +782,20 @@ def _container_element_types(type_str: str) -> tuple[str, ...]:
     return parse_columns(f"({', '.join(str(t).strip() for t in values)})")[1]
 
 
+@lru_cache(maxsize=256)
+def _mentions_datetime(type_str: str) -> bool:
+    """Find datetime types without counting field names or enum labels."""
+    base_name, values = _unwrap_outer(type_str)
+    base_name = base_name.lower()
+    if base_name in ("datetime", "datetime32", "datetime64"):
+        return True
+    if base_name in ("tuple", "nested"):
+        return any(_mentions_datetime(t) for t in _container_element_types(type_str))
+    if base_name in ("array", "map", "variant", "nullable", "lowcardinality"):
+        return any(_mentions_datetime(str(t)) for t in values)
+    return False
+
+
 def _extract_tz_from_type(type_str: str) -> tzinfo | None:
     """Resolve the timezone named in a ClickHouse type hint."""
     try:
@@ -821,7 +835,7 @@ def _promote_datetime64(type_str: str, value):
         base_name, values = _unwrap_outer(type_str)
         base_name = base_name.lower()
         if base_name == "variant" and isinstance(value, (datetime, DT64Param)):
-            datetime_alts = [str(t) for t in values if "datetime" in str(t).lower()]
+            datetime_alts = [str(t) for t in values if _mentions_datetime(str(t))]
             if len(datetime_alts) == 1 and _unwrap_outer(datetime_alts[0])[0].lower() == "datetime64":
                 return _promote_datetime64(datetime_alts[0], value)
         if base_name == "datetime64":
