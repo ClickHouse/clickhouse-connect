@@ -4,17 +4,18 @@ from types import MethodType
 from typing import Any, cast
 
 import sqlalchemy.schema as sa_schema
-from sqlalchemy import String, bindparam, text
+from sqlalchemy import String, TypeDecorator, bindparam, text
 from sqlalchemy import __version__ as sa_version
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.default import DefaultDialect
 from sqlalchemy.exc import NoResultFound, NoSuchTableError
-from sqlalchemy.sql import operators, visitors
+from sqlalchemy.sql import operators, sqltypes, visitors
 from sqlalchemy.sql.dml import Insert
 from sqlalchemy.sql.elements import ClauseElement, ColumnClause, TextClause
 from sqlalchemy.sql.functions import FunctionElement
 from sqlalchemy.sql.selectable import CompoundSelect, SelectStatementGrouping
-from sqlalchemy.sql.sqltypes import TupleType, TypeEngine
+from sqlalchemy.sql.sqltypes import Boolean, Float, Interval, Numeric, PickleType, TupleType, TypeEngine, _Binary
+from sqlalchemy.sql.sqltypes import Enum as SaEnum
 
 from clickhouse_connect import dbapi
 from clickhouse_connect.cc_sqlalchemy import dialect_name, ischema_names
@@ -44,6 +45,42 @@ from clickhouse_connect.driver.binding import quote_identifier
 
 _MISSING = object()
 _SQLALCHEMY_MAJOR_VERSION = int(sa_version.partition(".")[0])
+_ENUM_RESULT_PROCESSOR = SaEnum.result_processor
+
+# Generic result processors that read only dialect flags, never the server type code.
+_Uuid = getattr(sqltypes, "Uuid", None)  # Not present on SQLAlchemy 1.4.
+_SAFE_RESULT_PROCESSORS = frozenset(
+    processor
+    for processor in (
+        TypeEngine.result_processor,
+        String.result_processor,
+        ChSqlaType.result_processor,
+        Boolean.result_processor,
+        Numeric.result_processor,
+        Float.result_processor,
+        _Binary.result_processor,
+        _Uuid.result_processor if _Uuid is not None else None,
+    )
+    if processor is not None
+)
+# TypeDecorator processors that forward the type code to their inner implementation.
+_FORWARDING_RESULT_PROCESSORS = frozenset((TypeDecorator.result_processor, PickleType.result_processor, Interval.result_processor))
+
+
+def _supports_unknown_type_code(result_type: TypeEngine[Any]) -> bool:
+    processor = result_type.result_processor
+    # An instance attribute can bind another object's processor, so only trust methods bound to this type.
+    if type(processor) is not MethodType or processor.__self__ is not result_type:
+        return False
+    if processor.__func__ in _SAFE_RESULT_PROCESSORS:
+        return True
+    # Enum calls super(), so subclass MROs can introduce a processor that needs the type code.
+    if type(result_type) is SaEnum:
+        return processor.__func__ is _ENUM_RESULT_PROCESSOR
+    if isinstance(result_type, TypeDecorator) and processor.__func__ in _FORWARDING_RESULT_PROCESSORS:
+        impl = result_type.impl_instance if _SQLALCHEMY_MAJOR_VERSION >= 2 else cast(TypeEngine[Any], result_type.impl)
+        return _supports_unknown_type_code(impl)
+    return False
 
 
 class ClickHouseDialect(DefaultDialect):
@@ -154,12 +191,7 @@ class ClickHouseDialect(DefaultDialect):
         # SQLAlchemy's positional mapping requires one server column per compiled expression.
         for column in result_columns:
             # Custom processors may require the server's type code, even for empty results.
-            processor = column[3].dialect_impl(compiled.dialect).result_processor
-            if type(processor) is not MethodType or processor.__func__ not in (
-                TypeEngine.result_processor,
-                String.result_processor,
-                ChSqlaType.result_processor,
-            ):
+            if not _supports_unknown_type_code(column[3].dialect_impl(compiled.dialect)):
                 return None
             pending = list(column[2])
             seen: set[int] = set()
