@@ -1,10 +1,13 @@
+from datetime import datetime, timezone
+from decimal import Decimal
+from enum import Enum
 from unittest.mock import patch
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, column_property, declarative_base
 
-from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import UInt64
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime64, UInt64
 from clickhouse_connect.cc_sqlalchemy.sql import cte
 
 Base = declarative_base()
@@ -26,6 +29,24 @@ class GenericNumber(GenericBase):
 
     number = sa.Column(sa.Integer, primary_key=True)
     number_label = column_property(sa.func.toString(number, type_=sa.String))
+
+
+class _UtcDateTime(sa.TypeDecorator):
+    impl = DateTime64(6, "UTC")
+    cache_ok = True
+
+    def process_result_value(self, value, dialect):
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
+class _NestedUtcDateTime(_UtcDateTime):
+    impl = _UtcDateTime
+    cache_ok = True
+
+
+class _Status(Enum):
+    OPEN = "open"
+    CLOSED = "closed"
 
 
 @pytest.fixture
@@ -69,6 +90,53 @@ def test_empty_core_result_keeps_keys_without_metadata_probe(metadata_connection
 
     assert list(result.keys()) == ["the_number", "number_label", "anon_1"]
     assert result.all() == []
+    assert query.call_count == 1
+
+
+@pytest.mark.parametrize("empty", [True, False], ids=["empty", "populated"])
+@pytest.mark.parametrize(
+    "result_type, value, expected",
+    [
+        (
+            _UtcDateTime(),
+            sa.func.toDateTime64("2026-10-13 07:09:11.123456", 6, "UTC"),
+            datetime(2026, 10, 13, 7, 9, 11, 123456, timezone.utc),
+        ),
+        (
+            _NestedUtcDateTime(),
+            sa.func.toDateTime64("2026-10-13 07:09:11.123456", 6, "UTC"),
+            datetime(2026, 10, 13, 7, 9, 11, 123456, timezone.utc),
+        ),
+        (
+            sa.Enum(_Status),
+            sa.sql.functions.Function("CAST", "OPEN", "Enum8('OPEN' = 1, 'CLOSED' = 2)"),
+            _Status.OPEN,
+        ),
+        (sa.Boolean(), sa.true(), True),
+        (sa.Numeric(10, 2), sa.func.toDecimal64("13.79", 2), Decimal("13.79")),
+    ],
+)
+def test_result_processors_skip_metadata_probe(metadata_connection, client_mode, call, empty, result_type, value, expected):
+    if not empty and sa.__version__.startswith("1.4.") and isinstance(result_type, sa.Enum):
+        pytest.skip("SQLAlchemy 1.4 Enum processors require bytes with this dialect's existing Unicode configuration")
+    connection = metadata_connection
+    raw_connection = call(connection.get_raw_connection) if client_mode == "async" else connection.connection
+    client = raw_connection.driver_connection
+    if client_mode == "sync":
+        client = client.client
+    expression = sa.func.if_(Number.number == 0, value, None, type_=result_type).label("value_1")
+    statement = sa.select(expression).where(Number.number < 2).order_by(Number.number).limit(2)
+    if empty:
+        statement = statement.where(sa.false())
+
+    with patch.object(client, "query", wraps=client.query) as query:
+        result = call(connection.execute, statement)
+
+    assert list(result.keys()) == ["value_1"]
+    if empty:
+        assert result.cursor.description[0][1] is None
+        assert result.cursor.description[0][6] is None
+    assert result.all() == ([] if empty else [(expected,), (None,)])
     assert query.call_count == 1
 
 
