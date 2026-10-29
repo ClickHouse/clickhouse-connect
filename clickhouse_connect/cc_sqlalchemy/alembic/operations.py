@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from alembic.operations import MigrateOperation, Operations
+from alembic.operations.ops import ModifyTableOps
 from sqlalchemy import Column
 
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
@@ -721,6 +722,7 @@ class _ModifyClickHouseTableSettingsOp(MigrateOperation):
         *,
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
+        existing_settings: Mapping[str, Any] | None = None,
     ) -> None:
         if not settings:
             raise ValueError("modify_clickhouse_table_settings requires at least one setting")
@@ -728,6 +730,29 @@ class _ModifyClickHouseTableSettingsOp(MigrateOperation):
         self.settings = settings
         self.schema = schema
         self.clickhouse_settings = clickhouse_settings
+        # Previous values for autogenerate downgrades. None means the setting was not set.
+        self.existing_settings = existing_settings
+
+    def reverse(self) -> MigrateOperation:
+        if self.existing_settings is None:
+            raise NotImplementedError("modify_clickhouse_table_settings needs existing_settings to reverse")
+        restore = {name: value for name, value in self.existing_settings.items() if value is not None}
+        reset = [name for name, value in self.existing_settings.items() if value is None]
+        reversed_ops: list[MigrateOperation] = []
+        if restore:
+            reversed_ops.append(
+                _ModifyClickHouseTableSettingsOp(self.table_name, restore, schema=self.schema, clickhouse_settings=self.clickhouse_settings)
+            )
+        if reset:
+            reversed_ops.append(
+                _ResetClickHouseTableSettingsOp(self.table_name, reset, schema=self.schema, clickhouse_settings=self.clickhouse_settings)
+            )
+        if len(reversed_ops) == 1:
+            return reversed_ops[0]
+        return ModifyTableOps(self.table_name, reversed_ops, schema=self.schema)
+
+    def to_diff_tuple(self) -> tuple[Any, ...]:
+        return ("modify_clickhouse_table_settings", self.schema, self.table_name, dict(self.settings), self.existing_settings)
 
     @classmethod
     def modify_clickhouse_table_settings(

@@ -1137,6 +1137,7 @@ def test_alembic_public_exports():
     from clickhouse_connect.cc_sqlalchemy import alembic as ch_alembic
 
     assert set(ch_alembic.__all__) == {
+        "COMPARE_TABLE_OPTIONS_OPT",
         "patch_alembic_version",
         "clickhouse_writer",
         "include_object",
@@ -1146,6 +1147,8 @@ def test_alembic_public_exports():
         "prevent_empty_migrations",
         "ClickHouseIndex",
         "ClickHouseProjection",
+        "TableOptionDrift",
+        "UnsupportedTableChangeError",
     }
     assert not any(name.endswith("Op") for name in ch_alembic.__all__)
 

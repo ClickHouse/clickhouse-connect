@@ -516,6 +516,19 @@ op.alter_column(
 )
 ```
 
+Remove a column default or another column property. ClickHouse keeps an existing `DEFAULT` when `MODIFY COLUMN` only restates the type, so removal is an explicit `REMOVE` statement. Passing `None` for `server_default`, `clickhousedb_codec`, `clickhousedb_ttl`, `clickhousedb_alias`, or `clickhousedb_materialized` removes that property. Leaving the argument out keeps it:
+
+```python
+op.alter_column(
+    "events",
+    "payload",
+    schema="alembic_demo",
+    server_default=None,
+    clickhousedb_codec=None,
+    clickhouse_settings={"alter_sync": 2},
+)
+```
+
 Drop a column safely:
 
 ```python
@@ -637,7 +650,7 @@ Modify or reset MergeTree table settings after creation:
 ```python
 op.modify_clickhouse_table_settings(
     "events",
-    {"index_granularity": 4096, "merge_with_ttl_timeout": 3600},
+    {"ttl_only_drop_parts": 1, "merge_with_ttl_timeout": 3600},
     schema="alembic_demo",
 )
 
@@ -648,7 +661,7 @@ op.reset_clickhouse_table_settings(
 )
 ```
 
-`MODIFY SETTING` is its own statement and is never combined with schema alters, because replicated databases reject a statement that mixes settings changes with schema changes.
+`MODIFY SETTING` is its own statement and is never combined with schema alters, because replicated databases reject a statement that mixes settings changes with schema changes. Settings fixed at creation, such as `index_granularity` and `index_granularity_bytes`, are read-only on the server and cannot be modified. Autogenerate emits these helpers when the `settings` declared on the table engine differ from the server, and refuses read-only settings as unsupported changes.
 
 ### Materialized views
 
