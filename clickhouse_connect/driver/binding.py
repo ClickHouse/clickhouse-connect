@@ -14,7 +14,7 @@ from clickhouse_connect import common
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.parser import parse_callable
+from clickhouse_connect.driver.parser import parse_callable, parse_columns
 from clickhouse_connect.json_impl import any_to_json
 
 BS = "\\"
@@ -686,9 +686,10 @@ def _legacy_naive_datetime_binding() -> bool:
 
 
 class DT64Param:
+    tz: tzinfo | None = None
+
     def __init__(self, value: datetime, tz: tzinfo | None = None):
         self.value = value
-        # Timezone named in the bound DateTime64 type, which wins over the one passed to format
         self.tz = tz
 
     def format(self, tz: tzinfo | None, top_level: bool) -> str:
@@ -700,13 +701,15 @@ class DT64Param:
                 value = value.astimezone(tz)
         elif tz is not None and _datetime_is_aware(value):
             value = value.astimezone(tz)
-        s = value.strftime("%Y-%m-%d %H:%M:%S.%f")
-        nanosecond = getattr(value, "nanosecond", 0)  # pandas.Timestamp
+        return self._render(value, top_level)
+
+    @staticmethod
+    def _render(value: datetime, top_level: bool) -> str:
+        rendered = value.strftime("%Y-%m-%d %H:%M:%S.%f")
+        nanosecond = getattr(value, "nanosecond", 0)
         if nanosecond:
-            s += f"{nanosecond:03d}"
-        if top_level:
-            return s
-        return f"'{s}'"
+            rendered += f"{nanosecond:03d}"
+        return rendered if top_level else f"'{rendered}'"
 
 
 def quote_identifier(identifier: str) -> str:
@@ -772,6 +775,13 @@ def _unwrap_outer(type_str: str) -> tuple[str, tuple]:
     return base_name, values
 
 
+@lru_cache(maxsize=256)
+def _container_element_types(type_str: str) -> tuple[str, ...]:
+    """Parse Tuple or Nested element types."""
+    _, values = _unwrap_outer(type_str)
+    return parse_columns(f"({', '.join(str(t).strip() for t in values)})")[1]
+
+
 def _extract_tz_from_type(type_str: str) -> tzinfo | None:
     """Resolve the timezone named in a ClickHouse type hint."""
     try:
@@ -797,26 +807,6 @@ def _extract_tz_from_type(type_str: str) -> tzinfo | None:
         return None
 
 
-def _strip_element_name(type_str: str) -> str:
-    """Return the type of a named Tuple or Nested element, "name Type", or type_str if unnamed."""
-    element = type_str.strip()
-    quote = element[:1]
-    if quote in ("`", '"'):
-        pos = 1
-        while pos < len(element):
-            if element[pos] == "\\" or element[pos : pos + 2] == quote * 2:
-                pos += 2
-            elif element[pos] == quote:
-                break
-            else:
-                pos += 1
-        return element[pos + 1 :].strip()
-    _, values, rest = parse_callable(element)
-    if rest and not values and not rest.startswith("("):
-        return rest
-    return element
-
-
 @lru_cache(maxsize=256)
 def _datetime64_type_tz(type_str: str) -> tzinfo | None:
     """Cached _extract_tz_from_type, since containers resolve the same element type for every value."""
@@ -830,6 +820,10 @@ def _promote_datetime64(type_str: str, value):
     try:
         base_name, values = _unwrap_outer(type_str)
         base_name = base_name.lower()
+        if base_name == "variant" and isinstance(value, (datetime, DT64Param)):
+            datetime_alts = [str(t) for t in values if "datetime" in str(t).lower()]
+            if len(datetime_alts) == 1 and _unwrap_outer(datetime_alts[0])[0].lower() == "datetime64":
+                return _promote_datetime64(datetime_alts[0], value)
         if base_name == "datetime64":
             tz = _datetime64_type_tz(type_str)
             if isinstance(value, datetime):
@@ -842,16 +836,14 @@ def _promote_datetime64(type_str: str, value):
         if base_name == "array" and values and isinstance(value, (list, tuple)):
             inner = str(values[0])
             return type(value)(_promote_datetime64(inner, x) for x in value)
-        if base_name == "tuple" and isinstance(value, tuple) and len(values) == len(value):
-            return tuple(_promote_datetime64(_strip_element_name(str(t)), x) for t, x in zip(values, value))
+        if base_name == "tuple" and isinstance(value, tuple):
+            element_types = _container_element_types(type_str)
+            if len(element_types) == len(value):
+                return tuple(_promote_datetime64(t, x) for t, x in zip(element_types, value))
         if base_name == "nested" and isinstance(value, (list, tuple)):
-            element_type = f"Tuple({', '.join(str(t) for t in values)})"
+            element_types = _container_element_types(type_str)
+            element_type = f"Tuple({', '.join(element_types)})"
             return type(value)(_promote_datetime64(element_type, x) for x in value)
-        if base_name == "variant" and isinstance(value, (datetime, DT64Param)):
-            variant_names = {_unwrap_outer(str(t))[0].lower(): str(t) for t in values}
-            # A plain DateTime alternative would no longer be the variant the server picks
-            if "datetime64" in variant_names and "datetime" not in variant_names:
-                return _promote_datetime64(variant_names["datetime64"], value)
         if base_name == "map" and isinstance(value, dict) and len(values) == 2 and common.get_setting("dict_parameter_format") == "map":
             key_type, value_type = (str(t) for t in values)
             return {_promote_datetime64(key_type, k): _promote_datetime64(value_type, v) for k, v in value.items()}

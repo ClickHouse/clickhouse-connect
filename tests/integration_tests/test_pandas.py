@@ -672,7 +672,9 @@ def test_pandas_timestamp_datetime64_bind_nanoseconds(param_client: Client, call
     assert result.result_rows[0][0] == PD_TIMESTAMP_NS
 
 
-def test_pandas_timestamp_datetime64_insert_nanoseconds(param_client: Client, call, table_context: Callable):
+def test_pandas_timestamp_datetime64_insert_nanoseconds(param_client: Client, call, table_context: Callable, test_config):
+    if test_config.native_codec != "python":
+        pytest.skip("Nanosecond Timestamp row inserts require the Python codec")
     # The last two values round up to the next second in pandas.Timestamp.timestamp()
     values = [PD_TIMESTAMP_NS, "2024-01-02 03:04:05.999999999", "1960-01-02 03:04:05.999999999"]
     columns = ["key UInt8", "v DateTime64(9)", "v6 DateTime64(6)", "vn Nullable(DateTime64(9, 'UTC'))"]

@@ -6,6 +6,7 @@ import zoneinfo
 from array import array
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from datetime import time as dt_time
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -13,7 +14,7 @@ import pytest
 
 from clickhouse_connect import common
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import _DateTime64QueryParam
-from clickhouse_connect.driver import tzutil
+from clickhouse_connect.driver import binding, tzutil
 from clickhouse_connect.driver.binding import (
     DT64Param,
     _binary_bind_value,
@@ -336,10 +337,25 @@ class TestBindQueryDateTime64Precision:
         _, params = bind_query(query, {"vals": [(self.dt, "user_1")]}, server_tz=self.utc)
         assert params["param_vals"] == "[('2025-01-01 12:00:00.250306', 'user_1')]"
 
+    @pytest.mark.parametrize("separator", [" ", "\t", "\n"])
+    def test_unnamed_tuple_trailing_whitespace(self, separator):
+        query = f"SELECT {{val:Tuple(DateTime64(6){separator}, DateTime64(6){separator})}}"
+        _, params = bind_query(query, {"val": (self.dt, self.dt)}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 12:00:00.250306', '2025-01-01 12:00:00.250306')"
+
     def test_named_tuple(self):
         query = "SELECT {val:Tuple(a DateTime64(6), b String)}"
         _, params = bind_query(query, {"val": (self.dt, "user_1")}, server_tz=self.utc)
         assert params["param_val"] == "('2025-01-01 12:00:00.250306', 'user_1')"
+
+    @pytest.mark.parametrize("separator", ["\t", "\n"])
+    @pytest.mark.parametrize("container", ["Tuple", "Nested"])
+    def test_named_element_whitespace(self, separator, container):
+        query = f"SELECT {{val:{container}(stamp{separator}DateTime64(6, 'Asia/Tokyo'))}}"
+        value = (self.dt,) if container == "Tuple" else [(self.dt,)]
+        _, params = bind_query(query, {"val": value}, server_tz=self.utc)
+        expected = "('2025-01-01 21:00:00.250306')"
+        assert params["param_val"] == (expected if container == "Tuple" else f"[{expected}]")
 
     def test_named_tuple_tz_hint(self):
         query = "SELECT {val:Tuple(a DateTime64(6, 'Asia/Tokyo'))}"
@@ -380,6 +396,72 @@ class TestBindQueryDateTime64Precision:
         query = "SELECT {val:Variant(DateTime, DateTime64(6))}"
         _, params = bind_query(query, {"val": self.dt}, server_tz=self.utc)
         assert params["param_val"] == "2025-01-01 12:00:00"
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_variant_single_datetime64_alternative_promotes(self, reverse):
+        alternatives = ["DateTime64(6, 'Asia/Tokyo')", "String"]
+        if reverse:
+            alternatives.reverse()
+        type_hint = f"Variant({', '.join(alternatives)})"
+        _, params = bind_query(f"SELECT {{val:{type_hint}}}", {"val": self.dt}, server_tz=self.utc)
+        assert params["param_val"] == "2025-01-01 21:00:00.250306"
+
+    def test_variant_nested_single_alternative_promotes(self):
+        query = "SELECT {val:Array(Variant(DateTime64(6), String))}"
+        _, params = bind_query(query, {"val": [self.dt]}, server_tz=self.utc)
+        assert params["param_val"] == "['2025-01-01 12:00:00.250306']"
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.parametrize(
+        "alternatives, expected, expected_reversed",
+        [
+            (
+                ["DateTime64(3, 'UTC')", "DateTime64(6, 'Asia/Tokyo')"],
+                "2025-01-01 12:00:00",
+                "2025-01-01 21:00:00",
+            ),
+            (
+                ["DateTime('Asia/Tokyo')", "DateTime64(6, 'UTC')"],
+                "2025-01-01 21:00:00",
+                "2025-01-01 12:00:00",
+            ),
+            (
+                ["Array(DateTime64(3, 'UTC'))", "DateTime('Asia/Tokyo')"],
+                "2025-01-01 12:00:00",
+                "2025-01-01 21:00:00",
+            ),
+            (
+                ["DateTime32('Asia/Tokyo')", "DateTime64(6, 'UTC')"],
+                "2025-01-01 12:00:00",
+                "2025-01-01 12:00:00",
+            ),
+        ],
+    )
+    def test_variant_several_datetime_alternatives_unchanged(self, reverse, alternatives, expected, expected_reversed):
+        alternatives = list(alternatives)
+        if reverse:
+            alternatives.reverse()
+            expected = expected_reversed
+        type_hint = f"Variant({', '.join(alternatives)})"
+        _, params = bind_query(f"SELECT {{val:{type_hint}}}", {"val": self.dt}, server_tz=self.utc)
+        assert params["param_val"] == expected
+
+    @pytest.mark.parametrize(
+        "container", ["Array(Tuple(cache_stamp DateTime64(6), cache_key Int32))", "Nested(cache_stamp DateTime64(6), cache_key Int32)"]
+    )
+    def test_container_types_parsed_once_per_hint(self, monkeypatch, container):
+        binding._container_element_types.cache_clear()
+        parser = Mock(wraps=binding.parse_columns)
+        monkeypatch.setattr(binding, "parse_columns", parser)
+        values = [(self.dt, key) for key in range(13)]
+        query = f"SELECT {{val:{container}}}"
+        _, first = bind_query(query, {"val": values}, server_tz=self.utc)
+        parse_count = parser.call_count
+        assert 0 < parse_count <= 2
+        _, second = bind_query(query, {"val": values}, server_tz=self.utc)
+        assert parser.call_count == parse_count
+        assert first == second
+        assert first["param_val"].count(".250306") == len(values)
 
     def test_map(self):
         query = "SELECT {val:Map(String, DateTime64(6))}"
