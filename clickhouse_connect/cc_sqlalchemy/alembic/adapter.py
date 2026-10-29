@@ -32,6 +32,7 @@ from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
     _ResetClickHouseTableSettingsOp,
 )
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
+from clickhouse_connect.cc_sqlalchemy.inspector import VIEW_ENGINE_KINDS
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
 
 __all__ = ["clickhouse_writer", "include_object", "patch_alembic_version"]
@@ -511,6 +512,9 @@ def include_object(object_: Any, name: str | None, type_: str, reflected: bool, 
             return False
         # Ignore internal tables (Materialized View storage)
         if name.startswith(".inner"):
+            return False
+        # Reflected views and materialized views are not tables to drop or alter.
+        if reflected and ClickHouseDDLHelper.get_option(object_, "table_type") in VIEW_ENGINE_KINDS.values():
             return False
 
     return True

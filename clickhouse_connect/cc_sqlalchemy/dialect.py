@@ -34,6 +34,7 @@ from clickhouse_connect.cc_sqlalchemy.inspector import (
     _NoSuchTableError,
     get_columns,
     get_table_metadata,
+    get_view_definition,
     with_internal_query_formats,
 )
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
@@ -536,7 +537,10 @@ class ClickHouseDialect(DefaultDialect):
         return []
 
     def get_view_definition(self, connection, view_name, schema=None, **kw):
-        raise NoSuchTableError(f"{schema}.{view_name}" if schema else view_name)
+        definition = get_view_definition(connection, view_name, schema)
+        if definition is None:
+            raise NoSuchTableError(f"{schema}.{view_name}" if schema else view_name)
+        return definition
 
     def get_table_comment(self, connection, table_name, schema=None, **kw):
         try:

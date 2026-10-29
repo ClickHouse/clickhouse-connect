@@ -591,7 +591,9 @@ def _find_clause_markers(sql: str) -> list[tuple[int, str]]:
         if depth != 0 or (i > 0 and not sql[i - 1].isspace()):
             continue
         for clause in ENGINE_CLAUSES:
-            if upper_sql.startswith(clause, i):
+            end = i + len(clause)
+            # Match whole keywords only, so a setting such as ttl_only_drop_parts is not a TTL clause.
+            if upper_sql.startswith(clause, i) and (end == len(sql) or not (sql[end].isalnum() or sql[end] == "_")):
                 markers.append((i, clause))
                 break
     return markers
