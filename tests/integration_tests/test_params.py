@@ -1,7 +1,7 @@
 import os
 import time
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -120,6 +120,61 @@ def test_datetime_64_params(param_client: Client, call):
 
     result = call(param_client.query, "SELECT {a1:Array(DateTime64(6))}", parameters={"a1": dt_values}).first_row
     assert result[0] == dt_values
+
+
+@pytest.mark.parametrize(
+    "type_hint, value, expected",
+    [
+        ("Tuple(a DateTime64(6), b Int32)", (datetime(2024, 1, 2, 3, 4, 5, 123456), 1), "('2024-01-02 03:04:05.123456',1)"),
+        (
+            "Tuple(a DateTime64(6, 'Asia/Tokyo'))",
+            (datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc),),
+            "('2024-01-02 12:04:05.123456')",
+        ),
+        (
+            "Tuple(a DateTime64(6, 'Asia/Tokyo'))",
+            (DT64Param(datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc)),),
+            "('2024-01-02 12:04:05.123456')",
+        ),
+        (
+            "Tuple(a DateTime64(6, 'Asia/Tokyo'), b DateTime64(6, 'UTC'))",
+            (datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc),) * 2,
+            "('2024-01-02 12:04:05.123456','2024-01-02 03:04:05.123456')",
+        ),
+        ("Nested(a DateTime64(6))", [(datetime(2024, 1, 2, 3, 4, 5, 123456),)], "[('2024-01-02 03:04:05.123456')]"),
+        ("Variant(DateTime64(6), String)", datetime(2024, 1, 2, 3, 4, 5, 123456), "2024-01-02 03:04:05.123456"),
+    ],
+)
+def test_datetime64_params_in_containers(param_client: Client, call, type_hint, value, expected):
+    result = call(param_client.query, f"SELECT toString({{p:{type_hint}}})", parameters={"p": value})
+    assert result.first_row[0] == expected
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("other_type", ["String", "Enum8('datetime' = 1)", "Tuple(last_datetime String)"])
+def test_datetime64_variant_single_alternative(param_client: Client, call, reverse, other_type):
+    alternatives = ["DateTime64(6, 'Asia/Tokyo')", other_type]
+    if reverse:
+        alternatives.reverse()
+    type_hint = f"Variant({', '.join(alternatives)})"
+    value = datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc)
+    query = (
+        "SELECT variantType(v), toUnixTimestamp64Micro(variantElement(v, 'DateTime64(6, \\'Asia/Tokyo\\')')) "
+        f"FROM (SELECT {{p:{type_hint}}} AS v)"
+    )
+    result = call(param_client.query, query, parameters={"p": value})
+    assert result.first_row == ("DateTime64(6, 'Asia/Tokyo')", 1704164645123456)
+
+
+def test_datetime64_params_in_map(param_client: Client, call):
+    original = common.get_setting("dict_parameter_format")
+    common.set_setting("dict_parameter_format", "map")
+    try:
+        value = {"k": datetime(2024, 1, 2, 3, 4, 5, 123456)}
+        result = call(param_client.query, "SELECT toString({p:Map(String, DateTime64(6))})", parameters={"p": value})
+    finally:
+        common.set_setting("dict_parameter_format", original)
+    assert result.first_row[0] == "{'k':'2024-01-02 03:04:05.123456'}"
 
 
 def test_pyformat_64_datetime_params(param_client: Client, call):

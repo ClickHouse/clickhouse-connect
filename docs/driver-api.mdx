@@ -401,7 +401,7 @@ For temporary compatibility with older host-local conversion, set `common.set_se
 
 Native inserts into `Date` and `Date32` columns use a Python `datetime` value's own calendar date without timezone conversion. When the same calendar date is needed for both an insert and a query parameter, pass `value.date()` explicitly. See [Date and Date32 values](/integrations/language-clients/python/advanced-inserting#date-and-date32-values).
 
-For a server-side `{value:DateTime64(precision)}` placeholder, the declared type preserves sub-second precision automatically, including inside `Array` and `Tuple` hints.
+For a server-side `{value:DateTime64(precision)}` placeholder, the declared type preserves sub-second precision automatically, including inside `Array`, named or unnamed `Tuple`, `Nested`, and `Map` hints. `Map` parameters require `dict_parameter_format="map"`. A `Variant` keeps `DateTime64` precision and timezone only when its sole datetime alternative is a `DateTime64`. Variants with several datetime alternatives behave as before.
 
 Client-side `%s` binding has no declared type. Wrap a `datetime` in `DT64Param` when it must render with sub-second precision:
 
