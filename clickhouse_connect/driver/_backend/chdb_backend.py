@@ -783,7 +783,7 @@ class ChdbBackend:
         next request when an invalid setting rides in the params."""
         self._run(f"SET {_validate_setting_name(key)} = {_quote_setting_value(value)}", "TabSeparated")
 
-    def ping(self) -> bool:
+    def ping(self, timeout: float | None = None) -> bool:
         try:
             result = self._run("SELECT 1", "TabSeparated")
             return result.bytes().strip() == b"1"

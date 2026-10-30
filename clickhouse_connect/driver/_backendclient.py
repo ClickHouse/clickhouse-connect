@@ -184,11 +184,11 @@ class SyncBackendClient(Client):
         final_query, bind_params, runtime = self._prep_raw_query_runtime(query, parameters, settings, fmt, use_database)
         return self._backend.execute_raw_stream(final_query, bind_params, external_data, runtime, transport_settings)
 
-    def ping(self) -> bool:
+    def ping(self, timeout: float | None = None) -> bool:
         """
         See BaseClient doc_string for this method
         """
-        return self._backend.ping()
+        return self._backend.ping(timeout)
 
     def close_connections(self) -> None:
         self._backend.close_connections()
