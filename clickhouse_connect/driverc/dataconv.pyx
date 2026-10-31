@@ -600,6 +600,24 @@ cdef inline unsigned long long _bswap_uint64(unsigned long long v):
             (((v >> 48) & 0xFF) << 8) | ((v >> 56) & 0xFF))
 
 
+def build_array_rows(list column, offsets):
+    """
+    Split the flat element list of an Array column into one list per row, using the row end offsets.
+    offsets is the UInt64 offsets column of one Array level, as an array.array or a list.
+    """
+    cdef Py_ssize_t column_len = len(column)
+    cdef Py_ssize_t start = 0, end
+    cdef unsigned long long offset
+    cdef list rows = []
+    for x in offsets:
+        offset = x
+        # Clamp like Python slicing does, so malformed offsets give the same rows as the pure Python version
+        end = <Py_ssize_t>offset if offset < <unsigned long long>column_len else column_len
+        rows.append(column[start:end])
+        start = end
+    return rows
+
+
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def build_map_columns(column, bytearray dest):
