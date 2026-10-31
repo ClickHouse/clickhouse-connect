@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Improvements
+
+- The `lz4` package is now optional on Python 3.14 and later. Without it, `compress=True` negotiates the remaining methods and writes with `zstd` when available, otherwise `gzip`. Install `clickhouse-connect[lz4]` to keep lz4 on 3.14+. Python versions below 3.14 still install `lz4` by default.
+
 ### Bug Fixes
 
 - With the Python codec and extended pandas dtypes, `query_df` preserves `Nullable(UInt64)` values above `2**53` without rounding, keeps timezone-aware nullable datetime dtypes across all-NULL blocks, and reads valid `Nullable(DateTime64)` values beyond the nanosecond range on pandas 2.
