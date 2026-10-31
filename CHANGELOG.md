@@ -33,6 +33,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
+- `ping()` on the sync and async clients accepts an optional `timeout` in seconds, defaulting to 3 seconds when omitted. Closes [#192](https://github.com/ClickHouse/clickhouse-connect/issues/192).
 - Added `get_client(dedicated_pool=True)` for synchronous HTTP clients that need their own connection pool. Closing any client-owned pool now closes idle connections immediately and closes active connections when their responses return to the pool. Requests racing with `close()` can fail with `OperationalError`, including for existing TLS/proxy-owned pools. The async client accepts the option without effect because it already owns its connector. Closes [#1121](https://github.com/ClickHouse/clickhouse-connect/issues/1121).
 - Client creation is faster with non-UTC IANA server timezones because timezone validation no longer scans the timezone database. Closes [#1120](https://github.com/ClickHouse/clickhouse-connect/issues/1120).
 - `query_np`, `query_df`, `query_np_stream`, and `query_df_stream` no longer raise `AttributeError` for a query that ends in `LIMIT 0`. They now return an empty result, the same as a query that matches no rows. Related to [#257](https://github.com/ClickHouse/clickhouse-connect/issues/257). Empty results still don't include column names.

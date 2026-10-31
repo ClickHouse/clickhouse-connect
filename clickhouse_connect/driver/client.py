@@ -1070,9 +1070,11 @@ class Client(ABC):
         """
 
     @abstractmethod
-    def ping(self) -> bool:
+    def ping(self, timeout: float | None = None) -> bool:
         """
         Validate the connection, does not throw an Exception (see debug logs)
+        :param timeout: Total time in seconds to wait for the server to respond. Defaults to 3 seconds when None.
+          Ignored by the chDB client.
         :return: ClickHouse server is up and reachable
         """
 

@@ -418,10 +418,10 @@ class HttpSyncBackend:
             else:
                 self.error_handler(response)
 
-    def ping(self) -> bool:
+    def ping(self, timeout: float | None = None) -> bool:
         try:
             headers = dict_copy(self.headers)
-            kwargs: dict[str, Any] = {"headers": headers, "timeout": 3, "preload_content": True}
+            kwargs: dict[str, Any] = {"headers": headers, "timeout": 3 if timeout is None else timeout, "preload_content": True}
             if self.server_host_name:
                 kwargs["assert_same_host"] = False
                 headers["Host"] = self.server_host_name
