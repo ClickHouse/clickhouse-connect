@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from ipaddress import IPv4Address
 from uuid import UUID
 
+import numpy as np
 import pytest
 from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
 
@@ -456,6 +457,40 @@ def test_nullable_empty_tuple_composes_in_containers(type_name, values, expected
     assert ch_type.read_column(source, 3, QueryContext()) == expected
     assert list(registry.get_from_name("UInt8").read_column(source, 3, QueryContext())) == [13, 79, 80]
     assert ch_type.insert_name == type_name
+
+
+@pytest.mark.parametrize(
+    "type_name, values",
+    [
+        ("Array(UInt8)", [[13, 79], [], [80]]),
+        ("Array(UInt8)", [[], [], []]),
+        ("Array(Nullable(String))", [["user_1", None], [], ["user_2"]]),
+        ("Array(LowCardinality(String))", [["user_1", "user_2"], [], ["user_1"]]),
+        ("Array(Array(UInt8))", [[[13], []], [], [[79, 80]]]),
+        ("Array(Array(Array(UInt8)))", [[[[13]], [[], [79]]], [[]], []]),
+    ],
+)
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+def test_array_native_round_trip_and_stream_alignment(type_name, values, buffer_cls):
+    ch_type = registry.get_from_name(type_name)
+    dest = bytearray()
+    ch_type.write_column(values, dest, InsertContext("", [], []))
+    source = bytes_source(bytes(dest) + bytes((13, 79, 80)), cls=buffer_cls)
+
+    assert ch_type.read_column(source, len(values), QueryContext()) == values
+    assert list(registry.get_from_name("UInt8").read_column(source, 3, QueryContext())) == [13, 79, 80]
+
+
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+def test_array_numpy_read_keeps_numpy_scalars(buffer_cls):
+    ch_type = registry.get_from_name("Array(Array(UInt64))")
+    values = [[[13, 79], []], [], [[80]]]
+    dest = bytearray()
+    ch_type.write_column(values, dest, InsertContext("", [], []))
+
+    result = ch_type.read_column(bytes_source(bytes(dest), cls=buffer_cls), 3, QueryContext(use_numpy=True))
+    assert result == values
+    assert {type(v) for row in result for inner in row for v in inner} == {np.uint64}
 
 
 @pytest.mark.parametrize(
