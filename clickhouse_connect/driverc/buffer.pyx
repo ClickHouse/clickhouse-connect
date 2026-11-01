@@ -98,8 +98,7 @@ cdef class ResponseBuffer:
         e = self.buf_sz
 
         if sz == 0:
-            # self.buffer is still NULL before the first chunk is loaded, and returning NULL here would signal an
-            # exception that was never set. self.slice is allocated in __init__ and is safe for a zero byte copy
+            # self.buffer is NULL before the first chunk, and NULL here means "exception set"
             return self.slice
 
         if self.buf_loc + sz <= e:
