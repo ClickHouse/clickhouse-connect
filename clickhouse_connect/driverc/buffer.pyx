@@ -97,6 +97,11 @@ cdef class ResponseBuffer:
         cdef char* ptr
         e = self.buf_sz
 
+        if sz == 0:
+            # self.buffer is still NULL before the first chunk is loaded, and returning NULL here would signal an
+            # exception that was never set. self.slice is allocated in __init__ and is safe for a zero byte copy
+            return self.slice
+
         if self.buf_loc + sz <= e:
             # We still have "sz" unread bytes available in the buffer, return the currently loc and advance it
             temp = self.buf_loc
