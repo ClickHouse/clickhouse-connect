@@ -223,7 +223,7 @@ class TestEpochSecondsToComponents(unittest.TestCase):
         self.assertEqual((year, month, day, hour, minute, second, microsecond), (2100, 1, 1, 0, 0, 0, 0))
 
     def test_roundtrip_via_datetime(self):
-        """Verify results match datetime.utcfromtimestamp for various values."""
+        """Verify results match standard-library datetime arithmetic."""
         test_timestamps = [
             0,
             1,
@@ -243,10 +243,10 @@ class TestEpochSecondsToComponents(unittest.TestCase):
                 # Build datetime from components
                 dt_from_components = datetime(year, month, day, hour, minute, second, microsecond)
 
-                # Compare to datetime.fromtimestamp with UTC timezone
-                dt_from_timestamp = datetime.fromtimestamp(ts, timezone.utc).replace(tzinfo=None)
+                # Windows fromtimestamp does not support all negative timestamps.
+                expected = datetime(1970, 1, 1) + timedelta(seconds=ts)
 
-                self.assertEqual(dt_from_components, dt_from_timestamp)
+                self.assertEqual(dt_from_components, expected)
 
 
 class TestPureUtcfromtimestamp(unittest.TestCase):
