@@ -3,7 +3,7 @@ import struct
 from typing import Sequence, Optional
 
 import array
-from datetime import datetime, date
+from datetime import datetime
 
 import cython
 import sys
@@ -15,7 +15,7 @@ from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
 from cpython.bytearray cimport PyByteArray_GET_SIZE, PyByteArray_Resize, PyByteArray_AS_STRING
 from cpython.memoryview cimport PyMemoryView_FromMemory
-from cpython.datetime cimport datetime_new, import_datetime
+from cpython.datetime cimport date_new, datetime_new, import_datetime
 from cython.view cimport array as cvarray
 from ipaddress import IPv4Address
 from uuid import UUID, SafeUUID
@@ -145,7 +145,7 @@ cpdef inline object epoch_days_to_date(int days):
         rem -= years * 365
         year = (cycles << 2) + years + 1969
         if years == 4:
-            return date(year - 1, 12, 31)
+            return date_new(year - 1, 12, 31)
         if years == 3:
             m_list = MONTH_DAYS_LEAP
         else:
@@ -163,7 +163,7 @@ cpdef inline object epoch_days_to_date(int days):
         rem -= years * 365
         year = (cycles << 2) + cycles400 * 400 + cycles100 * 100  + years + 1
         if years == 4 or cycles100 == 4:
-            return date(year - 1, 12, 31)
+            return date_new(year - 1, 12, 31)
         if years == 3 and (year % 100 != 0 or year % 400 == 0):
             m_list = MONTH_DAYS_LEAP
         else:
@@ -173,7 +173,7 @@ cpdef inline object epoch_days_to_date(int days):
     while rem < prev:
         month -= 1
         prev = m_list[month]
-    return date(year, month + 1, rem + 1 - prev)
+    return date_new(year, month + 1, rem + 1 - prev)
 
 
 @cython.cdivision(True)
