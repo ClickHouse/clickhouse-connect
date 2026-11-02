@@ -7,6 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- Fixed Date32 decoding before 1601 and in leap centuries such as 1600 and 2400. Python date results support years 1 through 9999, with out-of-range values raising `ValueError`. The same calendar correction applies to epoch-based DateTime64 decoding.
 - With the Python codec and extended pandas dtypes, `query_df` preserves `Nullable(UInt64)` values above `2**53` without rounding, keeps timezone-aware nullable datetime dtypes across all-NULL blocks, and reads valid `Nullable(DateTime64)` values beyond the nanosecond range on pandas 2.
 - Datetime parameters whose names end in `_64` now retain their names in pyformat queries, fixing `KeyError` failures including SQLAlchemy queries with 64 datetime binds. The `_64` precision hint still applies when the query uses the name without the suffix. Closes [#1131](https://github.com/ClickHouse/clickhouse-connect/issues/1131).
 - The Python codec now decodes `Nullable(Tuple(...))` correctly, preserving NULL tuples and non-NULL values, including nested tuples and tuple read formats. Closes [#1102](https://github.com/ClickHouse/clickhouse-connect/issues/1102).

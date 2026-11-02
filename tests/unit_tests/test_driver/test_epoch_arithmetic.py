@@ -1,8 +1,12 @@
 """Tests for epoch seconds arithmetic helper functions."""
 
+import struct
 import unittest
 import zoneinfo
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from importlib import import_module
+
+import pytest
 
 # Try to import from Cython extension, fall back to pure Python if unavailable
 try:
@@ -11,6 +15,85 @@ except ImportError:
     epoch_seconds_to_components = None
 
 from clickhouse_connect.driver import tzutil
+from tests.helpers import bytes_source
+
+
+@pytest.mark.parametrize("backend", ["driver", "driverc"])
+@pytest.mark.parametrize("date_group", ["boundaries", "leap_centuries", "non_leap_centuries"])
+def test_extended_epoch_arithmetic(backend, date_group):
+    dates = {
+        "boundaries": [(1, 1, 1), (1, 1, 2), (9999, 12, 31), (1582, 10, 4), (1582, 10, 15), (1601, 1, 1)],
+        "leap_centuries": [
+            (year, month, day) for year in range(400, 10000, 400) for month, day in ((2, 28), (2, 29), (3, 1), (12, 30), (12, 31))
+        ]
+        + [(year + 1, 1, 1) for year in range(400, 10000, 400)],
+        "non_leap_centuries": [(year, month, day) for year in (1500, 1700, 1800, 1900, 2100) for month, day in ((2, 28), (3, 1))],
+    }[date_group]
+    expected_dates = [datetime(*value, 12, 34, 56) for value in dates]
+    if date_group == "boundaries":
+        expected_dates.extend(datetime(1970, 1, 1) + timedelta(seconds=value) for value in (-1, 0, 1))
+        # The C fast path ends at 2100-01-01.
+        expected_dates.extend((datetime(2099, 12, 31), datetime(2100, 1, 1)))
+    module = import_module(f"clickhouse_connect.{backend}.dataconv")
+    for expected in expected_dates:
+        seconds = int((expected - datetime(1970, 1, 1)).total_seconds())
+        if backend == "driver":
+            assert tzutil.utcfromtimestamp(seconds) == expected
+            assert tzutil.utcfromtimestamp_with_microseconds(seconds, 123456) == expected.replace(microsecond=123456)
+        else:
+            assert datetime(*module.epoch_seconds_to_components(seconds)) == expected
+
+
+@pytest.mark.parametrize("backend", ["driver", "driverc"])
+@pytest.mark.parametrize("days", [-719163, 2932897, -(1 << 31), (1 << 31) - 1, -719528, -(1 << 32), 1 << 32])
+def test_epoch_arithmetic_out_of_range(backend, days):
+    # Multiples of 2**32 days used to wrap to the epoch when narrowed to C int.
+    module = import_module(f"clickhouse_connect.{backend}.dataconv")
+    seconds = days * 86400
+    if backend == "driver":
+        with pytest.raises(ValueError):
+            tzutil.utcfromtimestamp(seconds)
+        with pytest.raises(ValueError):
+            tzutil.utcfromtimestamp_with_microseconds(seconds, 123456)
+    else:
+        with pytest.raises(ValueError):
+            module.epoch_seconds_to_components(seconds)
+    for tz in (None, timezone.utc):
+        with pytest.raises(ValueError):
+            module.read_datetime64_naive_col([seconds], 1, tz)
+
+
+@pytest.mark.parametrize("backend", ["driver", "driverc"])
+@pytest.mark.parametrize("precision, microseconds", [(1, 0), (1000, 123000), (1000000, 123456)])
+@pytest.mark.parametrize("tz", [None, timezone.utc, zoneinfo.ZoneInfo("Etc/UTC")], ids=["naive", "UTC", "Etc-UTC"])
+def test_datetime64_calendar_boundaries(backend, precision, microseconds, tz):
+    dates = [datetime(1500, 2, 28), datetime(1969, 12, 31, 23, 59, 59), datetime(2400, 2, 29), datetime(9999, 12, 31)]
+    ticks = [int((value - datetime(1970, 1, 1)).total_seconds()) * precision + microseconds * precision // 1000000 for value in dates]
+    expected = tuple(value.replace(microsecond=microseconds, tzinfo=tz) for value in dates)
+    module = import_module(f"clickhouse_connect.{backend}.dataconv")
+    result = tuple(module.read_datetime64_naive_col(ticks, precision, tz))
+    assert result == expected
+    assert all(value.tzinfo is tz for value in result)
+
+
+@pytest.mark.parametrize("backend", ["driver", "driverc"])
+@pytest.mark.parametrize("tz", [None, timezone.utc, zoneinfo.ZoneInfo("Etc/UTC")])
+def test_datetime_column_calendar_boundaries(backend, tz):
+    epoch = datetime(1970, 1, 1)
+    dates = [
+        datetime(2000, 2, 28, 23, 59, 59),
+        datetime(2000, 2, 29),
+        datetime(2000, 3, 1),
+        datetime(2100, 2, 28, 23, 59, 59),
+        datetime(2100, 3, 1),
+    ]
+    seconds = [0, (1 << 32) - 1, *(int((value - epoch).total_seconds()) for value in dates)]
+    module = import_module(f"clickhouse_connect.{backend}.dataconv")
+    buffer_cls = import_module(f"clickhouse_connect.{backend}.buffer").ResponseBuffer
+    source = bytes_source(struct.pack(f"<{len(seconds)}I", *seconds), cls=buffer_cls)
+    result = module.read_datetime_col(source, len(seconds), tz)
+    assert tuple(result) == tuple((epoch + timedelta(seconds=value)).replace(tzinfo=tz) for value in seconds)
+    assert all(value.tzinfo is tz for value in result)
 
 
 class TestEpochSecondsToComponents(unittest.TestCase):

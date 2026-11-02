@@ -122,7 +122,7 @@ cdef unsigned short* MONTH_DAYS_LEAP = [0, 31, 60, 91, 121, 152, 182, 213, 244, 
 
 # Constants used in epoch_days_to_date
 # 47482 -- Jan 1, 2100 -- Because all years 1970-2099 divisible by 4 are leap years, some extra division can be avoided
-# 134774 -- Number of days between Jan 1 1601 and Jan 1 1970.  Adding this starts all calculations at 1601-01-01
+# 719162 -- Number of days between Jan 1 0001 and Jan 1 1970.  Adding this starts all calculations at 0001-01-01
 # 1461 -- Number of days in a 4-year cycle (365 * 4) + 1 leap day
 # 36524 -- Number of days in a 100-year cycle.  25 4-year cycles - 1 leap day for the year 100
 # 146097 -- Number of days in a 400-year cycle.  4 100 year cycles + 1 leap day for the year 400
@@ -151,18 +151,20 @@ cpdef inline object epoch_days_to_date(int days):
         else:
             m_list = MONTH_DAYS
     else:
-        cycles400 = (days + 134774) // 146097
-        rem = days + 134774 - (cycles400 * 146097)
+        if days < -719162 or days > 2932896:
+            raise ValueError("year must be in 1..9999")
+        cycles400 = (days + 719162) // 146097
+        rem = days + 719162 - (cycles400 * 146097)
         cycles100 = rem // 36524
         rem -= cycles100 * 36524
         cycles = rem // 1461
         rem -= cycles * 1461
         years = rem // 365
         rem -= years * 365
-        year = (cycles << 2) + cycles400 * 400 + cycles100 * 100  + years + 1601
+        year = (cycles << 2) + cycles400 * 400 + cycles100 * 100  + years + 1
         if years == 4 or cycles100 == 4:
             return date(year - 1, 12, 31)
-        if years == 3 and year % 100 != 0:
+        if years == 3 and (year % 100 != 0 or year % 400 == 0):
             m_list = MONTH_DAYS_LEAP
         else:
             m_list = MONTH_DAYS
@@ -177,7 +179,7 @@ cpdef inline object epoch_days_to_date(int days):
 @cython.cdivision(True)
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef inline void _epoch_days_to_components_c(int days, int* out_year, int* out_month, int* out_day):
+cdef inline void _epoch_days_to_components_c(long long days, int* out_year, int* out_month, int* out_day):
     """Convert days since epoch to (year, month, day) components without allocating objects.
 
     Low-level helper that computes calendar components directly, reusing the fast
@@ -207,21 +209,23 @@ cdef inline void _epoch_days_to_components_c(int days, int* out_year, int* out_m
         else:
             m_list = MONTH_DAYS
     else:
-        cycles400 = (days + 134774) // 146097
-        rem = days + 134774 - (cycles400 * 146097)
+        if days < -719162 or days > 2932896:
+            raise ValueError("year must be in 1..9999")
+        cycles400 = (days + 719162) // 146097
+        rem = days + 719162 - (cycles400 * 146097)
         cycles100 = rem // 36524
         rem -= cycles100 * 36524
         cycles = rem // 1461
         rem -= cycles * 1461
         years = rem // 365
         rem -= years * 365
-        year = (cycles << 2) + cycles400 * 400 + cycles100 * 100 + years + 1601
+        year = (cycles << 2) + cycles400 * 400 + cycles100 * 100 + years + 1
         if years == 4 or cycles100 == 4:
             out_year[0] = year - 1
             out_month[0] = 12
             out_day[0] = 31
             return
-        if years == 3 and year % 100 != 0:
+        if years == 3 and (year % 100 != 0 or year % 400 == 0):
             m_list = MONTH_DAYS_LEAP
         else:
             m_list = MONTH_DAYS

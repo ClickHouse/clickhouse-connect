@@ -9,12 +9,13 @@ from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.dynamic import typed_variant
+from clickhouse_connect.driver import ctypes
 from clickhouse_connect.driver.buffer import ResponseBuffer as PyResponseBuffer
 from clickhouse_connect.driver.exceptions import DataError, InternalError, NotSupportedError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.transform import NativeTransform
-from tests.helpers import bytes_source
+from tests.helpers import bytes_source, native_insert_block
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
 
 UINT16_NULLS = """
@@ -78,6 +79,60 @@ def check_result(result, expected, row_num=0, col_num=0):
 def test_uint16_nulls():
     result = parse_response(bytes_source(UINT16_NULLS))
     assert result.result_set == [(None,), (20,), (None,), (40,)]
+
+
+def test_date32_native_read():
+    dates = [date(2400, 2, 29), date(1, 1, 1), date(1600, 3, 1), date(9999, 12, 31), date(1500, 2, 28), date(1970, 1, 1)]
+    days = [value.toordinal() - date(1970, 1, 1).toordinal() for value in dates]
+    payload = struct.pack(f"<{len(days)}i", *days)
+    date_type = registry.get_from_name("Date32")
+    for chunk_size in (1, 7, 256):
+        source = bytes_source(payload, chunk_size, cls=ctypes.RespBuffCls)
+        assert list(ctypes.data_conv.read_date32_col(source, len(days))) == dates, chunk_size
+    header = bytes((1, len(days), 1)) + b"d\x06Date32"
+    source = bytes_source(header + payload, chunk_size=7, cls=ctypes.RespBuffCls)
+    assert parse_response(source).result_rows == [(value,) for value in dates]
+    source = bytes_source(payload, cls=ctypes.RespBuffCls)
+    assert list(date_type.read_column(source, len(days), QueryContext(query_formats={"Date32": "int"}))) == days
+    source = bytes_source(payload, cls=ctypes.RespBuffCls)
+    result = date_type.read_column(source, len(days), QueryContext(use_numpy=True))
+    assert result.dtype == "datetime64[D]"
+    assert result.astype("int64").tolist() == days
+
+    source = bytes_source(b"\x01\x00\x01d\x06Date32", cls=ctypes.RespBuffCls)
+    assert parse_response(source).result_rows == []
+
+    shapes = [
+        ("Date32", dates),
+        ("Nullable(Date32)", [None, *dates]),
+        ("Array(Date32)", [dates, []]),
+        ("Tuple(Date32)", [(value,) for value in dates]),
+        ("Array(Tuple(Nullable(Date32)))", [[(None,), *((value,) for value in dates)], []]),
+        ("LowCardinality(Date32)", [*dates, dates[0]]),
+        ("LowCardinality(Nullable(Date32))", [None, *dates, None]),
+    ]
+    for type_name, values in shapes:
+        data = native_insert_block([(value,) for value in values], ["d"], [registry.get_from_name(type_name)])
+        source = bytes_source(bytes(data), cls=ctypes.RespBuffCls)
+        assert parse_response(source).result_rows == [(value,) for value in values], type_name
+    # NULL uses a zero date payload, decoded before the null map is applied.
+    days = date(1600, 1, 1).toordinal() - date(1970, 1, 1).toordinal()
+    source = bytes_source(b"\x01\x00" + struct.pack("<2i", 0, days), cls=ctypes.RespBuffCls)
+    nullable = registry.get_from_name("Nullable(Date32)")
+    assert list(nullable.read_column(source, 2, QueryContext())) == [None, date(1600, 1, 1)]
+
+    for day in (-719163, 2932897, -(2**31), 2**31 - 1, -719528):
+        payload = struct.pack("<i", day)
+        source = bytes_source(payload, cls=ctypes.RespBuffCls)
+        with pytest.raises(ValueError):
+            ctypes.data_conv.read_date32_col(source, 1)
+        source = bytes_source(payload, cls=ctypes.RespBuffCls)
+        assert list(date_type.read_column(source, 1, QueryContext(query_formats={"Date32": "int"}))) == [day]
+    # Year zero is valid on the server, but cannot be represented by datetime.date.
+    payload = struct.pack("<i", -719528)
+    source = bytes_source(b"\x01\x01\x01d\x06Date32" + payload, cls=ctypes.RespBuffCls)
+    with pytest.raises(ValueError):
+        _ = parse_response(source).result_rows
 
 
 def test_low_cardinality():
