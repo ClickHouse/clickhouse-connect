@@ -419,6 +419,8 @@ class HttpSyncBackend:
                 self.error_handler(response)
 
     def ping(self, timeout: float | None = None) -> bool:
+        if timeout is not None and not timeout > 0:
+            raise ProgrammingError("ping timeout must be greater than zero")
         try:
             headers = dict_copy(self.headers)
             kwargs: dict[str, Any] = {"headers": headers, "timeout": 3 if timeout is None else timeout, "preload_content": True}

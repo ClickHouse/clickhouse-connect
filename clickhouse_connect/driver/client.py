@@ -1072,9 +1072,10 @@ class Client(ABC):
     @abstractmethod
     def ping(self, timeout: float | None = None) -> bool:
         """
-        Validate the connection, does not throw an Exception (see debug logs)
-        :param timeout: Total time in seconds to wait for the server to respond. Defaults to 3 seconds when None.
-          Ignored by the chDB client.
+        Validate the connection. Network failures return False (see debug logs).
+        :param timeout: Positive timeout in seconds for each HTTP connection and read operation.
+          Defaults to 3 seconds when None. Ignored by the chDB client.
+        :raises ProgrammingError: If an HTTP timeout is zero or negative.
         :return: ClickHouse server is up and reachable
         """
 

@@ -812,6 +812,8 @@ class HttpAsyncBackend:
                     self._active_session = None
 
     async def ping(self, timeout: float | None = None) -> bool:
+        if timeout is not None and not timeout > 0:
+            raise ProgrammingError("ping timeout must be greater than zero")
         lease = self.session_lease
         if lease is None or lease.session.closed:
             return False

@@ -819,8 +819,9 @@ class AsyncClient(Client):
 
     async def ping(self, timeout: float | None = None) -> bool:  # type: ignore[override]
         """
-        Validate the connection, does not throw an Exception (see debug logs)
-        :param timeout: Total time in seconds to wait for the server to respond. Defaults to 3 seconds when None.
+        Validate the connection. Network failures return False (see debug logs).
+        :param timeout: Positive total timeout in seconds for the HTTP request. Defaults to 3 seconds when None.
+        :raises ProgrammingError: If timeout is zero or negative.
         :return: ClickHouse server is up and reachable
         """
         return await self._backend.ping(timeout)
