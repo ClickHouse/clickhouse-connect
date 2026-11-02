@@ -4,8 +4,7 @@ import zlib
 try:
     import lz4.frame as _lz4_frame
 except ImportError:
-    # lz4 is optional on Python 3.14+
-    _lz4_frame = None  # type: ignore[assignment]
+    _lz4_frame = None
 
 try:
     if sys.version_info >= (3, 14):
@@ -38,9 +37,12 @@ def _require_zstd():
     return _zstd
 
 
+LZ4_MISSING_MESSAGE = "lz4 compression requires the lz4 package. Install it with: pip install 'clickhouse-connect[lz4]'"
+
+
 def _require_lz4():
     if _lz4_frame is None:
-        raise ImportError("lz4 compression requires the 'lz4' package. Install with: pip install lz4")
+        raise ImportError(LZ4_MISSING_MESSAGE)
     return _lz4_frame
 
 

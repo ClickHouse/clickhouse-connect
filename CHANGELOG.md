@@ -7,7 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
-- The `lz4` package is now optional on Python 3.14 and later. Without it, `compress=True` negotiates the remaining methods and writes with `zstd` when available, otherwise `gzip`. Install `clickhouse-connect[lz4]` to keep lz4 on 3.14+. Python versions below 3.14 still install `lz4` by default.
+- On Python 3.14 and later, `lz4` is no longer installed by default. It publishes no wheels for Python 3.14+ free-threaded builds, CPython 3.15 or musllinux, and zstd is in the standard library from 3.14. Without `lz4`, `compress=True` compresses inserts with zstd. Query responses already use zstd because the server prefers it. Install `clickhouse-connect[lz4]` to use `compress="lz4"` on 3.14 and later. Nothing changes below 3.14.
 
 ### Bug Fixes
 
