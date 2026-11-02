@@ -297,6 +297,12 @@ Multiple clients are appropriate for:
 - **Isolated sessions**: When you need separate sessions for temporary tables or session-specific settings
 - **Per-thread isolation**: When threads need independent sessions (as shown above)
 
+## Client `ping` method {#client-ping-method}
+
+Use `client.ping(timeout=1.5)` to check whether the server is reachable. It returns `True` when the check succeeds and `False` for network failures. Use `await client.ping(timeout=1.5)` with an async client.
+
+`timeout` accepts a positive number of seconds. Omitting it or passing `None` uses 3 seconds, independently of `connect_timeout` and `send_receive_timeout`. The synchronous HTTP client applies it separately to connection and read operations. The async HTTP client uses it as the total request timeout. Both HTTP clients raise `ProgrammingError` for zero or negative values. The chDB client ignores `timeout`.
+
 ## Common method arguments {#common-method-arguments}
 
 Several client methods use one or both of the common `parameters` and `settings` arguments. These keyword arguments are described below.
