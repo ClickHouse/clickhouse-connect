@@ -7,11 +7,9 @@ import zlib
 from collections.abc import Callable, Iterable, Iterator
 from typing import cast
 
-import lz4.frame
-
 from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue
 from clickhouse_connect.driver.asyncqueue import Full as AsyncQueueFull
-from clickhouse_connect.driver.compression import _zstd_decompressor, available_compression
+from clickhouse_connect.driver.compression import _lz4_decompressor, _zstd_decompressor, available_compression
 from clickhouse_connect.driver.exceptions import Error, OperationalError
 from clickhouse_connect.driver.transform import Transform
 from clickhouse_connect.driver.types import ByteSource, Closable
@@ -217,7 +215,7 @@ class StreamingResponseSource(Closable):
             return _zstd_decompressor()
 
         if encoding == "lz4":
-            return lz4.frame.LZ4FrameDecompressor()
+            return _lz4_decompressor()
 
         raise ValueError(f"Unsupported compression encoding: {encoding}")
 

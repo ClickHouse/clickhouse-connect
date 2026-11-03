@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Improvements
+
+- On Python 3.14 and later, `lz4` is no longer installed by default. It publishes no wheels for Python 3.14+ free-threaded builds, CPython 3.15 or musllinux, and zstd is in the standard library from 3.14. Without `lz4`, `compress=True` compresses inserts with zstd. Query responses already use zstd because the server prefers it. Install `clickhouse-connect[lz4]` to use `compress="lz4"` on 3.14 and later. Nothing changes below 3.14.
+
 ### Bug Fixes
 
 - With the Python codec and extended pandas dtypes, `query_df` preserves `Nullable(UInt64)` values above `2**53` without rounding, keeps timezone-aware nullable datetime dtypes across all-NULL blocks, and reads valid `Nullable(DateTime64)` values beyond the nanosecond range on pandas 2.
@@ -33,6 +37,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
+- `ping()` on the sync and async clients accepts an optional positive `timeout` in seconds, defaulting to 3 seconds when omitted or `None`. HTTP clients reject zero or negative values with `ProgrammingError`. The chDB client ignores the parameter. Closes [#192](https://github.com/ClickHouse/clickhouse-connect/issues/192).
 - Added `get_client(dedicated_pool=True)` for synchronous HTTP clients that need their own connection pool. Closing any client-owned pool now closes idle connections immediately and closes active connections when their responses return to the pool. Requests racing with `close()` can fail with `OperationalError`, including for existing TLS/proxy-owned pools. The async client accepts the option without effect because it already owns its connector. Closes [#1121](https://github.com/ClickHouse/clickhouse-connect/issues/1121).
 - Client creation is faster with non-UTC IANA server timezones because timezone validation no longer scans the timezone database. Closes [#1120](https://github.com/ClickHouse/clickhouse-connect/issues/1120).
 - `query_np`, `query_df`, `query_np_stream`, and `query_df_stream` no longer raise `AttributeError` for a query that ends in `LIMIT 0`. They now return an empty result, the same as a query that matches no rows. Related to [#257](https://github.com/ClickHouse/clickhouse-connect/issues/257). Empty results still don't include column names.
