@@ -256,6 +256,15 @@ def test_non_binary_value_for_raw_binary_marker_raises(param_client: Client, cal
         call(param_client.query, "SELECT $x$ AS v", parameters={"$x$": 13})
 
 
+def test_server_bind_between_repeated_binary_markers(param_client: Client, call):
+    row = call(
+        param_client.query,
+        "SELECT $x$ AS v1, {a:Int32} AS a, $x$ AS v2",
+        parameters={"$x$": b"user_1", "a": 13},
+    ).first_row
+    assert row == ("user_1", 13, "user_1")
+
+
 def test_decoy_placeholder_with_escaped_percent_literal(param_client: Client, call):
     row = call(param_client.query, "SELECT '{a:String}', '100%%$'", parameters={"a": "user_1"}).first_row
     assert row == ("{a:String}", "100%$")

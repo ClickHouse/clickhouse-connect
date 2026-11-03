@@ -970,6 +970,24 @@ class TestBindQueryDollarInParamName:
         assert q == b"SELECT '{p:Int32}', $x$user_1$x$, 13"
         assert params == {}
 
+    @pytest.mark.parametrize(
+        "query, expected",
+        [
+            ("SELECT $x$, {a:Int32}, $x$", b"SELECT $x$user_1$x$, {a:Int32}, $x$user_1$x$"),
+            ("SELECT $x$, $t${d:Int32}$t$, {a:Int32}, $x$", b"SELECT $x$user_1$x$, $t${d:Int32}$t$, {a:Int32}, $x$user_1$x$"),
+            ("SELECT $x$, '{d:Int32}', {a:Int32}, $x$", b"SELECT $x$user_1$x$, '{d:Int32}', {a:Int32}, $x$user_1$x$"),
+        ],
+    )
+    def test_server_bind_between_repeated_binary_markers(self, query, expected):
+        q, params = bind_query(query, {"$x$": b"user_1", "a": 13})
+        assert q == expected
+        assert params == {"param_a": "13"}
+
+    def test_decoy_between_repeated_binary_markers_uses_client_side_binding(self):
+        q, params = bind_query("SELECT $x$, '{d:Int32}', %(a)s, $x$", {"$x$": b"user_1", "a": 13})
+        assert q == b"SELECT $x$user_1$x$, '{d:Int32}', 13, $x$user_1$x$"
+        assert params == {}
+
     def test_no_placeholder_skips_sql_tokenization(self, monkeypatch):
         tokenize = Mock(side_effect=AssertionError("Unexpected SQL tokenization"))
         monkeypatch.setattr(binding, "_next_sql_token", tokenize)

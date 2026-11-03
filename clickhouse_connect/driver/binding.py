@@ -666,7 +666,12 @@ def _server_bind_matches(query: str, binary_names: Collection[str]) -> list[tupl
     if _opaque_sql_opener_re.search(query, 0, last_end) is None:
         return filtered
 
-    heredoc_ends = {match.group(1): match.start() for match in _heredoc_start_re.finditer(query)} if "$" in query else {}
+    # Each binary marker becomes its own heredoc after substitution, so it never opens one here.
+    heredoc_ends = (
+        {match.group(1): match.start() for match in _heredoc_start_re.finditer(query) if match.group(1) not in binary_names}
+        if "$" in query
+        else {}
+    )
     matches = []
     index = 0
     while index < last_end:
