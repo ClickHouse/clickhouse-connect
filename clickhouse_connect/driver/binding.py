@@ -3,7 +3,7 @@ import ipaddress
 import re
 import uuid
 import zoneinfo
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from enum import Enum
 from functools import lru_cache
@@ -767,19 +767,56 @@ def finalize_query(query: str, parameters: Sequence | dict[str, Any] | None, ser
 def _unwrap_outer(type_str: str) -> tuple[str, tuple]:
     """Strip LowCardinality/Nullable wrappers and return (base_name, args)"""
     base = type_str.strip()
-    if base[:15].lower() == "lowcardinality(":
-        base = base[15:-1]
-    if base[:9].lower() == "nullable(":
-        base = base[9:-1]
-    base_name, values, _ = parse_callable(base)
-    return base_name, values
+    while True:
+        base_name, values, _ = parse_callable(base)
+        if base_name.lower() not in ("lowcardinality", "nullable") or len(values) != 1:
+            return base_name, values
+        base = str(values[0])
 
 
 @lru_cache(maxsize=256)
 def _container_element_types(type_str: str) -> tuple[str, ...]:
     """Parse Tuple or Nested element types."""
+    return _container_columns(type_str)[1]
+
+
+@lru_cache(maxsize=256)
+def _container_columns(type_str: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     _, values = _unwrap_outer(type_str)
-    return parse_columns(f"({', '.join(str(t).strip() for t in values)})")[1]
+    return parse_columns(f"({', '.join(str(t).strip() for t in values)})")
+
+
+def _named_tuple_values(names: tuple[str, ...], value: Mapping) -> tuple:
+    missing = [name for name in names if name not in value]
+    unexpected = [name for name in value if name not in names]
+    if missing or unexpected:
+        raise ProgrammingError(f"Named Tuple fields do not match: missing {missing!r}, unexpected {unexpected!r}")
+    return tuple(value[name] for name in names)
+
+
+def _normalize_named_tuples(type_str: str, value: Any) -> Any:
+    """Put mapping values in the declared order of named Tuple fields."""
+    if value is None or "tuple" not in type_str.lower():
+        return value
+    try:
+        base_name, types = _unwrap_outer(type_str)
+        base_name = base_name.lower()
+        columns = _container_columns(type_str) if base_name == "tuple" else None
+    except Exception:
+        return value
+    if columns is not None:
+        names, element_types = columns
+        if names and isinstance(value, Mapping):
+            value = _named_tuple_values(names, value)
+        if isinstance(value, tuple) and len(value) == len(element_types):
+            return tuple(_normalize_named_tuples(t, item) for t, item in zip(element_types, value))
+    elif base_name == "array" and types and isinstance(value, (list, tuple)):
+        items = (_normalize_named_tuples(str(types[0]), item) for item in value)
+        return tuple(items) if isinstance(value, tuple) else list(items)
+    elif base_name == "map" and len(types) == 2 and isinstance(value, dict) and common.get_setting("dict_parameter_format") == "map":
+        key_type, value_type = (str(t) for t in types)
+        return {_normalize_named_tuples(key_type, key): _normalize_named_tuples(value_type, item) for key, item in value.items()}
+    return value
 
 
 @lru_cache(maxsize=256)
@@ -971,6 +1008,7 @@ def bind_query(
                 tz = server_tz
                 param_type = param_types.get(k)
                 if param_type is not None:
+                    v = _normalize_named_tuples(param_type, v)
                     hint_tz = _extract_tz_from_type(param_type)
                     if hint_tz is not None:
                         tz = hint_tz
