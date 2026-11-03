@@ -11,6 +11,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- Fixed Date32 decoding before 1601 and in leap centuries such as 1600 and 2400. Python date results support years 1 through 9999, with out-of-range values raising `ValueError`. The same calendar correction applies to epoch-based DateTime64 decoding.
 - With the Python codec and extended pandas dtypes, `query_df` preserves `Nullable(UInt64)` values above `2**53` without rounding, keeps timezone-aware nullable datetime dtypes across all-NULL blocks, and reads valid `Nullable(DateTime64)` values beyond the nanosecond range on pandas 2.
 - Datetime parameters whose names end in `_64` now retain their names in pyformat queries, fixing `KeyError` failures including SQLAlchemy queries with 64 datetime binds. The `_64` precision hint still applies when the query uses the name without the suffix. Closes [#1131](https://github.com/ClickHouse/clickhouse-connect/issues/1131).
 - The Python codec now decodes `Nullable(Tuple(...))` correctly, preserving NULL tuples and non-NULL values, including nested tuples and tuple read formats. Closes [#1102](https://github.com/ClickHouse/clickhouse-connect/issues/1102).
@@ -38,6 +39,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
+- Cython decoding of Date and Date32 columns is faster because Python date objects are constructed directly through the datetime C API. Results are the same as before.
 - `ping()` on the sync and async clients accepts an optional positive `timeout` in seconds, defaulting to 3 seconds when omitted or `None`. HTTP clients reject zero or negative values with `ProgrammingError`. The chDB client ignores the parameter. Closes [#192](https://github.com/ClickHouse/clickhouse-connect/issues/192).
 - Added `get_client(dedicated_pool=True)` for synchronous HTTP clients that need their own connection pool. Closing any client-owned pool now closes idle connections immediately and closes active connections when their responses return to the pool. Requests racing with `close()` can fail with `OperationalError`, including for existing TLS/proxy-owned pools. The async client accepts the option without effect because it already owns its connector. Closes [#1121](https://github.com/ClickHouse/clickhouse-connect/issues/1121).
 - Client creation is faster with non-UTC IANA server timezones because timezone validation no longer scans the timezone database. Closes [#1120](https://github.com/ClickHouse/clickhouse-connect/issues/1120).

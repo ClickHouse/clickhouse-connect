@@ -41,6 +41,8 @@ def read_datetime_col(source: ByteSource, num_rows: int, tz_info: tzinfo | None)
 
 
 def epoch_days_to_date(days: int) -> date:
+    if days < -719162 or days > 2932896:
+        raise ValueError(f"day {days} is outside the date range 0001-01-01 to 9999-12-31")
     cycles400, rem = divmod(days + 134774, 146097)
     cycles100, rem = divmod(rem, 36524)
     cycles, rem = divmod(rem, 1461)
@@ -48,7 +50,7 @@ def epoch_days_to_date(days: int) -> date:
     year = (cycles << 2) + cycles400 * 400 + cycles100 * 100 + years + 1601
     if years == 4 or cycles100 == 4:
         return date(year - 1, 12, 31)
-    m_list = MONTH_DAYS_LEAP if years == 3 and (year == 2000 or year % 100 != 0) else MONTH_DAYS
+    m_list = MONTH_DAYS_LEAP if years == 3 and (year % 100 != 0 or year % 400 == 0) else MONTH_DAYS
     month = (rem + 24) >> 5
     while rem < m_list[month]:
         month -= 1

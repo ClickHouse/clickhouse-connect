@@ -250,6 +250,8 @@ def _epoch_days_to_date_components(days: int) -> tuple[int, int, int]:
         else:
             m_list = _MONTH_DAYS
     else:
+        if days < -719162 or days > 2932896:
+            raise ValueError(f"day {days} is outside the date range 0001-01-01 to 9999-12-31")
         cycles400 = (days + 134774) // 146097
         rem = days + 134774 - (cycles400 * 146097)
         cycles100 = rem // 36524
@@ -261,7 +263,7 @@ def _epoch_days_to_date_components(days: int) -> tuple[int, int, int]:
         year = (cycles << 2) + cycles400 * 400 + cycles100 * 100 + years + 1601
         if years == 4 or cycles100 == 4:
             return year - 1, 12, 31
-        if years == 3 and year % 100 != 0:
+        if years == 3 and (year % 100 != 0 or year % 400 == 0):
             m_list = _MONTH_DAYS_LEAP
         else:
             m_list = _MONTH_DAYS

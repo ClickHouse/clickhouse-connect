@@ -155,6 +155,36 @@ def test_insert_date_calendar_values(param_client, call, table_context, type_nam
         assert result.result_rows == expected_rows
 
 
+def test_insert_date32_extended_range(param_client, call, table_context):
+    if not param_client.min_version("26.8.1.2041"):
+        pytest.skip("Extended Date32 range requires ClickHouse 26.8.1.2041+")
+
+    dates = [date(2400, 2, 29), date.min, date(1500, 2, 28), date.max, date(1600, 2, 29)]
+    days = [value.toordinal() - date(1970, 1, 1).toordinal() for value in dates]
+    query = f"SELECT toDate32(toInt32(days)) AS d, toNullable(d) FROM (SELECT arrayJoin({days}) AS days)"
+    integer_rows = call(param_client.query, query, query_formats={"Date32": "int"}).result_rows
+    expected_days = [(value, value) for value in days]
+    assert integer_rows == expected_days
+    assert call(param_client.query, query).result_rows == [(value, value) for value in dates]
+
+    rows = [(value, None if i == 0 else value) for i, value in enumerate(dates)]
+    with table_context("test_date32_extended_range", ["d Date32", "n Nullable(Date32)"]):
+        call(param_client.insert, "test_date32_extended_range", rows)
+        result = call(param_client.query, "SELECT * FROM test_date32_extended_range ORDER BY d")
+        assert result.result_rows == sorted(rows)
+
+
+def test_query_date32_year_zero(param_client, call):
+    if not param_client.min_version("26.8.1.2041"):
+        pytest.skip("Date32 year zero requires ClickHouse 26.8.1.2041+")
+
+    query = "SELECT toDate32(toInt32(-719528))"
+    integer_rows = call(param_client.query, query, query_formats={"Date32": "int"}).result_rows
+    assert integer_rows == [(-719528,)]
+    with pytest.raises(ValueError):
+        call(param_client.query, query)
+
+
 def test_decimal_conv(param_client: Client, call, table_context: Callable):
     with table_context("test_num_conv", ["col1 UInt64", "col2 Int32", "f1 Float64"]):
         data = [[Decimal(5), Decimal(-182), Decimal(55.2)], [Decimal(57238478234), Decimal(77), Decimal(-29.5773)]]
