@@ -241,6 +241,8 @@ For named tuples inside `Map` values, set `common.set_setting("dict_parameter_fo
 
 If a named datetime parameter is reused, every occurrence needs a compatible `DateTime64` bind type to preserve fractions. An untyped occurrence or a conflicting type keeps whole-second formatting. Set `type_=DateTime64(6)` on each `bindparam`, or use distinct parameter names with the appropriate types.
 
+The same applies to a reused bind name whose named `Tuple` occurrences declare different field names. The client falls back to positional handling for that name, so a dictionary value is not reordered and the server rejects it. Use distinct parameter names or pass a positional tuple.
+
 ### Named tuples {#sqlalchemy-named-tuples}
 
 Declare named tuple fields with an `elements` mapping. Keys must be non-empty strings, and values can be ClickHouse SQLAlchemy type classes or configured instances. Fields retain the mapping's iteration order, and names are quoted automatically.
