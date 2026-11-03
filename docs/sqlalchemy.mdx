@@ -239,7 +239,7 @@ If a named datetime parameter is reused, every occurrence needs a compatible `Da
 
 ### Named tuples {#sqlalchemy-named-tuples}
 
-Declare named tuple fields with an `elements` mapping. Keys are field names, and values can be ClickHouse SQLAlchemy type classes or configured instances. Fields retain the mapping's iteration order, and names are quoted automatically.
+Declare named tuple fields with an `elements` mapping. Keys must be non-empty strings, and values can be ClickHouse SQLAlchemy type classes or configured instances. Fields retain the mapping's iteration order, and names are quoted automatically.
 
 ```python
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String, Tuple, UInt32
