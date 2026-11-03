@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Improvements
+
+- On Python 3.14 and later, `lz4` is no longer installed by default. It publishes no wheels for Python 3.14+ free-threaded builds, CPython 3.15 or musllinux, and zstd is in the standard library from 3.14. Without `lz4`, `compress=True` compresses inserts with zstd. Query responses already use zstd because the server prefers it. Install `clickhouse-connect[lz4]` to use `compress="lz4"` on 3.14 and later. Nothing changes below 3.14.
+
 ### Bug Fixes
 
 - With the Python codec and extended pandas dtypes, `query_df` preserves `Nullable(UInt64)` values above `2**53` without rounding, keeps timezone-aware nullable datetime dtypes across all-NULL blocks, and reads valid `Nullable(DateTime64)` values beyond the nanosecond range on pandas 2.
@@ -34,6 +38,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
+- `ping()` on the sync and async clients accepts an optional positive `timeout` in seconds, defaulting to 3 seconds when omitted or `None`. HTTP clients reject zero or negative values with `ProgrammingError`. The chDB client ignores the parameter. Closes [#192](https://github.com/ClickHouse/clickhouse-connect/issues/192).
 - Added `get_client(dedicated_pool=True)` for synchronous HTTP clients that need their own connection pool. Closing any client-owned pool now closes idle connections immediately and closes active connections when their responses return to the pool. Requests racing with `close()` can fail with `OperationalError`, including for existing TLS/proxy-owned pools. The async client accepts the option without effect because it already owns its connector. Closes [#1121](https://github.com/ClickHouse/clickhouse-connect/issues/1121).
 - Client creation is faster with non-UTC IANA server timezones because timezone validation no longer scans the timezone database. Closes [#1120](https://github.com/ClickHouse/clickhouse-connect/issues/1120).
 - `query_np`, `query_df`, `query_np_stream`, and `query_df_stream` no longer raise `AttributeError` for a query that ends in `LIMIT 0`. They now return an empty result, the same as a query that matches no rows. Related to [#257](https://github.com/ClickHouse/clickhouse-connect/issues/257). Empty results still don't include column names.
@@ -41,6 +46,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - `query_np` and `query_df` now return every row of a numeric `LowCardinality` column, such as `LowCardinality(Int32)`. Previously the column was cut to the size of its dictionary, so 1000 rows with 300 distinct values came back as 300 rows, and a block with fewer rows than dictionary entries raised `ValueError: iterator too short`.
 - `AsyncClient.query_rows_stream` now reads each result block in the executor once and yields its rows on the event loop. Previously it made one executor call per row, so streaming rows asynchronously was far slower than the synchronous `query_rows_stream`.
 - The Python codec reads `Map`, nullable integer, nullable date, and timezone-aware nullable datetime columns faster in `query_df` by avoiding per-row pandas conversions.
+- With the C extensions, the Python codec reads `Array` columns faster in all query methods. Related to [#1008](https://github.com/ClickHouse/clickhouse-connect/issues/1008).
 - Eligible compiled SQLAlchemy Core and ORM SELECT queries now skip the second `LIMIT 0` metadata query for empty results and preserve result keys. A projection qualifies when it has a fixed column shape with unique compiled names and every result column uses a result processor that does not read the server type code. This covers SQLAlchemy's generic types whose processors depend only on dialect flags, such as `String`, `Boolean`, `Numeric`, `Float`, `Enum`, and types that inherit the default `TypeEngine` processor, the driver's reflected `ChSqlaType` types, and `TypeDecorator` wrappers over those, including nested wrappers, `with_variant`, and `load_dialect_impl`. The synthesized DB-API descriptions report `None` for `type_code` and `null_ok`. Plain DB-API and textual queries, raw SQL projections or modifiers, server-expanded columns, custom `result_processor` overrides, `Enum` subclasses, `JSON`, rewritten statements, and cursor `execute` wrappers retain the `LIMIT 0` metadata fallback. Closes [#1108](https://github.com/ClickHouse/clickhouse-connect/issues/1108) and [#1134](https://github.com/ClickHouse/clickhouse-connect/issues/1134).
 
 ## 1.11.0, 2026-10-16

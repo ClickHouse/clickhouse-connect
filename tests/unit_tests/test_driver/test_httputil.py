@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from clickhouse_connect.driver import httputil
-from clickhouse_connect.driver.compression import _zstd_compress
+from clickhouse_connect.driver.compression import _lz4_frame, _zstd_compress
 from clickhouse_connect.driver.exceptions import OperationalError
 from clickhouse_connect.driver.httputil import ResponseSource
 
@@ -442,6 +442,7 @@ class TestResponseSourceNetworkError:
 
         assert len(chunks) == 0
 
+    @pytest.mark.skipif(_lz4_frame is None, reason="lz4 is not installed")
     def test_network_error_with_compressed_response(self):
         """Test network error handling with compressed (lz4) response"""
         mock_response = Mock()

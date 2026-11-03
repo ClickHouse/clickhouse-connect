@@ -5,6 +5,7 @@ from itertools import islice
 import pytest
 
 from clickhouse_connect import common
+from clickhouse_connect.driver.compression import _lz4_frame
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError, StreamFailureError
 from clickhouse_connect.driver.httputil import ResponseSource
 from clickhouse_connect.driver.streaming import StreamingResponseSource
@@ -66,7 +67,9 @@ def response_reads(monkeypatch, client_mode):
 
 
 @pytest.mark.parametrize("native_codec", ["python", "rust_strict"])
-@pytest.mark.parametrize("compress", [False, "lz4"])
+@pytest.mark.parametrize(
+    "compress", [False, pytest.param("lz4", marks=pytest.mark.skipif(_lz4_frame is None, reason="lz4 is not installed"))]
+)
 def test_early_stream_close_reuses_client(client_factory, call, consume_stream, client_mode, response_reads, native_codec, compress):
     if native_codec == "rust_strict":
         pytest.importorskip("_ch_core")

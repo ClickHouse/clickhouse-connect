@@ -152,6 +152,19 @@ def pivot(data: Sequence[Sequence], start_row: int, end_row: int) -> Sequence[Se
     return tuple(zip(*data[start_row:end_row]))
 
 
+def build_array_rows(column: list, offsets: Sequence[int]) -> list:
+    """
+    Split the flat element list of an Array column into one list per row, using the row end offsets.
+    offsets is the UInt64 offsets column of one Array level, as an array.array or a list.
+    """
+    rows = []
+    last = 0
+    for x in offsets:
+        rows.append(column[last:x])
+        last = x
+    return rows
+
+
 def write_str_col(column: Sequence, nullable: bool, encoding: str | None, dest: bytearray) -> int:
     app = dest.append
     for x in column:

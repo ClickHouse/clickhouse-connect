@@ -180,9 +180,9 @@ def _write_block_to_file(block: Any, file: Any) -> None:
 
 def _decompress(data: bytes, encoding: str) -> bytes:
     if encoding == "lz4":
-        import lz4.frame
+        from clickhouse_connect.driver.compression import _require_lz4
 
-        return lz4.frame.decompress(data)
+        return _require_lz4().decompress(data)
     if encoding == "zstd":
         from clickhouse_connect.driver.compression import _zstd_decompress
 
@@ -783,7 +783,7 @@ class ChdbBackend:
         next request when an invalid setting rides in the params."""
         self._run(f"SET {_validate_setting_name(key)} = {_quote_setting_value(value)}", "TabSeparated")
 
-    def ping(self) -> bool:
+    def ping(self, timeout: float | None = None) -> bool:
         try:
             result = self._run("SELECT 1", "TabSeparated")
             return result.bytes().strip() == b"1"

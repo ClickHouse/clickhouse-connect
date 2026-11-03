@@ -9,7 +9,7 @@ from clickhouse_connect import create_client, datatypes
 from clickhouse_connect.datatypes.format import set_default_formats
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.client import Client
-from clickhouse_connect.driver.exceptions import DatabaseError, InternalError, StreamFailureError
+from clickhouse_connect.driver.exceptions import DatabaseError, InternalError, ProgrammingError, StreamFailureError
 from clickhouse_connect.driver.summary import QuerySummary
 from tests.integration_tests.conftest import TestConfig
 
@@ -33,6 +33,17 @@ def _is_valid_uuid_v4(id_string: str) -> bool:
 
 def test_ping(param_client, call):
     assert call(param_client.ping) is True
+
+
+@pytest.mark.parametrize("timeout", [None, 0.5, 12])
+def test_ping_timeout(param_client, call, timeout):
+    assert call(param_client.ping, timeout=timeout) is True
+
+
+@pytest.mark.parametrize("timeout", [0, -0.5, float("nan")])
+def test_ping_rejects_nonpositive_timeout(param_client, call, timeout):
+    with pytest.raises(ProgrammingError, match="timeout must be greater than zero"):
+        call(param_client.ping, timeout=timeout)
 
 
 def test_query(param_client, call):

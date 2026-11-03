@@ -11,11 +11,10 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from unittest.mock import AsyncMock, Mock
 
-import lz4.frame
 import pytest
 
 from clickhouse_connect.driver._backend.http_async import SessionLease, _one_shot
-from clickhouse_connect.driver.compression import _zstd_compress
+from clickhouse_connect.driver.compression import _lz4_frame, _zstd_compress
 from clickhouse_connect.driver.exceptions import NotSupportedError, OperationalError
 from clickhouse_connect.driver.streaming import (
     ReadAheadSource,
@@ -172,11 +171,12 @@ async def test_streaming_with_zstd_compression():
     assert decompressed == original_data
 
 
+@pytest.mark.skipif(_lz4_frame is None, reason="lz4 is not installed")
 @pytest.mark.asyncio
 async def test_streaming_with_lz4_compression():
     """Test streaming with lz4 decompression."""
     original_data = b"lz4 test data " * 500
-    compressed = lz4.frame.compress(original_data)
+    compressed = _lz4_frame.compress(original_data)
 
     chunks = [compressed[i : i + 50] for i in range(0, len(compressed), 50)]
 
