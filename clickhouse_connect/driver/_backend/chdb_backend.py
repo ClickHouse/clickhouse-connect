@@ -180,9 +180,9 @@ def _write_block_to_file(block: Any, file: Any) -> None:
 
 def _decompress(data: bytes, encoding: str) -> bytes:
     if encoding == "lz4":
-        import lz4.frame
+        from clickhouse_connect.driver.compression import _require_lz4
 
-        return lz4.frame.decompress(data)
+        return _require_lz4().decompress(data)
     if encoding == "zstd":
         from clickhouse_connect.driver.compression import _zstd_decompress
 

@@ -18,8 +18,6 @@ from importlib import import_module
 from importlib.metadata import version as dist_version
 from typing import TYPE_CHECKING, Any, Protocol
 
-import lz4.frame
-
 if TYPE_CHECKING:
     from clickhouse_connect.driver.client import Client
     from clickhouse_connect.driver.external import ExternalData
@@ -30,7 +28,7 @@ from clickhouse_connect import common
 from clickhouse_connect.driver._backend.models import QueryRuntime
 from clickhouse_connect.driver.binding import _query_has_trailing_limit_zero, _query_is_read_only, quote_identifier, use_form_encoding
 from clickhouse_connect.driver.common import ShowClickHouseErrors, coerce_bool, dict_copy
-from clickhouse_connect.driver.compression import _zstd_decompress, available_compression
+from clickhouse_connect.driver.compression import LZ4_MISSING_MESSAGE, _lz4_decompressor, _zstd_decompress, available_compression
 from clickhouse_connect.driver.exceptions import (
     GENERIC_CLICKHOUSE_ERROR,
     DatabaseError,
@@ -181,6 +179,8 @@ def negotiate_compression(compress: bool | str) -> tuple[str | None, str | None]
         return ",".join(available_compression), available_compression[0]
     if compress and compress not in ("False", "false", "0"):
         if compress not in available_compression:
+            if compress == "lz4":
+                raise ProgrammingError(LZ4_MISSING_MESSAGE)
             raise ProgrammingError(f"Unsupported compression method {compress}")
         return compress, compress
     return None, None
@@ -192,7 +192,7 @@ def decompress_response(data: bytes, encoding: str | None) -> bytes:
         return data
 
     if encoding == "lz4":
-        lz4_decom = lz4.frame.LZ4FrameDecompressor()
+        lz4_decom = _lz4_decompressor()
         return lz4_decom.decompress(data, len(data))
     if encoding == "zstd":
         return _zstd_decompress(data)

@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Improvements
+
+- On Python 3.14 and later, `lz4` is no longer installed by default. It publishes no wheels for Python 3.14+ free-threaded builds, CPython 3.15 or musllinux, and zstd is in the standard library from 3.14. Without `lz4`, `compress=True` compresses inserts with zstd. Query responses already use zstd because the server prefers it. Install `clickhouse-connect[lz4]` to use `compress="lz4"` on 3.14 and later. Nothing changes below 3.14.
+
 ### Bug Fixes
 
 - Fixed Date32 decoding before 1601 and in leap centuries such as 1600 and 2400. Python date results support years 1 through 9999, with out-of-range values raising `ValueError`. The same calendar correction applies to epoch-based DateTime64 decoding.
@@ -31,6 +35,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - All sync and async query methods that accept a context now preserve its explicitly set `tz_mode` unless the call overrides it. Contexts without an explicit mode use the calling client's current default, as the sync client already did. Invalid context `tz_mode` assignments now raise `ProgrammingError` immediately.
 - `query(context=...)` now runs a command statement stored in the context, such as `CREATE` or `SET`, when no `query` argument is passed. Previously both the synchronous and asynchronous clients raised `AttributeError: 'NoneType' object has no attribute 'rstrip'`.
 - Unreadable timezone files and timezone directory names now follow the existing unrecognized-timezone handling. This prevents an import failure when `TZ` names a directory such as `America` and the `tzdata` package is installed.
+- The compiled Cython response buffer no longer segfaults when the first read from a stream is zero bytes, such as a zero-row Array, numeric, FixedString or Nullable(String) column, or an empty String value whose length byte arrived in its own chunk. Normal query results never take this path. The first chunk of a response is always more than one byte and loads the buffer. Only direct use of the buffer and datatype read APIs was affected.
 
 ### Improvements
 
@@ -43,6 +48,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - `query_np` and `query_df` now return every row of a numeric `LowCardinality` column, such as `LowCardinality(Int32)`. Previously the column was cut to the size of its dictionary, so 1000 rows with 300 distinct values came back as 300 rows, and a block with fewer rows than dictionary entries raised `ValueError: iterator too short`.
 - `AsyncClient.query_rows_stream` now reads each result block in the executor once and yields its rows on the event loop. Previously it made one executor call per row, so streaming rows asynchronously was far slower than the synchronous `query_rows_stream`.
 - The Python codec reads `Map`, nullable integer, nullable date, and timezone-aware nullable datetime columns faster in `query_df` by avoiding per-row pandas conversions.
+- With the C extensions, the Python codec reads `Array` columns faster in all query methods. Related to [#1008](https://github.com/ClickHouse/clickhouse-connect/issues/1008).
 - Eligible compiled SQLAlchemy Core and ORM SELECT queries now skip the second `LIMIT 0` metadata query for empty results and preserve result keys. A projection qualifies when it has a fixed column shape with unique compiled names and every result column uses a result processor that does not read the server type code. This covers SQLAlchemy's generic types whose processors depend only on dialect flags, such as `String`, `Boolean`, `Numeric`, `Float`, `Enum`, and types that inherit the default `TypeEngine` processor, the driver's reflected `ChSqlaType` types, and `TypeDecorator` wrappers over those, including nested wrappers, `with_variant`, and `load_dialect_impl`. The synthesized DB-API descriptions report `None` for `type_code` and `null_ok`. Plain DB-API and textual queries, raw SQL projections or modifiers, server-expanded columns, custom `result_processor` overrides, `Enum` subclasses, `JSON`, rewritten statements, and cursor `execute` wrappers retain the `LIMIT 0` metadata fallback. Closes [#1108](https://github.com/ClickHouse/clickhouse-connect/issues/1108) and [#1134](https://github.com/ClickHouse/clickhouse-connect/issues/1134).
 
 ## 1.11.0, 2026-10-16
