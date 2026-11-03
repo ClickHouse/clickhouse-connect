@@ -22,6 +22,7 @@ from clickhouse_connect.cc_sqlalchemy import dialect_name, ischema_names
 from clickhouse_connect.cc_sqlalchemy._schema import COLUMN_OPTIONS, TABLE_OPTIONS
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import (
     ChSqlaType,
+    _positional_signature,
     _query_bind_signature,
     _QueryValueSignature,
     _typed_query_value,
@@ -380,7 +381,11 @@ class ClickHouseDialect(DefaultDialect):
             for index, key in enumerate(names):
                 signature = signatures[index % len(signatures)]
                 if key in parameter_types and signature != parameter_types[key]:
-                    conflicts.add(key)
+                    positional = _positional_signature(signature)
+                    if positional == _positional_signature(parameter_types[key]):
+                        signature = positional
+                    else:
+                        conflicts.add(key)
                 parameter_types[key] = signature
         # A shared key must remain valid for every occurrence, including DateTime.
         return {key: signature for key, signature in parameter_types.items() if signature and key not in conflicts}

@@ -52,3 +52,15 @@ def test_named_tuple_binding_rejects_wrong_keys(value):
 def test_untyped_dictionary_binding_is_unchanged():
     _, parameters = bind_query("SELECT {p:JSON}", {"p": VALUE})
     assert parameters == {"param_p": '{"port":79,"protocol":13}'}
+
+
+@pytest.mark.parametrize(
+    ("query", "value", "expected"),
+    [
+        ("SELECT '{p:Tuple(}', {p:String}", "user_1", "user_1"),
+        ("SELECT {p:Tuple(`a}b` UInt8, c UInt8)}", (1, 2), "(1, 2)"),
+    ],
+)
+def test_unparseable_tuple_hint_keeps_value(query, value, expected):
+    _, parameters = bind_query(query, {"p": value})
+    assert parameters == {"param_p": expected}

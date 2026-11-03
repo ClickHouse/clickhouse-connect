@@ -798,10 +798,14 @@ def _normalize_named_tuples(type_str: str, value: Any) -> Any:
     """Put mapping values in the declared order of named Tuple fields."""
     if value is None or "tuple" not in type_str.lower():
         return value
-    base_name, types = _unwrap_outer(type_str)
-    base_name = base_name.lower()
-    if base_name == "tuple":
-        names, element_types = _container_columns(type_str)
+    try:
+        base_name, types = _unwrap_outer(type_str)
+        base_name = base_name.lower()
+        columns = _container_columns(type_str) if base_name == "tuple" else None
+    except Exception:
+        return value
+    if columns is not None:
+        names, element_types = columns
         if names and isinstance(value, Mapping):
             value = _named_tuple_values(names, value)
         if isinstance(value, tuple) and len(value) == len(element_types):

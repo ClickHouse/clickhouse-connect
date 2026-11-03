@@ -102,6 +102,14 @@ def _query_bind_signature(sqla_type: TypeEngine[Any], dialect: Dialect) -> _Quer
     return False
 
 
+def _positional_signature(signature: _QueryValueSignature) -> _QueryValueSignature:
+    """Drop named Tuple field names so compatible positional shapes compare equal."""
+    if isinstance(signature, bool):
+        return signature
+    kind, children = signature[0], signature[1]
+    return ("tuple" if kind == "named_tuple" else kind, tuple(_positional_signature(child) for child in children))
+
+
 def _query_value_matches_shape(signature: _QueryValueSignature, value: Any) -> bool:
     if value is None:
         return True

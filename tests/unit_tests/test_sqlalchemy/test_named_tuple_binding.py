@@ -155,3 +155,37 @@ def test_named_tuple_client_binding_rejects_wrong_keys(value):
         dialect.do_execute(
             Mock(), str(compiled), {"p": value}, SimpleNamespace(compiled=compiled, execution_options={}, invoked_statement=statement)
         )
+
+
+@pytest.mark.parametrize("other_type", ["Tuple(created DateTime64(6), id UInt32)", "Tuple(DateTime64(6), UInt32)"])
+def test_shared_bind_name_keeps_compatible_datetime64_fraction(other_type):
+    first = sqla_type_from_name("Tuple(stamp DateTime64(6), id UInt32)")
+    second = sqla_type_from_name(other_type)
+    value = (datetime(2024, 6, 13, 7, 8, 9, 123456), 1)
+    dialect = ClickHouseDialect(dbapi=dbapi)
+    statement = sa.select(sa.literal_column("1")).where(
+        sa.and_(sa.bindparam("p", type_=first) == sa.literal_column("a"), sa.bindparam("p", type_=second) == sa.literal_column("b"))
+    )
+    compiled = statement.compile(dialect=dialect)
+    cursor = Mock()
+    dialect.do_execute(
+        cursor, str(compiled), {"p": value}, SimpleNamespace(compiled=compiled, execution_options={}, invoked_statement=statement)
+    )
+    sql, bound = cursor.execute.call_args.args
+    assert finalize_query(sql, bound).count("'2024-06-13 07:08:09.123456'") == 2
+
+
+def test_shared_bind_name_with_mapping_and_conflicting_names_is_unchanged():
+    first = sqla_type_from_name("Tuple(stamp DateTime64(6), id UInt32)")
+    second = sqla_type_from_name("Tuple(created DateTime64(6), id UInt32)")
+    dialect = ClickHouseDialect(dbapi=dbapi)
+    statement = sa.select(sa.literal_column("1")).where(
+        sa.and_(sa.bindparam("p", type_=first) == sa.literal_column("a"), sa.bindparam("p", type_=second) == sa.literal_column("b"))
+    )
+    compiled = statement.compile(dialect=dialect)
+    cursor = Mock()
+    parameters = {"p": {"stamp": datetime(2024, 6, 13), "id": 1}}
+    dialect.do_execute(
+        cursor, str(compiled), parameters, SimpleNamespace(compiled=compiled, execution_options={}, invoked_statement=statement)
+    )
+    assert cursor.execute.call_args.args[1] == parameters
