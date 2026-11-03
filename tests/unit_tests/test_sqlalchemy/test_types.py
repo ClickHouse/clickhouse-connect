@@ -1,3 +1,6 @@
+from collections import UserDict
+from types import MappingProxyType
+
 import pytest
 from sqlalchemy import Column, DateTime, Integer, MetaData, Table, TypeDecorator
 from sqlalchemy.exc import ArgumentError
@@ -222,6 +225,58 @@ def test_tuple_adapt_preserves_type_def():
     adapted = source.adapt(type(source))
     assert adapted.type_def == source.type_def
     assert adapted.name == source.name
+
+
+@pytest.mark.parametrize("mapping_type", [dict, UserDict, MappingProxyType])
+def test_tuple_named_elements(mapping_type):
+    source = Tuple(elements=mapping_type({"protocol": UInt32, "a b": Decimal(13, 2), "a`b": String()}))
+    expected = "Tuple(`protocol` UInt32, `a b` Decimal(13, 2), `a\\`b` String)"
+
+    assert source.type_def.keys == ("protocol", "a b", "a`b")
+    assert source.type_def.values == ("UInt32", "Decimal(13, 2)", "String")
+    assert source.name == expected
+    table = Table("named_tuple", MetaData(), Column("value", source), MergeTree(order_by="tuple()"))
+    assert str(CreateTable(table).compile(dialect=ClickHouseDialect())) == (
+        f"CREATE TABLE `named_tuple` (`value` {expected}) Engine MergeTree ORDER BY tuple()"
+    )
+    for copied in (source.copy(), source.adapt(type(source)), source.dialect_impl(ClickHouseDialect())):
+        assert copied.type_def == source.type_def
+        assert copied.name == expected
+
+
+@pytest.mark.parametrize(
+    "wrap, expected",
+    [
+        (lambda value: value, "Tuple(`label` Nullable(String))"),
+        (Array, "Array(Tuple(`label` Nullable(String)))"),
+        (lambda value: Tuple(UInt32, value), "Tuple(UInt32, Tuple(`label` Nullable(String)))"),
+        (lambda value: Array(Tuple(UInt32, value)), "Array(Tuple(UInt32, Tuple(`label` Nullable(String))))"),
+        (Nullable, "Nullable(Tuple(`label` Nullable(String)))"),
+        (lambda value: Tuple(elements={"inner": value}), "Tuple(`inner` Tuple(`label` Nullable(String)))"),
+    ],
+)
+def test_tuple_named_elements_composition(wrap, expected):
+    assert wrap(Tuple(elements={"label": Nullable(String)})).name == expected
+
+
+@pytest.mark.parametrize("key", ["", 13, None, ("field",), True])
+def test_tuple_named_elements_reject_invalid_keys(key):
+    with pytest.raises(ArgumentError, match="Tuple element names must be non-empty strings"):
+        Tuple(elements={key: UInt32})
+
+
+def test_tuple_empty_mapping():
+    assert Tuple(elements={}).name == "Tuple()"
+
+
+def test_tuple_named_elements_conflict():
+    with pytest.raises(ArgumentError, match="Cannot specify both positional elements"):
+        Tuple(UInt32, elements={"value": UInt64})
+
+
+def test_tuple_type_def_takes_precedence():
+    type_def = TypeDef(keys=("value",), values=("UInt64",))
+    assert Tuple(elements={"ignored": String}, type_def=type_def).type_def == type_def
 
 
 @pytest.mark.parametrize(
