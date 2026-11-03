@@ -5,9 +5,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
-### Improvements
-
-- On Python 3.14 and later, `lz4` is no longer installed by default. It publishes no wheels for Python 3.14+ free-threaded builds, CPython 3.15 or musllinux, and zstd is in the standard library from 3.14. Without `lz4`, `compress=True` compresses inserts with zstd. Query responses already use zstd because the server prefers it. Install `clickhouse-connect[lz4]` to use `compress="lz4"` on 3.14 and later. Nothing changes below 3.14.
+## 1.12.0, 2026-11-03
 
 ### Bug Fixes
 
@@ -24,8 +22,6 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - Sync and async clients no longer automatically use form encoding when the final SQL exceeds 128 KiB, avoiding `HTML Form Exception: Field value too long` for large queries with large bound parameters. Explicit form encoding and queries with external data retain their existing limits. Closes [#1105](https://github.com/ClickHouse/clickhouse-connect/issues/1105).
 - `pandas.Timestamp` values keep their nanoseconds when bound to a `DateTime64(9)` query parameter, including typed SQLAlchemy bind parameters and values wrapped in `DT64Param`, and when inserted as rows into `DateTime64(7)` through `DateTime64(9)` columns with the Python codec. Previously both paths truncated them to microseconds, so `2024-01-02 03:04:05.123456789` arrived as `2024-01-02 03:04:05.123456000`. Python codec row inserts of a `pandas.Timestamp` whose sub-microsecond part rounds up, such as `03:04:05.999999999`, also no longer store a value one second late in any `DateTime64` column. Related to [#429](https://github.com/ClickHouse/clickhouse-connect/issues/429).
 - Server-side query parameters typed as a named `Tuple`, `Nested`, or `Map` now keep the sub-second precision of `datetime` values bound to their `DateTime64` elements, and each element uses its declared timezone. `Map` parameters require `dict_parameter_format="map"`. A `Variant` keeps precision and timezone only when its sole datetime alternative is a `DateTime64`. Enum labels and field names containing `datetime` don't count as datetime types. Variants with several datetime alternatives are unchanged.
-
-
 - Enum names that contain a backslash or a control character such as a tab now parse correctly from server type names and are escaped correctly in Native insert headers. Previously such names read back escaped, for example `c\\d` instead of `c\d`. Inserting them stored `0`, which became the wrong label when `0` was a declared member and an unreadable value otherwise. See [#1117](https://github.com/ClickHouse/clickhouse-connect/pull/1117).
 - The asynchronous client now raises `OperationalError` when the connection drops while `raw_query`, `command`, or a `LIMIT 0` metadata query reads the response body, matching the synchronous client. Previously it leaked `aiohttp.ClientPayloadError`.
 - When the connection drops partway through a streamed query result, both sync and async clients now raise `StreamFailureError: Stream failed during read (connection closed by server)` and preserve the transport error as the cause. Previously, with `show_clickhouse_errors=True`, they could report buffered result bytes as `unrecognized data found in stream: <hex>` and suppress the cause. Recognizable ClickHouse errors written into the response before the drop are still reported.
@@ -39,6 +35,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
+- On Python 3.14 and later, `lz4` is no longer installed by default. It publishes no wheels for Python 3.14+ free-threaded builds, CPython 3.15 or musllinux, and zstd is in the standard library from 3.14. Without `lz4`, `compress=True` compresses inserts with zstd. Query responses already use zstd because the server prefers it. Install `clickhouse-connect[lz4]` to use `compress="lz4"` on 3.14 and later. Nothing changes below 3.14.
 - Cython decoding of Date and Date32 columns is faster because Python date objects are constructed directly through the datetime C API. Results are the same as before.
 - `ping()` on the sync and async clients accepts an optional positive `timeout` in seconds, defaulting to 3 seconds when omitted or `None`. HTTP clients reject zero or negative values with `ProgrammingError`. The chDB client ignores the parameter. Closes [#192](https://github.com/ClickHouse/clickhouse-connect/issues/192).
 - Added `get_client(dedicated_pool=True)` for synchronous HTTP clients that need their own connection pool. Closing any client-owned pool now closes idle connections immediately and closes active connections when their responses return to the pool. Requests racing with `close()` can fail with `OperationalError`, including for existing TLS/proxy-owned pools. The async client accepts the option without effect because it already owns its connector. Closes [#1121](https://github.com/ClickHouse/clickhouse-connect/issues/1121).
