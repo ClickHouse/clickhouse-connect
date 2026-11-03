@@ -106,11 +106,11 @@ def _parse_dictionary_column(definition: str) -> dict[str, Any]:
     if default_clause:
         default_sql = remainder[default_index + len(default_clause) :].strip()
         if default_clause == " DEFAULT ":
-            column["server_default"] = text(default_sql)
+            column["server_default"] = default_sql
         elif default_clause == " MATERIALIZED ":
-            column["clickhouse_materialized"] = text(default_sql)
+            column["clickhouse_materialized"] = default_sql
         elif default_clause == " ALIAS ":
-            column["clickhouse_alias"] = text(default_sql)
+            column["clickhouse_alias"] = default_sql
     return column
 
 
@@ -147,6 +147,10 @@ def get_dictionary_metadata(connection, table_name: str, schema: str | None = No
     return metadata
 
 
+# Column keys whose reflected values are SQL expression strings
+EXPRESSION_KEYS = ("server_default", "clickhouse_materialized", "clickhouse_alias", "clickhouse_ttl")
+
+
 def get_columns(connection, table_name: str, schema: str | None = None) -> list[dict[str, Any]]:
     table_metadata = get_table_metadata(connection, table_name, schema)
     if table_metadata.engine == "Dictionary":
@@ -165,14 +169,14 @@ def get_columns(connection, table_name: str, schema: str | None = None) -> list[
             "autoincrement": False,
             "comment": row.comment or None,
             "clickhouse_codec": row.codec_expression or None,
-            "clickhouse_ttl": text(row.ttl_expression) if row.ttl_expression else None,
+            "clickhouse_ttl": row.ttl_expression or None,
         }
         if row.default_type == "DEFAULT" and row.default_expression:
-            col["server_default"] = text(row.default_expression)
+            col["server_default"] = row.default_expression
         elif row.default_type == "MATERIALIZED" and row.default_expression:
-            col["clickhouse_materialized"] = text(row.default_expression)
+            col["clickhouse_materialized"] = row.default_expression
         elif row.default_type == "ALIAS" and row.default_expression:
-            col["clickhouse_alias"] = text(row.default_expression)
+            col["clickhouse_alias"] = row.default_expression
         columns.append(col)
     return columns
 
@@ -205,6 +209,10 @@ class ChInspector(Inspector):
                 if (include_columns and name not in include_columns) or (exclude_columns and name in exclude_columns):
                     continue
                 col_type = col.pop("type")
+                # Reflection returns expressions as SQL strings; Column needs clauses.
+                for key in EXPRESSION_KEYS:
+                    if isinstance(col.get(key), str):
+                        col[key] = text(col[key])
                 col_args = canonical_schema_kwargs({key: value for key, value in col.items() if value is not None}, COLUMN_OPTIONS)
                 table.append_column(sa_schema.Column(name, col_type, **col_args))
             if table_metadata.engine == "Dictionary":

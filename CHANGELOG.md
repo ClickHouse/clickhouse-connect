@@ -7,6 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- SQLAlchemy `Inspector.get_columns()` again returns column expressions as plain SQL strings, as in 1.0.0, for the `server_default`, `clickhouse_materialized`, `clickhouse_alias` and `clickhouse_ttl` keys, so reflection results can be serialized (for example with `json.dumps`). Table reflection still turns them into SQL clauses, so reflected `Table` objects and Alembic comparisons are unchanged. Closes [#1141](https://github.com/ClickHouse/clickhouse-connect/issues/1141).
 - Placeholder-like text inside SQL strings, quoted identifiers, comments, and heredocs no longer selects server-side parameter binding, so client-side `%(name)s` parameters bind correctly alongside it. These queries now follow normal client-side percent formatting, so a bare literal `%` can raise `ValueError`. Escape it as `%%` when passing parameters. Closes [#1146](https://github.com/ClickHouse/clickhouse-connect/issues/1146).
 - Dictionaries bound to named `Tuple` parameters now use the declared field order, including nested tuples and arrays, fixing tuple parsing errors in plain client queries and SQLAlchemy single-row and async inserts. Missing or extra fields raise `ProgrammingError`. Closes [#1148](https://github.com/ClickHouse/clickhouse-connect/issues/1148).
 - Typed SQLAlchemy `Map` parameters and inline literals now preserve `DateTime64` fractional seconds when `dict_parameter_format="map"`.

@@ -1,8 +1,11 @@
+import json
+
 import pytest
 import sqlalchemy as db
 from sqlalchemy import MetaData, Table, inspect, text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import NoSuchTableError
+from sqlalchemy.sql.elements import TextClause
 
 from clickhouse_connect import common
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
@@ -115,6 +118,43 @@ def test_variant_reflection(test_engine: Engine, test_db: str):
         table = Table(table_name, MetaData(schema=test_db), autoload_with=test_engine)
         assert table.c.value.type.__class__ is type(variant_type)
         assert table.c.value.type.name == "Variant(String, UInt32)"
+    finally:
+        with test_engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.{table_name}"))
+
+
+def test_column_expression_reflection(test_engine: Engine, test_db: str):
+    table_name = "sqlalchemy_expression_reflection_test"
+    with test_engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.{table_name}"))
+        conn.execute(
+            text(
+                f"CREATE TABLE {test_db}.{table_name} (ts DateTime, price Float64, qty UInt32, "
+                "total Float64 ALIAS price * qty, day Date MATERIALIZED toDate(ts), "
+                "note String DEFAULT 'x', kept String TTL ts + INTERVAL 1 DAY) "
+                "ENGINE MergeTree ORDER BY ts"
+            )
+        )
+
+    try:
+        columns = {column["name"]: column for column in inspect(test_engine).get_columns(table_name, schema=test_db)}
+        assert columns["total"]["clickhouse_alias"] == "price * qty"
+        assert columns["day"]["clickhouse_materialized"] == "toDate(ts)"
+        assert columns["note"]["server_default"] == "'x'"
+        assert columns["kept"]["clickhouse_ttl"] == "ts + toIntervalDay(1)"
+        json.dumps([{key: value for key, value in column.items() if key != "type"} for column in columns.values()])
+
+        table = Table(table_name, MetaData(schema=test_db), autoload_with=test_engine)
+        assert isinstance(table.c.note.server_default.arg, TextClause)
+        assert table.c.note.server_default.arg.text == "'x'"
+        for column_name, option, expression in (
+            ("total", "alias", "price * qty"),
+            ("day", "materialized", "toDate(ts)"),
+            ("kept", "ttl", "ts + toIntervalDay(1)"),
+        ):
+            value = table.c[column_name].dialect_options["clickhousedb"][option]
+            assert isinstance(value, TextClause)
+            assert value.text == expression
     finally:
         with test_engine.begin() as conn:
             conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.{table_name}"))
