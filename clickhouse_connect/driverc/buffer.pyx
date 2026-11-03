@@ -97,6 +97,10 @@ cdef class ResponseBuffer:
         cdef char* ptr
         e = self.buf_sz
 
+        if sz == 0:
+            # self.buffer is NULL before the first chunk, and NULL here means "exception set"
+            return self.slice
+
         if self.buf_loc + sz <= e:
             # We still have "sz" unread bytes available in the buffer, return the currently loc and advance it
             temp = self.buf_loc

@@ -34,6 +34,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - All sync and async query methods that accept a context now preserve its explicitly set `tz_mode` unless the call overrides it. Contexts without an explicit mode use the calling client's current default, as the sync client already did. Invalid context `tz_mode` assignments now raise `ProgrammingError` immediately.
 - `query(context=...)` now runs a command statement stored in the context, such as `CREATE` or `SET`, when no `query` argument is passed. Previously both the synchronous and asynchronous clients raised `AttributeError: 'NoneType' object has no attribute 'rstrip'`.
 - Unreadable timezone files and timezone directory names now follow the existing unrecognized-timezone handling. This prevents an import failure when `TZ` names a directory such as `America` and the `tzdata` package is installed.
+- The compiled Cython response buffer no longer segfaults when the first read from a stream is zero bytes, such as a zero-row Array, numeric, FixedString or Nullable(String) column, or an empty String value whose length byte arrived in its own chunk. Normal query results never take this path. The first chunk of a response is always more than one byte and loads the buffer. Only direct use of the buffer and datatype read APIs was affected.
 
 ### Improvements
 

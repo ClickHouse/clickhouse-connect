@@ -227,6 +227,24 @@ def test_empty_tuple_native_markers_and_stream_alignment(buffer_cls):
     assert list(uint8_type.read_column_data(source, 3, QueryContext(), None)) == [13, 79, 80]
 
 
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+@pytest.mark.parametrize("type_name", ["Array(UInt8)", "Array(String)", "UInt64", "FixedString(4)", "Nullable(String)"])
+def test_zero_row_column_as_first_read(buffer_cls, type_name):
+    source = bytes_source(bytes((79,)), cls=buffer_cls)
+
+    assert list(registry.get_from_name(type_name).read_column(source, 0, QueryContext())) == []
+    assert source.read_byte() == 79
+
+
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+def test_empty_string_after_one_byte_first_chunk(buffer_cls):
+    # The length byte arrives alone, so the C buffer has not loaded a chunk before the zero byte read
+    source = bytes_source(bytes((0, 79)), chunk_size=1, cls=buffer_cls)
+
+    assert source.read_leb128_str() == ""
+    assert source.read_byte() == 79
+
+
 def test_empty_tuple_native_write_and_size():
     tuple_type = registry.get_from_name("Tuple()")
     dest = bytearray()
