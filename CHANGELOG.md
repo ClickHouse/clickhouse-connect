@@ -10,6 +10,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - Dictionaries bound to named `Tuple` parameters now use the declared field order, including nested tuples and arrays, fixing tuple parsing errors in plain client queries and SQLAlchemy single-row and async inserts. Missing or extra fields raise `ProgrammingError`. Closes [#1148](https://github.com/ClickHouse/clickhouse-connect/issues/1148).
 - Typed SQLAlchemy `Map` parameters and inline literals now preserve `DateTime64` fractional seconds when `dict_parameter_format="map"`.
 
+### Improvements
+
+- SQLAlchemy `Tuple` now accepts an `elements` mapping from field names to ClickHouse SQLAlchemy type classes or instances, preserving field order and quoting names automatically. Closes [#1144](https://github.com/ClickHouse/clickhouse-connect/issues/1144).
+
 ## 1.12.0, 2026-11-03
 
 ### Bug Fixes

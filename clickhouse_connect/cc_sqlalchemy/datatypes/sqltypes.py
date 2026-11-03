@@ -502,10 +502,10 @@ class Tuple(ChSqlaType, UserDefinedType):  # type: ignore[misc]
     def __init__(
         self,
         *args,
-        elements: Sequence[ChSqlaType | type[ChSqlaType]] | None = None,
+        elements: Sequence[ChSqlaType | type[ChSqlaType]] | Mapping[str, ChSqlaType | type[ChSqlaType]] | None = None,
         type_def: TypeDef | None = None,
-    ):
-        """Tuple(UInt32, UUID) variadic form or Tuple(elements=[UInt32, UUID]) list form, not both."""
+    ) -> None:
+        """Construct from positional types or an elements sequence or mapping of names to types."""
         if type_def is None and not args and elements is None:
             # SA's dialect_impl -> adapt -> constructor_copy can call cls() with no args
             # because get_cls_kwargs doesn't see keyword-only args behind *args.
@@ -516,8 +516,14 @@ class Tuple(ChSqlaType, UserDefinedType):  # type: ignore[misc]
                 raise ArgumentError("Cannot specify both positional elements and the 'elements' kwarg")
             if args:
                 elements = args
+            keys: tuple[str, ...] = ()
+            if isinstance(elements, Mapping):
+                keys = tuple(elements)
+                if any(not isinstance(key, str) or not key for key in keys):
+                    raise ArgumentError("Tuple element names must be non-empty strings")
+                elements = tuple(elements.values())
             values = [et() if callable(et) else et for et in elements]  # type: ignore[union-attr]
-            type_def = TypeDef(values=tuple(v.name for v in values))
+            type_def = TypeDef(keys=keys, values=tuple(v.name for v in values))
         super().__init__(type_def)
 
     def adapt(self, cls, **kw):
