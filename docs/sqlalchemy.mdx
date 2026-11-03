@@ -237,9 +237,22 @@ On SQLAlchemy 2.x, inline literals of generic `sqlalchemy.ARRAY` types containin
 
 If a named datetime parameter is reused, every occurrence needs a compatible `DateTime64` bind type to preserve fractions. An untyped occurrence or a conflicting type keeps whole-second formatting. Set `type_=DateTime64(6)` on each `bindparam`, or use distinct parameter names with the appropriate types.
 
+### Named tuples {#sqlalchemy-named-tuples}
+
+Declare named tuple fields with an `elements` mapping. Keys must be non-empty strings, and values can be ClickHouse SQLAlchemy type classes or configured instances. Fields retain the mapping's iteration order, and names are quoted automatically.
+
+```python
+from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import String, Tuple, UInt32
+
+details_type = Tuple(elements={"user_id": UInt32, "display name": String()})
+# Tuple(`user_id` UInt32, `display name` String)
+```
+
+Use `Tuple(UInt32, String)` or `Tuple(elements=[UInt32, String])` for unnamed tuples. Positional elements and the `elements` keyword cannot be combined.
+
 ### JSON type hints {#sqlalchemy-json-type-hints}
 
-Declare typed JSON paths with the `typed_paths` mapping. A path type can be a ClickHouse SQLAlchemy type class, a configured instance, or a ClickHouse type name string. Type name strings support types without a SQLAlchemy constructor, such as `Dynamic`, and can still be used for complex configured type expressions. They preserve names in a named `Tuple`.
+Declare typed JSON paths with the `typed_paths` mapping. A path type can be a ClickHouse SQLAlchemy type class, a configured instance, or a ClickHouse type name string. Type name strings support types without a SQLAlchemy constructor, such as `Dynamic`, and can still be used for complex configured type expressions.
 
 Type name strings can contain configured nested JSON types such as ``Array(JSON(`child` UInt32))``. Recognized ClickHouse type names are case-insensitive in these strings and are emitted with their canonical capitalization. A string must contain one complete type expression. Trailing text and malformed nested JSON arguments are rejected.
 

@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Improvements
+
+- SQLAlchemy `Tuple` now accepts an `elements` mapping from field names to ClickHouse SQLAlchemy type classes or instances, preserving field order and quoting names automatically. Closes [#1144](https://github.com/ClickHouse/clickhouse-connect/issues/1144).
+
 ## 1.12.0, 2026-11-03
 
 ### Bug Fixes
