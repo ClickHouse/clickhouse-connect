@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base
 
 from clickhouse_connect.cc_sqlalchemy.asyncio import ClickHouseAsyncDialect
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime64, String, UInt32
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
 from clickhouse_connect.datatypes.format import clear_all_formats, set_default_formats
@@ -183,6 +184,42 @@ async def test_async_sqlalchemy_typed_datetime64_executemany(test_config: TestCo
             assert rows == [(13, stamp), (79, stamp)]
             matched = await connection.execute(sa.select(table.c.id).where(table.c.stamp == stamp).order_by(table.c.id))
             assert matched.all() == [(13,), (79,)]
+    finally:
+        try:
+            async with engine.connect() as connection:
+                await connection.run_sync(metadata.drop_all)
+        finally:
+            await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+@pytest.mark.parametrize("server_side_params", [False, True])
+@pytest.mark.parametrize("route", ["single", "executemany", "multivalues"])
+async def test_async_sqlalchemy_named_tuple_binding(test_config: TestConfig, server_side_params: bool, route: str) -> None:
+    engine = create_async_engine(_async_url(test_config), server_side_params=server_side_params)
+    metadata = sa.MetaData()
+    table = sa.Table(
+        f"test_async_named_tuple_{uuid.uuid4().hex}",
+        metadata,
+        sa.Column("id", UInt32),
+        sa.Column("value", sqla_type_from_name("Tuple(protocol UInt8, port UInt16)")),
+        MergeTree(order_by="id"),
+    )
+    rows = [{"id": key, "value": {"port": key, "protocol": 13}} for key in (13, 79)]
+    try:
+        async with engine.connect() as connection:
+            await connection.run_sync(metadata.create_all)
+            if route == "single":
+                for row in rows:
+                    await connection.execute(table.insert(), row)
+            elif route == "multivalues":
+                await connection.execute(table.insert().values(rows))
+            else:
+                await connection.execute(table.insert(), rows)
+            actual = (await connection.execute(sa.select(table).order_by(table.c.id))).all()
+            assert actual == [(key, {"protocol": 13, "port": key}) for key in (13, 79)]
+            matched = await connection.execute(sa.select(table.c.id).where(table.c.value == rows[1]["value"]))
+            assert matched.all() == [(79,)]
     finally:
         try:
             async with engine.connect() as connection:

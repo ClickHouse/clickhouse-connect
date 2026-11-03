@@ -349,6 +349,17 @@ WHERE date >= '2022-10-01 15:20:05'
 
 Server-side binding works with `SELECT` queries and `INSERT ... VALUES` statements. For large plain insert batches, prefer `Client.insert`.
 
+A named `Tuple` parameter accepts a dictionary whose keys exactly match the declared fields. The client orders its values by the type declaration, so dictionary order doesn't matter:
+
+```python
+client.query(
+    "SELECT {p:Tuple(protocol UInt8, port UInt16)}",
+    parameters={"p": {"port": 79, "protocol": 13}},
+)
+```
+
+This also works for named tuples inside `Array`, `Tuple`, `Nullable`, and `Map` values. Missing or extra fields raise `ProgrammingError`. For `Map` parameters, set `dict_parameter_format="map"` as usual. Untyped client-side parameters have no Tuple declaration, so dictionaries keep the configured JSON or map formatting.
+
 #### Client-side binding {#client-side-binding}
 
 ClickHouse Connect also supports client-side parameter binding, which can allow more flexibility in generating templated SQL queries. For client-side binding, the `parameters` argument should be a dictionary or a sequence. Client-side binding uses the Python ["printf" style](https://docs.python.org/3/library/stdtypes.html#old-string-formatting) string formatting for parameter substitution.
