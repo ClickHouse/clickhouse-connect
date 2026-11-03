@@ -366,6 +366,8 @@ ClickHouse Connect also supports client-side parameter binding, which can allow 
 
 Note that unlike server-side binding, client-side binding doesn't work for database identifiers such as database, table, or column names, since Python-style formatting can't distinguish between the different types of strings, and they need to be formatted differently (backticks or double quotes for database identifiers, single quotes for data values).
 
+Because substitution is printf-style, a literal `%` in the query must be written as `%%` whenever `parameters` are passed. A query whose only `{name:Type}` text sits inside a string, quoted identifier, comment, or heredoc takes this client-side path, so an unescaped `%` in such a query raises `ValueError`.
+
 - Example with Python Dictionary, DateTime value and string escaping
 
 ```python
