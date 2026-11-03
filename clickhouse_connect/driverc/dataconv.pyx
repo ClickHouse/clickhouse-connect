@@ -611,7 +611,7 @@ def build_array_rows(list column, offsets):
     cdef list rows = []
     for x in offsets:
         offset = x
-        # Clamp like Python slicing does, so malformed offsets give the same rows as the pure Python version
+        # Clamp to column_len before casting the UInt64 offset to Py_ssize_t.
         end = <Py_ssize_t>offset if offset < <unsigned long long>column_len else column_len
         rows.append(column[start:end])
         start = end

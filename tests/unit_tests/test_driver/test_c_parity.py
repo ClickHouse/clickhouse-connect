@@ -65,19 +65,19 @@ def test_build_lc_nullable_column_parity_with_non_none_null():
     ],
 )
 @pytest.mark.parametrize("offsets_cls", [lambda x: array.array("Q", x), list], ids=["array", "list"])
-def test_build_array_rows_parity(column, offsets, expected, offsets_cls):
-    for build_array_rows in (py_build_array_rows, c_build_array_rows):
-        rows = build_array_rows(column, offsets_cls(offsets))
-        assert rows == expected
-        assert all(row is not column for row in rows)
+@pytest.mark.parametrize("build_array_rows", [py_build_array_rows, c_build_array_rows], ids=["python", "cython"])
+def test_build_array_rows_parity(column, offsets, expected, offsets_cls, build_array_rows):
+    rows = build_array_rows(column, offsets_cls(offsets))
+    assert rows == expected
+    assert all(row is not column for row in rows)
 
 
-def test_build_array_rows_parity_keeps_element_objects():
+@pytest.mark.parametrize("build_array_rows", [py_build_array_rows, c_build_array_rows], ids=["python", "cython"])
+def test_build_array_rows_parity_keeps_element_objects(build_array_rows):
     column = list(np.array([13, 79, 80], dtype=np.uint64))
-    for build_array_rows in (py_build_array_rows, c_build_array_rows):
-        rows = build_array_rows(column, array.array("Q", [2, 3]))
-        assert rows == [[13, 79], [80]]
-        assert all(v is column[ix] for ix, v in enumerate(rows[0] + rows[1]))
+    rows = build_array_rows(column, array.array("Q", [2, 3]))
+    assert rows == [[13, 79], [80]]
+    assert all(v is column[ix] for ix, v in enumerate(rows[0] + rows[1]))
 
 
 def test_read_nullable_array_parity():
