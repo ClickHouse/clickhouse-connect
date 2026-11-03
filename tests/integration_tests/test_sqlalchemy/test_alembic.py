@@ -550,7 +550,7 @@ def test_alembic_autogenerate_engine_upgrade_downgrade_live(
 def test_alembic_named_container_types_round_trip_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
     table_name = ch_name("alembic_named_containers")
     nested_type = sqla_type_from_name("Nested(a String, b UInt32)")
-    named_tuple_type = sqla_type_from_name("Tuple(a String, b UInt32)")
+    named_tuple_type = Tuple(elements={"a": String, "b": UInt32})
     array_tuple_type = sqla_type_from_name("Array(Tuple(a String, b UInt32))")
     metadata = MetaData(schema=test_db)
     Table(

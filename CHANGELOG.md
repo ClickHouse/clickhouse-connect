@@ -9,6 +9,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 - Placeholder-like text inside SQL strings, quoted identifiers, comments, and heredocs no longer selects server-side parameter binding, so client-side `%(name)s` parameters bind correctly alongside it. These queries now follow normal client-side percent formatting, so a bare literal `%` can raise `ValueError`. Escape it as `%%` when passing parameters. Closes [#1146](https://github.com/ClickHouse/clickhouse-connect/issues/1146).
 
+### Improvements
+
+- SQLAlchemy `Tuple` now accepts an `elements` mapping from field names to ClickHouse SQLAlchemy type classes or instances, preserving field order and quoting names automatically. Closes [#1144](https://github.com/ClickHouse/clickhouse-connect/issues/1144).
+
 ## 1.12.0, 2026-11-03
 
 ### Bug Fixes

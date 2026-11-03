@@ -95,13 +95,14 @@ DateTime64(3, timezone="America/New_York")
 
 ### `Tuple`
 
-Variadic positional args and the `elements=[...]` list form both work.
+Variadic positional args and the `elements=[...]` list form both work. Use an `elements` mapping for named fields. Fields keep the mapping's iteration order, and names are quoted automatically.
 
 ```python
 from clickhouse_connect.cc_sqlalchemy.types import Tuple, UInt32, UInt64, UUID
 
 Tuple(UInt32, UUID, UInt64)
 Tuple(elements=[UInt32, UUID, UInt64])
+Tuple(elements={"user_id": UInt32, "event_id": UUID})
 ```
 
 ## Select-level chainables
