@@ -1,5 +1,6 @@
 import ipaddress
 import os
+import re
 import time
 import uuid
 import zoneinfo
@@ -892,12 +893,13 @@ class TestBindQueryDollarInParamName:
             "SELECT \u2018{id$x:Int32}\u2019",
         ],
     )
-    def test_decoy_placeholder_routes_server_side(self, query):
-        # Detection uses the regex over the raw query text, matching shipped 1.x semantics,
-        # so decoys inside strings and comments still route server-side.
-        q, params = bind_query(query, {"id$x": 13})
-        assert q == query
-        assert params == {"param_id$x": "13"}
+    def test_decoy_placeholder_uses_client_side_binding(self, query):
+        query += "\n, %(a)s"
+        parameters = {"id$x": 79, "a": 13}
+        q, params = bind_query(query, parameters)
+        assert q == query.replace("%(a)s", "13")
+        assert params == {}
+        assert not binding._binding_keeps_query_structure(query, parameters)
 
     @pytest.mark.parametrize(
         "query",
@@ -907,17 +909,106 @@ class TestBindQueryDollarInParamName:
             "SELECT '{idé:Int32}', '100%'",
         ],
     )
-    def test_decoy_placeholder_with_percent_literal_routes_server_side(self, query):
-        # Any shipped-1.x decoy match must keep the query off the client-side `%` path.
-        q, params = bind_query(query, {"a": "user_1"})
+    def test_decoy_placeholder_requires_percent_escaping(self, query):
+        with pytest.raises(ValueError):
+            bind_query(query, {"a": "user_1"})
+        q, params = bind_query(query.replace("%", "%%"), {"a": "user_1"})
         assert q == query
-        assert params == {"param_a": "user_1"}
+        assert params == {}
 
-    def test_decoy_type_hint_applies_alongside_real_placeholder(self):
+    def test_decoy_type_hint_is_ignored_alongside_real_placeholder(self):
         query = "SELECT '{fake$x:DateTime64(6)}', {real$x:Int32}"
         q, params = bind_query(query, {"fake$x": self.dt, "real$x": 13}, server_tz=self.utc)
         assert q == query
-        assert params == {"param_fake$x": "2026-01-01 12:00:00.250306", "param_real$x": "13"}
+        assert params == {"param_fake$x": "2026-01-01 12:00:00", "param_real$x": "13"}
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT 13 // {p:Int32}\n, %(a)s",
+            "SELECT 13 # {p:Int32}\n, %(a)s",
+            "SELECT 13 #!{p:Int32}\n, %(a)s",
+            "SELECT 13 /* outer /* {p:Int32} */ outer */, %(a)s",
+            "SELECT $${p:Int32}$$, %(a)s",
+            "SELECT $1${p:Int32}$1$, %(a)s",
+            "SELECT \u201c{p:Int32}\u201d, %(a)s",
+        ],
+    )
+    def test_additional_decoy_tokens_use_client_side_binding(self, query):
+        q, params = bind_query(query, {"a": 13})
+        assert q == query.replace("%(a)s", "13")
+        assert params == {}
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT '{p:Int32}, %(a)s",
+            'SELECT "{p:Int32}, %(a)s',
+            "SELECT `{p:Int32}, %(a)s",
+            "SELECT /* {p:Int32}, %(a)s",
+            "SELECT \u2018{p:Int32}, %(a)s",
+            "SELECT '{p:Int32}', {real:Int32}, 'unterminated %(a)s",
+        ],
+    )
+    def test_invalid_token_preserves_server_side_routing(self, query):
+        parameters = {"p": 79, "a": 13}
+        q, params = bind_query(query, parameters)
+        assert q == query
+        assert params == {"param_p": "79", "param_a": "13"}
+        assert binding._binding_keeps_query_structure(query, parameters)
+
+    def test_real_placeholder_preserves_mixed_binding_behavior(self):
+        query = "SELECT '{fake:Int32}', {real:Int32}, %(a)s"
+        parameters = {"real": 79, "a": 13}
+        q, params = bind_query(query, parameters)
+        assert q == query
+        assert params == {"param_real": "79", "param_a": "13"}
+        assert binding._binding_keeps_query_structure(query, parameters)
+
+    def test_decoy_with_binary_bind_uses_client_side_binding(self):
+        q, params = bind_query("SELECT '{p:Int32}', $x$, %(a)s", {"$x$": b"user_1", "a": 13})
+        assert q == b"SELECT '{p:Int32}', $x$user_1$x$, 13"
+        assert params == {}
+
+    def test_no_placeholder_skips_sql_tokenization(self, monkeypatch):
+        tokenize = Mock(side_effect=AssertionError("Unexpected SQL tokenization"))
+        monkeypatch.setattr(binding, "_next_sql_token", tokenize)
+        assert binding._server_bind_matches("SELECT %(a)s, '{not a bind}'", ()) == []
+
+    def test_placeholder_without_opaque_tokens_skips_sql_tokenization(self, monkeypatch):
+        tokenize = Mock(side_effect=AssertionError("Unexpected SQL tokenization"))
+        monkeypatch.setattr(binding, "_next_sql_token", tokenize)
+        query = "SELECT {a:Int32}, {b:String}, 13 #x {c:Int32}\n"
+        assert binding._server_bind_matches(query, ()) == [("a", "Int32"), ("b", "String"), ("c", "Int32")]
+
+    def test_opaque_tokens_after_last_placeholder_skip_sql_tokenization(self, monkeypatch):
+        tokenize = Mock(side_effect=AssertionError("Unexpected SQL tokenization"))
+        monkeypatch.setattr(binding, "_next_sql_token", tokenize)
+        query = "SELECT {a:Int32} WHERE s = 'x' /* note */ AND t = 'unterminated"
+        assert binding._server_bind_matches(query, ()) == [("a", "Int32")]
+
+    def test_unterminated_token_after_last_placeholder_keeps_lexed_matches(self):
+        query = "SELECT '{p:Int32}', {real:Int32}, 'unterminated"
+        assert binding._server_bind_matches(query, ()) == [("real", "Int32")]
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT {a:Int32}",
+            "SELECT {a:Int32} WHERE b IN ({c:Array(UInt8)}) -{d:Int32}",
+            "SELECT 13{a:Int32}, abc{b:String}, {idé:Int32}, {13:Int32}",
+            "SELECT {a:Int32 {b:Int32}}",
+            "SELECT {a:Int32}#x {b:Int32}",
+            "SELECT {a:Enum8('x' = 1)}, {b:Int32}",
+        ],
+    )
+    def test_opaque_token_shortcut_matches_sql_tokenization(self, query, monkeypatch):
+        unpatched = binding._server_bind_matches(query, ("b",))
+        monkeypatch.setattr(binding, "_opaque_sql_opener_re", re.compile(r"(?!)"))
+        shortcut = binding._server_bind_matches(query, ("b",))
+        monkeypatch.setattr(binding, "_opaque_sql_opener_re", re.compile(r""))
+        tokenized = binding._server_bind_matches(query, ("b",))
+        assert unpatched == shortcut == tokenized
 
     def test_hash_without_required_suffix_does_not_hide_placeholder(self):
         query = "SELECT 1 #x {id$x:Int32}, %(a)s"

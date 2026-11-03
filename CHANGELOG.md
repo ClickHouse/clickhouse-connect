@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- Placeholder-like text inside SQL strings, quoted identifiers, comments, and heredocs no longer selects server-side parameter binding, so client-side `%(name)s` parameters bind correctly alongside it. These queries now follow normal client-side percent formatting, so a bare literal `%` can raise `ValueError`. Escape it as `%%` when passing parameters. Closes [#1146](https://github.com/ClickHouse/clickhouse-connect/issues/1146).
+
 ## 1.12.0, 2026-11-03
 
 ### Bug Fixes

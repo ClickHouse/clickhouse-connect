@@ -256,10 +256,40 @@ def test_non_binary_value_for_raw_binary_marker_raises(param_client: Client, cal
         call(param_client.query, "SELECT $x$ AS v", parameters={"$x$": 13})
 
 
-def test_decoy_placeholder_with_dollar_literal_routes_server_side(param_client: Client, call):
-    # The decoy matches and sends a harmless extra param, and the query routes server-side.
-    row = call(param_client.query, "SELECT '{a:String}', '100%$'", parameters={"a": "user_1"}).first_row
+def test_decoy_placeholder_with_escaped_percent_literal(param_client: Client, call):
+    row = call(param_client.query, "SELECT '{a:String}', '100%%$'", parameters={"a": "user_1"}).first_row
     assert row == ("{a:String}", "100%$")
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "WITH '{p:String}' AS unused SELECT %(a)s",
+        r"WITH 'it\'s {p:String}' AS unused SELECT %(a)s",
+        "WITH 'it''s {p:String}' AS unused SELECT %(a)s",
+        "SELECT %(a)s AS `{p:String}`",
+        'SELECT %(a)s AS "{p:String}"',
+        "SELECT /* {p:String} */ %(a)s",
+        "SELECT /* outer /* {p:String} */ outer */ %(a)s",
+        "SELECT -- {p:String}\n %(a)s",
+        "SELECT // {p:String}\n %(a)s",
+        "SELECT # {p:String}\n %(a)s",
+        "SELECT #!{p:String}\n %(a)s",
+        "WITH $${p:String}$$ AS unused SELECT %(a)s",
+        "WITH $tag${p:String}$tag$ AS unused SELECT %(a)s",
+        "WITH $1${p:String}$1$ AS unused SELECT %(a)s",
+    ],
+)
+@pytest.mark.parametrize("method", ["query", "command", "raw_query"])
+def test_decoy_placeholder_with_client_side_binding(param_client: Client, call, query, method):
+    kwargs = {"fmt": "TabSeparated"} if method == "raw_query" else {}
+    result = call(getattr(param_client, method), query, parameters={"a": 13}, **kwargs)
+    if method == "query":
+        assert result.first_row == (13,)
+    elif method == "command":
+        assert result == 13
+    else:
+        assert result == b"13\n"
 
 
 def test_dollar_delimited_str_param_binds(param_client: Client, call):
