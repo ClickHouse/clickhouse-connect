@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone, tzinfo
 from typing import Any, TypeAlias
 
@@ -7,15 +7,24 @@ from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.exc import CompileError
 from sqlalchemy.sql.sqltypes import ARRAY, TypeDecorator, TypeEngine
 
+from clickhouse_connect import common
 from clickhouse_connect.datatypes.base import EMPTY_TYPE_DEF, ClickHouseType, TypeDef
-from clickhouse_connect.datatypes.container import Array, Tuple
+from clickhouse_connect.datatypes.container import Array, Map, Tuple
 from clickhouse_connect.datatypes.registry import parse_name, type_map
 from clickhouse_connect.datatypes.temporal import DateTime64
 from clickhouse_connect.driver import tzutil
-from clickhouse_connect.driver.binding import DT64Param, _datetime_is_aware, _legacy_naive_datetime_binding, str_query_value
+from clickhouse_connect.driver.binding import (
+    DT64Param,
+    _datetime_is_aware,
+    _legacy_naive_datetime_binding,
+    _named_tuple_values,
+    str_query_value,
+)
 
 logger = logging.getLogger(__name__)
-_DateTime64QuerySignature: TypeAlias = bool | tuple[str, tuple["_DateTime64QuerySignature", ...]]
+_QueryValueSignature: TypeAlias = (
+    bool | tuple[str, tuple["_QueryValueSignature", ...]] | tuple[str, tuple["_QueryValueSignature", ...], tuple[str, ...]]
+)
 
 
 class _DateTime64QueryParam(DT64Param):
@@ -32,7 +41,7 @@ class _DateTime64QueryParam(DT64Param):
         return self._render(value, top_level)
 
 
-def _non_temporal_query_shape(ch_type: ClickHouseType) -> _DateTime64QuerySignature:
+def _non_temporal_query_shape(ch_type: ClickHouseType) -> _QueryValueSignature:
     if isinstance(ch_type, Array):
         return ("array_shape", ())
     if isinstance(ch_type, Tuple):
@@ -40,17 +49,27 @@ def _non_temporal_query_shape(ch_type: ClickHouseType) -> _DateTime64QuerySignat
     return False
 
 
-def _datetime64_query_signature(ch_type: ClickHouseType | None) -> _DateTime64QuerySignature:
-    """Identify which leaves need fractional SQL-text formatting."""
+def _query_value_signature(ch_type: ClickHouseType | None) -> _QueryValueSignature:
+    """Identify DateTime64 leaves and named Tuple fields for SQL-text values."""
     if isinstance(ch_type, DateTime64):
         return True
     if isinstance(ch_type, Array):
-        child = _datetime64_query_signature(ch_type.element_type)
+        child = _query_value_signature(ch_type.element_type)
         return ("array", (child,)) if child else False
     if isinstance(ch_type, Tuple):
-        children = tuple(_datetime64_query_signature(element) for element in ch_type.element_types)
+        children = tuple(_query_value_signature(element) for element in ch_type.element_types)
+        if ch_type.element_names:
+            return (
+                "named_tuple",
+                tuple(child or _non_temporal_query_shape(element) for child, element in zip(children, ch_type.element_types)),
+                ch_type.element_names,
+            )
         if any(children):
             return ("tuple", tuple(child or _non_temporal_query_shape(element) for child, element in zip(children, ch_type.element_types)))
+    if isinstance(ch_type, Map):
+        children = (_query_value_signature(ch_type.key_type), _query_value_signature(ch_type.value_type))
+        if any(children):
+            return ("map", children)
     return False
 
 
@@ -68,12 +87,12 @@ def _unwrap_dialect_type(sqla_type: TypeEngine[Any], dialect: Dialect) -> TypeEn
     return effective_type
 
 
-def _datetime64_bind_signature(sqla_type: TypeEngine[Any], dialect: Dialect) -> _DateTime64QuerySignature:
+def _query_bind_signature(sqla_type: TypeEngine[Any], dialect: Dialect) -> _QueryValueSignature:
     effective_type = _unwrap_dialect_type(sqla_type, dialect)
     if isinstance(effective_type, ChSqlaType):
-        return _datetime64_query_signature(effective_type.ch_type)
+        return _query_value_signature(effective_type.ch_type)
     if isinstance(effective_type, ARRAY):
-        signature = _datetime64_bind_signature(effective_type.item_type, dialect)
+        signature = _query_bind_signature(effective_type.item_type, dialect)
         if signature:
             if effective_type.dimensions is None:
                 return ("array_any", (signature,))
@@ -83,11 +102,17 @@ def _datetime64_bind_signature(sqla_type: TypeEngine[Any], dialect: Dialect) -> 
     return False
 
 
-def _query_value_matches_shape(signature: _DateTime64QuerySignature, value: Any) -> bool:
+def _query_value_matches_shape(signature: _QueryValueSignature, value: Any) -> bool:
+    if value is None:
+        return True
     if isinstance(signature, bool):
         return not isinstance(value, (list, tuple))
-    kind, children = signature
-    if kind in ("tuple", "tuple_shape"):
+    kind, children = signature[0], signature[1]
+    if kind == "map":
+        return isinstance(value, dict)
+    if kind == "named_tuple" and isinstance(value, Mapping):
+        return True
+    if kind in ("tuple", "named_tuple", "tuple_shape"):
         return (
             isinstance(value, tuple)
             and len(value) == len(children)
@@ -96,23 +121,27 @@ def _query_value_matches_shape(signature: _DateTime64QuerySignature, value: Any)
     return isinstance(value, (list, tuple))
 
 
-def _datetime64_query_value(signature: _DateTime64QuerySignature, value: Any) -> Any:
-    """Preserve fractional seconds only at DateTime64 leaves of SQL-text values."""
+def _typed_query_value(signature: _QueryValueSignature, value: Any) -> Any:
+    """Prepare typed DateTime64 and named Tuple values for SQL-text formatting."""
     if value is None or not signature:
         return value
     if isinstance(signature, bool):
         return _DateTime64QueryParam(value) if isinstance(value, datetime) else value
-    kind, children = signature
+    kind, children = signature[0], signature[1]
     if kind in ("array", "array_any") and isinstance(value, (list, tuple)):
         child = children[0]
         if kind == "array_any" and value and isinstance(value[0], (list, tuple)):
-            tuple_item = isinstance(child, tuple) and child[0] == "tuple" and _query_value_matches_shape(child, value[0])
+            tuple_item = isinstance(child, tuple) and child[0] in ("tuple", "named_tuple") and _query_value_matches_shape(child, value[0])
             if not tuple_item:
                 child = signature
-        items = (_datetime64_query_value(child, item) for item in value)
+        items = (_typed_query_value(child, item) for item in value)
         return tuple(items) if isinstance(value, tuple) else list(items)
-    if kind == "tuple" and isinstance(value, tuple) and len(value) == len(children):
-        return tuple(_datetime64_query_value(element, item) for element, item in zip(children, value))
+    if kind == "named_tuple" and len(signature) == 3 and isinstance(value, Mapping):
+        value = _named_tuple_values(signature[2], value)
+    if kind in ("tuple", "named_tuple") and isinstance(value, tuple) and len(value) == len(children):
+        return tuple(_typed_query_value(element, item) for element, item in zip(children, value))
+    if kind == "map" and isinstance(value, dict) and common.get_setting("dict_parameter_format") == "map":
+        return {_typed_query_value(children[0], key): _typed_query_value(children[1], item) for key, item in value.items()}
     return value
 
 
@@ -191,14 +220,14 @@ class ChSqlaType:
         """
         Delegate SQLAlchemy literal rendering to the driver's query value formatter.
         """
-        signature = _datetime64_query_signature(self.ch_type)
+        signature = _query_value_signature(self.ch_type)
         double_percents = dialect.identifier_preparer._double_percents
         if not signature and not double_percents:
             return str_query_value
 
         def process(value: Any) -> str:
             if signature:
-                value = _datetime64_query_value(signature, value)
+                value = _typed_query_value(signature, value)
             rendered = str_query_value(value, timezone.utc)
             return rendered.replace("%", "%%") if double_percents else rendered
 

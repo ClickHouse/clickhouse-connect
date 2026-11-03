@@ -235,6 +235,10 @@ SQLAlchemy column types must match the server schema. Declaring `DateTime64` ove
 
 On SQLAlchemy 2.x, inline literals of generic `sqlalchemy.ARRAY` types containing ClickHouse `Tuple` items need `dimensions=1`, or the appropriate higher dimension count for nested arrays, so SQLAlchemy treats each tuple as one item. SQLAlchemy 1.4 does not support inline literals for generic `ARRAY` types.
 
+Typed named `Tuple` parameters accept dictionaries whose keys exactly match the declared fields. The client uses the declaration's field order for bound parameters and inline literals, including named tuples inside arrays and other tuples. This applies to synchronous and asynchronous inserts, predicates, and both parameter modes. Missing or extra fields raise `ProgrammingError` in query parameter binding. Native bulk inserts retain their existing handling. Dictionaries passed to untyped `exec_driver_sql()` parameters keep the configured JSON or map formatting.
+
+For named tuples inside `Map` values, set `common.set_setting("dict_parameter_format", "map")`. This also preserves fractional seconds for typed `DateTime64` values inside maps in bound parameters and inline literals.
+
 If a named datetime parameter is reused, every occurrence needs a compatible `DateTime64` bind type to preserve fractions. An untyped occurrence or a conflicting type keeps whole-second formatting. Set `type_=DateTime64(6)` on each `bindparam`, or use distinct parameter names with the appropriate types.
 
 ### JSON type hints {#sqlalchemy-json-type-hints}
