@@ -30,7 +30,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - All sync and async query methods that accept a context now preserve its explicitly set `tz_mode` unless the call overrides it. Contexts without an explicit mode use the calling client's current default, as the sync client already did. Invalid context `tz_mode` assignments now raise `ProgrammingError` immediately.
 - `query(context=...)` now runs a command statement stored in the context, such as `CREATE` or `SET`, when no `query` argument is passed. Previously both the synchronous and asynchronous clients raised `AttributeError: 'NoneType' object has no attribute 'rstrip'`.
 - Unreadable timezone files and timezone directory names now follow the existing unrecognized-timezone handling. This prevents an import failure when `TZ` names a directory such as `America` and the `tzdata` package is installed.
-- The C response buffer no longer crashes the interpreter when a zero-row column, such as an empty `Array`, numeric, or `FixedString` column, is the first data read from a buffer. Previously the zero-byte read returned a NULL pointer without setting an exception, which caused a segmentation fault. Normal query results read the block header first, so this showed up mainly when decoding columns directly.
+- The compiled Cython response buffer no longer segfaults when the first read from a stream is zero bytes, such as a zero-row Array, numeric, FixedString or Nullable(String) column, or an empty String value whose length byte arrived in its own chunk. Normal query results never take this path because the block header is read first. Only direct use of the buffer and datatype read APIs was affected.
 
 ### Improvements
 

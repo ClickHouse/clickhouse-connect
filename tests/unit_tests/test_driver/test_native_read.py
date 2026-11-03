@@ -227,9 +227,8 @@ def test_empty_tuple_native_markers_and_stream_alignment(buffer_cls):
 
 
 @pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
-@pytest.mark.parametrize("type_name", ["Array(UInt8)", "Array(String)", "UInt64", "FixedString(4)", "String"])
+@pytest.mark.parametrize("type_name", ["Array(UInt8)", "Array(String)", "UInt64", "FixedString(4)", "Nullable(String)"])
 def test_zero_row_column_as_first_read(buffer_cls, type_name):
-    # A zero-row read before any chunk is loaded used to crash the C buffer
     source = bytes_source(bytes((79,)), cls=buffer_cls)
 
     assert list(registry.get_from_name(type_name).read_column(source, 0, QueryContext())) == []
