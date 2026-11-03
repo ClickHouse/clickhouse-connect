@@ -152,7 +152,7 @@ cpdef inline object epoch_days_to_date(int days):
             m_list = MONTH_DAYS
     else:
         if days < -719162 or days > 2932896:
-            raise ValueError("year must be in 1..9999")
+            raise ValueError(f"day {days} is outside the date range 0001-01-01 to 9999-12-31")
         cycles400 = (days + 719162) // 146097
         rem = days + 719162 - (cycles400 * 146097)
         cycles100 = rem // 36524
@@ -210,7 +210,7 @@ cdef inline void _epoch_days_to_components_c(long long days, int* out_year, int*
             m_list = MONTH_DAYS
     else:
         if days < -719162 or days > 2932896:
-            raise ValueError("year must be in 1..9999")
+            raise ValueError(f"day {days} is outside the date range 0001-01-01 to 9999-12-31")
         cycles400 = (days + 719162) // 146097
         rem = days + 719162 - (cycles400 * 146097)
         cycles100 = rem // 36524

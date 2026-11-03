@@ -39,7 +39,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
-- Cython decoding of Date and Date32 columns is faster because Python date objects are constructed directly through the datetime C API. Returned values and supported ranges are unchanged.
+- Cython decoding of Date and Date32 columns is faster because Python date objects are constructed directly through the datetime C API. Results are the same as before.
 - `ping()` on the sync and async clients accepts an optional positive `timeout` in seconds, defaulting to 3 seconds when omitted or `None`. HTTP clients reject zero or negative values with `ProgrammingError`. The chDB client ignores the parameter. Closes [#192](https://github.com/ClickHouse/clickhouse-connect/issues/192).
 - Added `get_client(dedicated_pool=True)` for synchronous HTTP clients that need their own connection pool. Closing any client-owned pool now closes idle connections immediately and closes active connections when their responses return to the pool. Requests racing with `close()` can fail with `OperationalError`, including for existing TLS/proxy-owned pools. The async client accepts the option without effect because it already owns its connector. Closes [#1121](https://github.com/ClickHouse/clickhouse-connect/issues/1121).
 - Client creation is faster with non-UTC IANA server timezones because timezone validation no longer scans the timezone database. Closes [#1120](https://github.com/ClickHouse/clickhouse-connect/issues/1120).
