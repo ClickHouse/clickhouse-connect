@@ -23,8 +23,8 @@ must_escape = (BS, "'", "`", "\t", "\n")
 # a bareword only through ASCII letters, digits, and underscores and never absorb `$`.
 _BIND_NAME_PATTERN = r"(?:[A-Za-z_][A-Za-z0-9_$]*|\$[A-Za-z0-9_][A-Za-z0-9_$]*|[0-9]+[A-Za-z_][A-Za-z0-9_]*)"
 _bind_name_re = re.compile(rf"{_BIND_NAME_PATTERN}\Z")
-# Routing keeps the shipped 1.x `\w+` names in the union so decoy placeholders such as
-# `{13:Int32}` or `{idé:Int32}` still select server-side binding. `\w` cannot absorb `$`.
+# Routing keeps the shipped 1.x `\w+` names such as `{13:Int32}` or `{idé:Int32}`
+# in the union for unquoted placeholders. `\w` cannot absorb `$`.
 external_bind_re = re.compile(rf"\{{({_BIND_NAME_PATTERN}|\w+):([^}}]+)\}}")
 _heredoc_re = re.compile(r"\$[A-Za-z0-9_]*\$")
 _heredoc_start_re = re.compile(r"(?=(\$[A-Za-z0-9_]*\$))")
@@ -651,8 +651,42 @@ def _binary_bind_values(parameters: dict[str, Any]) -> dict[str, Any]:
     return binary_binds
 
 
+# Openers of tokens the SQL lexer skips or treats as opaque. An opaque span can only hide a
+# placeholder that starts after it opens, so without an opener before the last raw match the
+# raw regex and the token scan agree and routing skips the token loop.
+_opaque_sql_opener_re = re.compile("[" + re.escape("".join(_quote_closers) + "".join(_curly_quote_closers) + "$") + r"]|/\*|--|//|#[ !]")
+
+
 def _server_bind_matches(query: str, binary_names: Collection[str]) -> list[tuple[str, str]]:
-    return [(name, type_str) for name, type_str in external_bind_re.findall(query) if name not in binary_names]
+    raw_matches = list(external_bind_re.finditer(query))
+    if not raw_matches:
+        return []
+    filtered = [(match.group(1), match.group(2)) for match in raw_matches if match.group(1) not in binary_names]
+    last_end = raw_matches[-1].end()
+    if _opaque_sql_opener_re.search(query, 0, last_end) is None:
+        return filtered
+
+    # Each binary marker becomes its own heredoc after substitution, so it never opens one here.
+    heredoc_ends = (
+        {match.group(1): match.start() for match in _heredoc_start_re.finditer(query) if match.group(1) not in binary_names}
+        if "$" in query
+        else {}
+    )
+    matches = []
+    index = 0
+    while index < last_end:
+        token, token_end = _next_sql_token(query, index, heredoc_ends)
+        if token == _SQL_TOKEN_INVALID:
+            return filtered
+        if token == _SQL_TOKEN_TRIVIA:
+            index = token_end
+            continue
+        if query[index] == "{":
+            match = external_bind_re.fullmatch(query, index, token_end)
+            if match is not None and match.group(1) not in binary_names:
+                matches.append((match.group(1), match.group(2)))
+        index = token_end
+    return matches
 
 
 def _binding_keeps_query_structure(query: str, parameters: Sequence | dict[str, Any] | None) -> bool:
@@ -951,9 +985,7 @@ def bind_query(
         for key in binary_binds.keys():
             del params_copy[key]
 
-        # Placeholder detection and routing always use the regex over the raw query text,
-        # matching shipped 1.x semantics. The lexer scan below only validates non-buffer
-        # `$name$` keys against server heredoc parsing.
+        # Validate non-buffer `$name$` keys against server heredoc parsing.
         if nonbinary_marker_keys and any(key in query for key in nonbinary_marker_keys):
             match_objects, raw_markers = _external_bind_matches(query, nonbinary_marker_keys)
             for key in params_copy:
