@@ -15,6 +15,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 ### Improvements
 
 - SQLAlchemy `Tuple` now accepts an `elements` mapping from field names to ClickHouse SQLAlchemy type classes or instances, preserving field order and quoting names automatically. Closes [#1144](https://github.com/ClickHouse/clickhouse-connect/issues/1144).
+- The Python codec serializes `UUID` insert columns faster when values are `uuid.UUID` objects, integers or strings, by building the column bytes in one pass instead of per value. Inserting 500k rows with two UUID columns took about 20% less time in local tests.
 
 ## 1.12.0, 2026-11-03
 
