@@ -82,6 +82,27 @@ def test_property_value_renders_inside_modify_column(prop, value, fragment):
     assert statements == [f"ALTER TABLE `events` MODIFY COLUMN `payload` UInt32 {fragment}"]
 
 
+@pytest.mark.parametrize("prefix", ["clickhouse", "clickhousedb"])
+@pytest.mark.parametrize(
+    ("prop", "value", "fragment"),
+    [
+        ("codec", "LZ4", "CODEC(LZ4)"),
+        ("alias", text("`id` + 1"), "ALIAS `id` + 1"),
+        ("materialized", text("`id` * 3"), "MATERIALIZED `id` * 3"),
+        ("ttl", text("ts + INTERVAL 1 DAY"), "TTL ts + INTERVAL 1 DAY"),
+    ],
+)
+def test_property_set_without_existing_type(prefix, prop, value, fragment):
+    assert _alter_column(**{f"{prefix}_{prop}": value}) == [f"ALTER TABLE `events` MODIFY COLUMN `payload` {fragment}"]
+
+
+@pytest.mark.parametrize("prop", ["codec", "alias", "materialized", "ttl"])
+@pytest.mark.parametrize("canonical", [None, "13"])
+def test_explicit_canonical_property_wins_over_legacy(prop, canonical):
+    kwargs = {f"clickhousedb_{prop}": canonical, f"clickhouse_{prop}": text("79")}
+    assert _alter_column(**kwargs) == _alter_column(**{f"clickhousedb_{prop}": canonical})
+
+
 def test_multiple_removals_follow_deterministic_order():
     statements = _alter_column(
         server_default=None,

@@ -25,6 +25,16 @@ def test_simple_engine_construction(engine_cls):
     assert eval(repr(engine), vars(engines)).compile() == engine.compile()
 
 
+@pytest.mark.parametrize("expression", ["`Null`", '"Null"', "`Null`()"])
+def test_quoted_engine_name_round_trip(expression):
+    engine = build_engine(expression)
+    assert isinstance(engine, engines.Null)
+    assert engine.name == "Null"
+    assert repr(engine) == "Null()"
+    reconstructed = eval(repr(engine), vars(engines))
+    assert reconstructed.compile() == "Engine Null"
+
+
 @pytest.mark.parametrize("engine_cls", simple_engines)
 @pytest.mark.parametrize("keyword", [False, True])
 def test_simple_engine_legacy_mapping(engine_cls, keyword):

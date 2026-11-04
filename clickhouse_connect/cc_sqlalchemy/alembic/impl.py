@@ -300,6 +300,10 @@ class ClickHouseImpl(DefaultImpl):
             column_name = name
 
         settings = ClickHouseDDLHelper.render_settings(kw.get("clickhouse_settings"))
+        # Explicit canonical None removes a property, even alongside a legacy value.
+        for prop, _ in _REMOVABLE_COLUMN_PROPERTIES:
+            if f"clickhousedb_{prop}" in kw:
+                kw.pop(f"clickhouse_{prop}", None)
         column_kwargs = canonical_schema_kwargs(kw, (prop for prop, _ in _REMOVABLE_COLUMN_PROPERTIES))
 
         passthrough: dict[str, Any] = {}
@@ -324,7 +328,7 @@ class ClickHouseImpl(DefaultImpl):
 
         if modify_needed:
             effective_type = type_ if type_ is not None else existing_type
-            if effective_type is None:
+            if effective_type is None and (type_ is not None or nullable is not None or has_default_value):
                 raise CommandError(f"ClickHouse alter_column requires existing_type for {table_name}.{column_name}")
             if nullable is not None:
                 effective_type = self._set_type_nullable(effective_type, nullable)
@@ -341,6 +345,7 @@ class ClickHouseImpl(DefaultImpl):
                         comment=existing_comment if comment is False else comment,
                         **passthrough,
                     ),
+                    include_type=effective_type is not None,
                 )
             )
             if settings:

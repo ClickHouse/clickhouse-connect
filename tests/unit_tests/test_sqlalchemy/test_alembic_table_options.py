@@ -22,6 +22,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     File,
     Memory,
     MergeTree,
+    Null,
     ReplacingMergeTree,
     ReplicatedMergeTree,
     ReplicatedReplacingMergeTree,
@@ -46,6 +47,16 @@ from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
         ("concat(`name`, ' x ')", "concat(name,' x ')"),
         ("'it''s'", "'it''s'"),
         ("'a\\'b `c`'", "'a\\'b `c`'"),
+        ("(`a``b`)", "`a\\`b`"),
+        ("(`a\\`b`)", "`a\\`b`"),
+        ("(`a b`)", "`a b`"),
+        ("(`a.b`)", "`a.b`"),
+        ("(`NULL`)", "`NULL`"),
+        ("(concat(')', a))", "concat(')',a)"),
+        ("(concat('it''s )', a))", "concat('it''s )',a)"),
+        (r"(`a\tb`)", r"(`a\tb`)"),
+        (r"(`a\x41b`)", r"(`a\x41b`)"),
+        (r"(`a\qb`)", r"(`a\qb`)"),
     ],
 )
 def test_normalize_expression(expression, expected):
@@ -141,6 +152,7 @@ def test_column_objects_in_keys_match_server_text():
         ("ReplacingMergeTree(ts) ORDER BY a SETTINGS index_granularity = 8192", ReplacingMergeTree(version="ts", order_by="a")),
         ("SummingMergeTree((a)) ORDER BY ts SETTINGS index_granularity = 8192", SummingMergeTree(columns=["a"], order_by="ts")),
         ("Memory", Memory()),
+        ("`Null`", Null()),
     ],
     ids=[
         "primary-key-only",
@@ -153,6 +165,7 @@ def test_column_objects_in_keys_match_server_text():
         "replacing-version",
         "summing-columns",
         "memory",
+        "quoted-null",
     ],
 )
 def test_equivalent_engine_spellings_emit_nothing(server_engine, declared_engine):
@@ -224,7 +237,7 @@ def test_table_option_drift_raises(server_engine, declared_engine, option, refle
     assert excinfo.value.drifts == (TableOptionDrift("events", "olap", option, reflected, declared),)
     assert excinfo.value.drifts[0].qualified_name == "`olap`.`events`"
     message = str(excinfo.value)
-    assert f"{option}: server {reflected or 'none'}, model {declared or 'none'}" in message
+    assert f"{option}: server {reflected!r}, model {declared!r}" in message
     assert COMPARE_TABLE_OPTIONS_OPT in message
 
 
@@ -301,14 +314,16 @@ def test_readonly_setting_change_is_drift(setting):
 
 
 def test_settings_reverse_single_op_and_missing_history():
-    restore_only = _ModifyClickHouseTableSettingsOp("events", {"index_granularity": 1024}, existing_settings={"index_granularity": 8192})
+    restore_only = _ModifyClickHouseTableSettingsOp(
+        "events", {"merge_with_ttl_timeout": 7200}, existing_settings={"merge_with_ttl_timeout": 3600}
+    )
     reverse = restore_only.reverse()
-    assert isinstance(reverse, _ModifyClickHouseTableSettingsOp) and reverse.settings == {"index_granularity": 8192}
+    assert isinstance(reverse, _ModifyClickHouseTableSettingsOp) and reverse.settings == {"merge_with_ttl_timeout": 3600}
     reset_only = _ModifyClickHouseTableSettingsOp("events", {"ttl_only_drop_parts": 1}, existing_settings={"ttl_only_drop_parts": None})
     reverse = reset_only.reverse()
     assert isinstance(reverse, _ResetClickHouseTableSettingsOp) and reverse.names == ("ttl_only_drop_parts",)
     with pytest.raises(NotImplementedError):
-        _ModifyClickHouseTableSettingsOp("events", {"index_granularity": 1024}).reverse()
+        _ModifyClickHouseTableSettingsOp("events", {"merge_with_ttl_timeout": 7200}).reverse()
 
 
 def test_server_only_settings_are_ignored():
@@ -329,10 +344,17 @@ def test_include_object_skips_reflected_views(kind):
 class _StubConnection:
     """Answers formatQuerySingleLine and merge_tree_settings lookups from canned rows."""
 
-    def __init__(self, formatted: dict[str, str] | None = None, defaults: dict[str, str] | None = None, fail: bool = False):
+    def __init__(
+        self,
+        formatted: dict[str, str] | None = None,
+        defaults: dict[str, str] | None = None,
+        fail: bool = False,
+        types: dict[str, str] | None = None,
+    ):
         self.formatted = formatted or {}
         self.defaults = defaults or {}
         self.fail = fail
+        self.types = types or {}
         self.statements: list[str] = []
 
     def execute(self, statement, parameters):
@@ -340,10 +362,17 @@ class _StubConnection:
         if self.fail:
             raise OperationalError("SELECT", parameters, Exception("server gone"))
         if "merge_tree_settings" in str(statement):
-            rows = [SimpleNamespace(name=name, value=self.defaults[name]) for name in parameters["names"] if name in self.defaults]
+            rows = [
+                SimpleNamespace(
+                    name=name, value=self.defaults[name], type=self.types.get(name, "String" if name == "storage_policy" else "UInt64")
+                )
+                for name in parameters["names"]
+                if name in self.defaults
+            ]
             return SimpleNamespace(fetchall=lambda: rows)
         values = [parameters[key] for key in sorted(parameters)]
-        return SimpleNamespace(fetchone=lambda: tuple(f"SELECT {self.formatted.get(value, value)}" for value in values))
+        prefix = "ALTER TABLE t MODIFY TTL " if "ALTER TABLE t MODIFY TTL " in str(statement) else "SELECT "
+        return SimpleNamespace(fetchone=lambda: tuple(f"{prefix}{self.formatted.get(value, value)}" for value in values))
 
 
 def _compare_with(connection, reflected: Table, declared: Table) -> ops.ModifyTableOps:
@@ -428,3 +457,141 @@ def test_readonly_setting_differing_from_server_default_is_drift():
     with pytest.raises(UnsupportedTableChangeError) as excinfo:
         _compare_with(connection, _reflected(_SERVER_ENGINE), declared)
     assert excinfo.value.drifts == (TableOptionDrift("events", None, "settings.index_granularity_bytes", "10485760", "1024"),)
+
+
+@pytest.mark.parametrize(
+    ("name", "server", "model", "setting_type"),
+    [
+        ("ttl_only_drop_parts", "true", True, "Bool"),
+        ("ttl_only_drop_parts", "false", False, "Bool"),
+        ("ttl_only_drop_parts", "1", "true", "Bool"),
+        ("ttl_only_drop_parts", "true", "TRUE", "Bool"),
+        ("index_granularity", "'8192'", 8192, "UInt64"),
+        ("merge_with_ttl_timeout", "'3600'", 3600, "Seconds"),
+        ("max_bytes_to_merge_at_max_space_in_pool", "1", 1.0, "UInt64"),
+        ("merge_with_ttl_timeout", "3600", "3600.0", "Seconds"),
+    ],
+)
+def test_equivalent_setting_values_emit_nothing(name, server, model, setting_type):
+    reflected = _reflected(f"MergeTree ORDER BY a SETTINGS {name} = {server}")
+    declared = _declared(MergeTree(order_by="a", settings={name: model}))
+    connection = _StubConnection(defaults={name: "0"}, types={name: setting_type})
+    assert _compare_with(connection, reflected, declared).is_empty()
+
+
+@pytest.mark.parametrize(
+    ("name", "model", "setting_type"),
+    [
+        ("ttl_only_drop_parts", "01", "Bool"),
+        ("ttl_only_drop_parts", "1.0", "Bool"),
+        ("merge_with_ttl_timeout", "true", "Seconds"),
+    ],
+)
+def test_invalid_setting_strings_are_not_equivalent_to_numbers(name, model, setting_type):
+    reflected = _reflected(f"MergeTree ORDER BY a SETTINGS {name} = 1")
+    declared = _declared(MergeTree(order_by="a", settings={name: model}))
+    (operation,) = _compare_with(_StubConnection(defaults={name: "0"}, types={name: setting_type}), reflected, declared).ops
+    assert operation.settings == {name: model}
+
+
+@pytest.mark.parametrize("value", ["true", "01", "1.0", "user_'1\\path"])
+def test_string_setting_values_keep_their_meaning_and_downgrade(value):
+    connection = _StubConnection(defaults={"storage_policy": "default"}, types={"storage_policy": "String"})
+    reflected = _declared(MergeTree(order_by="a", settings={"storage_policy": value}))
+    same = _declared(MergeTree(order_by="a", settings={"storage_policy": value}))
+    assert _compare_with(connection, reflected, same).is_empty()
+    changed = _declared(MergeTree(order_by="a", settings={"storage_policy": "other"}))
+    (operation,) = _compare_with(connection, reflected, changed).ops
+    assert operation.reverse().settings == {"storage_policy": value}
+
+
+def test_boolean_setting_downgrade_restores_a_boolean_literal():
+    reflected = _reflected("MergeTree ORDER BY a SETTINGS ttl_only_drop_parts = true")
+    declared = _declared(MergeTree(order_by="a", settings={"ttl_only_drop_parts": False}))
+    (operation,) = _compare_with(
+        _StubConnection(defaults={"ttl_only_drop_parts": "0"}, types={"ttl_only_drop_parts": "Bool"}), reflected, declared
+    ).ops
+    assert operation.existing_settings == {"ttl_only_drop_parts": True}
+    assert operation.reverse().settings == {"ttl_only_drop_parts": True}
+
+
+def test_unsupported_table_change_requires_a_drift():
+    with pytest.raises(ValueError, match="at least one drift"):
+        UnsupportedTableChangeError([])
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("`a b`", "`ab`"),
+        ("`a.b`", "a.b"),
+        ("`a``b`", "ab"),
+        ("`a\\`b`", "ab"),
+        ("`NULL`", "NULL"),
+        ("a AND b", "aANDb"),
+        ("NOT a", "NOTa"),
+        ("a IS NULL", "aISNULL"),
+        ("`a`AND`b`", "aANDb"),
+        ("a`b`", "ab"),
+        ("`a`b", "ab"),
+        (r"`a\tb`", "atb"),
+        (r"`a\nb`", "anb"),
+        (r"`a\0b`", "a0b"),
+        (r"`a\x41b`", "ax41b"),
+        (r"`a\qb`", "aqb"),
+        ("a - -b", "a--b"),
+        ("a / *b", "a/*b"),
+        ("a < = b", "a<=b"),
+        ("a | | b", "a||b"),
+        ("1 . 3", "1.3"),
+        ("a--comment\n+b", "a--comment+b"),
+        ("a//comment\n+b", "a//comment+b"),
+        ("a# comment\n+b", "a# comment+b"),
+    ],
+)
+def test_normalization_keeps_distinct_identifiers(left, right):
+    assert normalize_expression(left) != normalize_expression(right)
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["missing-type", "failed-lookup"])
+@pytest.mark.parametrize("previous", ["01", "true", "1.0"])
+def test_unknown_setting_type_preserves_string_values_and_downgrade(fail, previous):
+    connection = _StubConnection(fail=fail)
+    reflected = _declared(MergeTree(order_by="a", settings={"storage_policy": previous}))
+    declared = _declared(MergeTree(order_by="a", settings={"storage_policy": "1"}))
+    (operation,) = _compare_with(connection, reflected, declared).ops
+    assert operation.existing_settings == {"storage_policy": previous}
+    assert operation.reverse().settings == {"storage_policy": previous}
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["missing-type", "failed-lookup"])
+def test_unknown_readonly_setting_type_diagnostic_keeps_literal_types(fail):
+    reflected = _reflected("MergeTree ORDER BY a SETTINGS index_granularity = '4096'")
+    declared = _declared(MergeTree(order_by="a", settings={"index_granularity": 4096}))
+    with pytest.raises(UnsupportedTableChangeError) as excinfo:
+        _compare_with(_StubConnection(fail=fail), reflected, declared)
+    (drift,) = excinfo.value.drifts
+    assert (drift.reflected, drift.declared) == ("'4096'", "4096")
+    assert f"server {drift.reflected!r}, model {drift.declared!r}" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("expression", "spelling"),
+    [("a AND b", " `a`   AND  `b` "), ("NOT a", "NOT `a`"), ("a IS NULL", "`a` IS  NULL")],
+)
+def test_equivalent_token_boundaries_match(expression, spelling):
+    assert normalize_expression(expression) == normalize_expression(spelling)
+
+
+@pytest.mark.parametrize(
+    "action",
+    ["DELETE", "DELETE WHERE a = 13", "TO VOLUME 'cold'", "TO DISK 'cold'", "GROUP BY a SET ts = max(ts)", "RECOMPRESS CODEC(ZSTD(3))"],
+)
+def test_ttl_actions_use_alter_table_formatter(action):
+    declared_ttl = f"ts + INTERVAL 30 DAY {action}"
+    reflected_ttl = f"ts + toIntervalDay(30) {action}"
+    connection = _StubConnection(formatted={declared_ttl: reflected_ttl})
+    reflected = _reflected(f"MergeTree ORDER BY a TTL {reflected_ttl}")
+    declared = _declared(MergeTree(order_by="a", ttl=declared_ttl))
+    assert _compare_with(connection, reflected, declared).is_empty()
+    assert "ALTER TABLE t MODIFY TTL " in connection.statements[-1]

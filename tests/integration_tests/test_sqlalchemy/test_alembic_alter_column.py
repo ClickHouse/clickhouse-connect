@@ -99,6 +99,24 @@ def test_alter_column_removes_property_live(test_engine: Engine, test_db: str, c
         assert _column(conn, table_name, test_db, column_name).get(reflect_key) is None
 
 
+@pytest.mark.parametrize(
+    ("prop", "value", "expected"),
+    [
+        ("codec", "LZ4", "LZ4"),
+        ("alias", text("id + 1"), "id + 1"),
+        ("materialized", text("id * 3"), "id * 3"),
+        ("ttl", text("ts + INTERVAL 1 DAY"), "ts + toIntervalDay(1)"),
+    ],
+)
+def test_alter_column_sets_property_without_type_live(test_engine: Engine, test_db: str, ch_name, prop, value, expected):
+    table_name = ch_name("alter_set_property")
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE `{test_db}`.`{table_name}` (id UInt32, ts DateTime, val UInt32) ENGINE MergeTree ORDER BY id"))
+        context = MigrationContext.configure(connection=conn)
+        context.impl.alter_column(table_name, "val", schema=test_db, **{f"clickhousedb_{prop}": value})
+        assert str(_column(conn, table_name, test_db, "val")[f"clickhouse_{prop}"]) == expected
+
+
 def test_alter_column_autogenerate_removes_default_live(test_engine: Engine, test_db: str, tmp_path: Path, ch_name):
     table_name = ch_name("alter_autogen_default")
     with test_engine.begin() as conn:

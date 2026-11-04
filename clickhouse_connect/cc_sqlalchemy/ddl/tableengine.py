@@ -12,6 +12,7 @@ from sqlalchemy.sql.schema import SchemaItem
 
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import split_top_level, walk_sql
 from clickhouse_connect.driver.binding import _decode_ch_string_literal, _format_identifier, format_str, quote_identifier
+from clickhouse_connect.driver.common import unescape_identifier
 from clickhouse_connect.driver.parser import parse_callable
 
 logger = logging.getLogger(__name__)
@@ -667,6 +668,7 @@ def build_engine(full_engine: str) -> TableEngine | None:
     if not full_engine:
         return None
     name, _, _ = parse_callable(full_engine)
+    name = unescape_identifier(name)
     try:
         engine_cls = engine_map[name]
     except KeyError:

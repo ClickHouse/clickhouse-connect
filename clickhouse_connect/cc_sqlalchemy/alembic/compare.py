@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from alembic.autogenerate.api import AutogenContext
@@ -25,7 +27,9 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
 from clickhouse_connect.cc_sqlalchemy.inspector import with_internal_query_formats
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
-from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import split_top_level
+from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import split_top_level, walk_sql
+from clickhouse_connect.driver.binding import _format_identifier, _skip_quoted_token
+from clickhouse_connect.driver.common import unescape_identifier
 
 __all__ = ["COMPARE_TABLE_OPTIONS_OPT", "TableOptionDrift", "UnsupportedTableChangeError"]
 
@@ -72,20 +76,22 @@ class TableOptionDrift:
 
 
 class UnsupportedTableChangeError(CommandError):
-    """Autogenerate found table options that differ from the server and have no ALTER."""
+    """Autogenerate found table option changes requiring an explicit migration."""
 
     def __init__(self, drifts: Sequence[TableOptionDrift]) -> None:
+        if not drifts:
+            raise ValueError("UnsupportedTableChangeError requires at least one drift")
         self.drifts = tuple(drifts)
         super().__init__(self._format(self.drifts))
 
     @staticmethod
     def _format(drifts: Sequence[TableOptionDrift]) -> str:
         lines = [
-            f"Table {drifts[0].qualified_name} declares table options that differ from the server, and ClickHouse cannot ALTER them in place:"
+            f"Table {drifts[0].qualified_name} declares table options that differ from the server; automatic migration is unsupported:"
         ]
-        lines.extend(f"  {drift.option}: server {drift.reflected or 'none'}, model {drift.declared or 'none'}" for drift in drifts)
+        lines.extend(f"  {drift.option}: server {drift.reflected!r}, model {drift.declared!r}" for drift in drifts)
         lines.append(
-            "Revert the model, or recreate the table with an explicit migration. "
+            "Revert the model, or write an explicit migration for these changes. "
             f"Pass {COMPARE_TABLE_OPTIONS_OPT}=False to context.configure() to skip this check."
         )
         return "\n".join(lines)
@@ -112,28 +118,51 @@ def _declared_clause(value: Any) -> str | None:
 
 
 def normalize_expression(expression: str) -> str:
-    """Reduce an engine clause to a whitespace-free, unquoted-identifier form for comparison."""
+    """Normalize engine clause spacing and identifier quoting without joining SQL tokens."""
     chars: list[str] = []
-    quote: str | None = None
     pos = 0
     while pos < len(expression):
         char = expression[pos]
-        if quote:
-            if char == "\\" and quote == "'" and pos + 1 < len(expression):
-                chars.append(char)
-                pos += 1
-                chars.append(expression[pos])
-            elif char == quote:
-                quote = None
-                if char != "`":
-                    chars.append(char)
-            else:
-                chars.append(char)
-        elif char in ("'", '"', "`"):
-            quote = char
-            if char != "`":
-                chars.append(char)
-        elif not char.isspace():
+        if expression.startswith(("--", "//", "/*"), pos) or (char == "#" and expression[pos + 1 : pos + 2] in (" ", "!")):
+            return expression
+        if char in ("'", '"', "`"):
+            end = _skip_quoted_token(expression, pos, char)
+            if end == -1:
+                return expression
+            token = expression[pos:end]
+            if char == "`":
+                if any(match.group(1) not in ("\\", "`") for match in re.finditer(r"\\(.)", token, re.DOTALL)):
+                    return expression
+                identifier = unescape_identifier(token)
+                # Keep punctuation and keyword literals distinct from bare identifiers.
+                token = (
+                    identifier
+                    if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", identifier)
+                    and identifier.upper() not in {"NULL", "TRUE", "FALSE"}
+                    and not any(char.isalnum() or char in "_$'\"`" for char in expression[pos - 1 : pos] + expression[end : end + 1])
+                    else _format_identifier(identifier)
+                )
+            chars.append(token)
+            pos = end
+            continue
+        elif char.isspace():
+            end = pos + 1
+            while end < len(expression) and expression[end].isspace():
+                end += 1
+            if chars and end < len(expression):
+                previous = chars[-1][-1]
+                following = expression[end]
+                if (
+                    (previous.isalnum() or previous in "_'\"`")
+                    and (following.isalnum() or following in "_'\"`")
+                    or previous in "+-*/%=<>!|&^:?.~"
+                    and following in "+-*/%=<>!|&^:?.~"
+                    or "." in (previous, following)
+                ):
+                    chars.append(" ")
+            pos = end
+            continue
+        else:
             chars.append(char)
         pos += 1
     normalized = "".join(chars)
@@ -145,14 +174,9 @@ def normalize_expression(expression: str) -> str:
 def _unwrap_single(expression: str) -> str:
     # (a) and a are the same key, (a, b) is a tuple and stays wrapped.
     while expression.startswith("(") and expression.endswith(")"):
-        depth = 0
-        for index, char in enumerate(expression):
-            if char == "(":
-                depth += 1
-            elif char == ")":
-                depth -= 1
-                if depth == 0 and index != len(expression) - 1:
-                    return expression
+        for index, char, depth in walk_sql(expression):
+            if char == ")" and depth == 0 and index != len(expression) - 1:
+                return expression
         inner = expression[1:-1]
         if not inner or len(split_top_level(inner)) != 1:
             return expression
@@ -160,11 +184,12 @@ def _unwrap_single(expression: str) -> str:
     return expression
 
 
-def _server_normalized(connection: Any, expressions: Sequence[str]) -> list[str] | None:
+def _server_normalized(connection: Any, expressions: Sequence[str], *, ttl: bool = False) -> list[str] | None:
     """Ask the server to format each expression, or None when it cannot."""
     if connection is None:
         return None
-    columns = ", ".join(f"formatQuerySingleLine(concat('SELECT ', :expr{index}))" for index in range(len(expressions)))
+    prefix = "ALTER TABLE t MODIFY TTL " if ttl else "SELECT "
+    columns = ", ".join(f"formatQuerySingleLine(concat('{prefix}', :expr{index}))" for index in range(len(expressions)))
     statement = text(f"SELECT {columns}").bindparams(*(bindparam(f"expr{index}", type_=String()) for index in range(len(expressions))))
     try:
         row = connection.execute(
@@ -175,14 +200,14 @@ def _server_normalized(connection: Any, expressions: Sequence[str]) -> list[str]
         return None
     if row is None:
         return None
-    return [normalize_expression(str(value)[len("SELECT ") :]) for value in row]
+    return [normalize_expression(str(value)) for value in row]
 
 
-def _server_setting_defaults(connection: Any, names: Sequence[str]) -> dict[str, Any]:
-    """Return server default values for MergeTree settings missing from engine_full."""
+def _server_settings(connection: Any, names: Sequence[str]) -> dict[str, tuple[str, str]]:
+    """Return MergeTree setting defaults and types."""
     if connection is None or not names:
         return {}
-    statement = text("SELECT name, value FROM system.merge_tree_settings WHERE name IN :names").bindparams(
+    statement = text("SELECT name, value, type FROM system.merge_tree_settings WHERE name IN :names").bindparams(
         bindparam("names", expanding=True)
     )
     try:
@@ -190,22 +215,41 @@ def _server_setting_defaults(connection: Any, names: Sequence[str]) -> dict[str,
     except SQLAlchemyError as ex:
         logger.warning("Could not read server defaults for settings %r: %s", list(names), ex)
         return {}
-    return {row.name: _coerce_setting_value(row.value) for row in rows}
+    return {row.name: (row.value, row.type) for row in rows}
 
 
-def _coerce_setting_value(value: str) -> Any:
-    for cast in (int, float):
+def _coerce_setting_value(value: Any, setting_type: str | None = None) -> Any:
+    if setting_type is None:
+        return value
+    if setting_type == "String":
+        return str(value)
+    if setting_type == "Bool":
+        return {"0": False, "1": True, "false": False, "true": True}.get(value.lower(), value) if isinstance(value, str) else value
+    if setting_type not in {
+        "Float",
+        "Int64",
+        "UInt32",
+        "UInt64",
+        "Seconds",
+        "Milliseconds",
+        "UInt64Auto",
+        "NonZeroUInt64",
+    }:
+        return value
+    if isinstance(value, str):
         try:
-            return cast(value)
-        except ValueError:
-            continue
+            number = Decimal(value)
+        except InvalidOperation:
+            return value
+        if number.is_finite():
+            return int(number) if number == number.to_integral_value() else float(number)
     return value
 
 
-def _expressions_match(connection: Any, declared: str, reflected: str) -> bool:
+def _expressions_match(connection: Any, declared: str, reflected: str, *, ttl: bool = False) -> bool:
     if normalize_expression(declared) == normalize_expression(reflected):
         return True
-    formatted = _server_normalized(connection, (declared, reflected))
+    formatted = _server_normalized(connection, (declared, reflected), ttl=ttl)
     return formatted is not None and formatted[0] == formatted[1]
 
 
@@ -257,7 +301,11 @@ def _compare_key_clauses(connection: Any, declared: TableEngine, reflected: Tabl
         reflected_text = reflected_values.get(clause)
         if declared_text is None and reflected_text is None:
             continue
-        if declared_text is None or reflected_text is None or not _expressions_match(connection, declared_text, reflected_text):
+        if (
+            declared_text is None
+            or reflected_text is None
+            or not _expressions_match(connection, declared_text, reflected_text, ttl=clause == "ttl")
+        ):
             drifts.append((clause, reflected_text, declared_text))
     return drifts
 
@@ -266,21 +314,24 @@ def _changed_settings(
     connection: Any, declared: TableEngine, reflected: TableEngine
 ) -> tuple[dict[str, Any], dict[str, Any], list[_Difference]]:
     # engine_full lists only settings set at CREATE, so a declared default is resolved against the server defaults.
-    missing = [name for name in declared.settings if name not in reflected.settings]
-    defaults = _server_setting_defaults(connection, missing)
+    server_settings = _server_settings(connection, list(declared.settings))
     changed: dict[str, Any] = {}
     existing: dict[str, Any] = {}
     readonly: list[_Difference] = []
     for name, value in declared.settings.items():
         reflected_value = reflected.settings.get(name)
-        effective = defaults.get(name) if reflected_value is None else reflected_value
-        if effective is not None and _render_setting_value(effective) == _render_setting_value(value):
+        default, setting_type = server_settings.get(name, (None, None))
+        effective = default if reflected_value is None else reflected_value
+        effective = _coerce_setting_value(effective, setting_type)
+        if effective is not None and effective == _coerce_setting_value(value, setting_type):
             continue
         if name in _READONLY_SETTINGS:
-            readonly.append((f"settings.{name}", None if effective is None else str(effective), str(value)))
+            readonly.append(
+                (f"settings.{name}", None if effective is None else _render_setting_value(effective), _render_setting_value(value))
+            )
             continue
         changed[name] = value
-        existing[name] = reflected_value
+        existing[name] = None if reflected_value is None else _coerce_setting_value(reflected_value, setting_type)
     return changed, existing, readonly
 
 
