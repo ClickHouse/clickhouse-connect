@@ -727,6 +727,24 @@ class TestSyncRequestTargetPath:
         assert backend.ping() is True
         assert backend.http.request.call_args.args[:2] == ("GET", "http://localhost:8123/clickhouse/ping")
 
+    @pytest.mark.parametrize(("timeout", "expected"), [(None, 3), (0.5, 0.5), (12, 12)])
+    def test_ping_timeout(self, timeout, expected):
+        backend = make_sync_backend()
+        backend.http.request = Mock(return_value=SimpleNamespace(status=200))
+
+        assert backend.ping(timeout) is True
+        assert backend.http.request.call_args.kwargs["timeout"] == expected
+
+    @pytest.mark.parametrize("timeout", [0, -0.5, float("nan")])
+    def test_ping_rejects_nonpositive_timeout(self, timeout):
+        backend = make_sync_backend()
+        backend.http.request.return_value = SimpleNamespace(status=200)
+
+        with pytest.raises(ProgrammingError, match="timeout must be greater than zero"):
+            backend.ping(timeout)
+
+        backend.http.request.assert_not_called()
+
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize(
@@ -860,6 +878,41 @@ class TestAsyncRequestTargetPath:
 
         assert await backend.ping() is True
         assert get.call_args.args == ("http://localhost:8123/clickhouse/ping",)
+
+    @pytest.mark.parametrize(("timeout", "expected"), [(None, 3.0), (0.5, 0.5), (12, 12)])
+    @pytest.mark.asyncio
+    async def test_ping_timeout(self, timeout, expected):
+        class ResponseContext:
+            async def __aenter__(self):
+                return SimpleNamespace(status=200)
+
+            async def __aexit__(self, exc_type, exc_value, traceback):
+                return False
+
+        backend = make_async_backend()
+        get = Mock(return_value=ResponseContext())
+        backend.session = SimpleNamespace(closed=False, get=get)
+
+        assert await backend.ping(timeout) is True
+        assert get.call_args.kwargs["timeout"].total == expected
+
+    @pytest.mark.parametrize("timeout", [0, -0.5, float("nan")])
+    @pytest.mark.asyncio
+    async def test_ping_rejects_nonpositive_timeout(self, timeout):
+        backend = make_async_backend()
+        response_context = AsyncMock()
+        response_context.__aenter__.return_value = SimpleNamespace(status=200)
+        session = SimpleNamespace(closed=False, get=Mock(return_value=response_context))
+        lease = Mock(session=session, _owner_loop=asyncio.get_running_loop())
+        backend.session_lease = lease
+        backend.session_lock = AsyncMock()
+
+        with pytest.raises(ProgrammingError, match="timeout must be greater than zero"):
+            await backend.ping(timeout)
+
+        backend.session_lock.__aenter__.assert_not_awaited()
+        lease.acquire.assert_not_called()
+        session.get.assert_not_called()
 
 
 @pytest.mark.parametrize("data_type", [bytes, bytearray, memoryview])

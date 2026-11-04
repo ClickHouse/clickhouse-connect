@@ -701,6 +701,62 @@ _TEMPORAL_CASES = [
     *[(f"Time64({scale})", f"timedelta64[{unit}]", [-79, 0, 13]) for scale, unit in [(0, "s"), (3, "ms"), (6, "us"), (9, "ns")]],
 ]
 
+_NULLABLE_TEMPORAL_CASES = (
+    _TEMPORAL_CASES[:7]
+    + [
+        (name.replace(")", ", 'America/New_York')") if "(" in name else f"{name}('America/New_York')", dtype, ticks)
+        for name, dtype, ticks in _TEMPORAL_CASES[2:7]
+    ]
+    + [("Date32", "datetime64[D]", [-719528, 0, 2932896])]
+)
+
+
+@pytest.mark.parametrize("type_name,dtype,ticks", _NULLABLE_TEMPORAL_CASES)
+@pytest.mark.parametrize("wrapper", ["Nullable({})", "SimpleAggregateFunction(anyLast, Nullable({}))"])
+@pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("nulls", ["none", "some", "all"])
+def test_nullable_temporal_buffers(core, monkeypatch, type_name, dtype, ticks, wrapper, as_pandas, extended, nulls):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas") if as_pandas else None
+    declared = wrapper.format(type_name)
+    values = [None if nulls == "all" or nulls == "some" and index == 1 else tick for index, tick in enumerate(ticks)]
+    batches = [_batch(core, [declared], [chunk]) for chunk in [values[:1], values[1:]]]
+    batch = core.ColBatch.from_batches(batches)
+    buffers_only = SimpleNamespace(column_buffers=batch.column_buffers)
+    ch_type = get_from_name(declared)
+    converter = rustnumpy._build_converter(
+        ch_type, QueryContext(use_numpy=True, as_pandas=as_pandas, use_extended_dtypes=extended, query_tz="UTC")
+    )
+    assert not converter.needs_arrow
+    monkeypatch.setattr(rustnumpy.options, "arrow", None)
+    if not as_pandas:
+        monkeypatch.setattr(rustnumpy.options, "pd", None)
+    result = converter(None, buffers_only, 0)
+    expected = np.array(values, dtype=dtype)
+    if not as_pandas:
+        assert isinstance(result, list)
+        for value, tick in zip(result, values):
+            if tick is None:
+                assert value is None
+            else:
+                assert type(value) is np.datetime64 and value.dtype == np.dtype(dtype)
+                assert value.astype("int64") == tick
+        return
+    timezone = getattr(ch_type.element_type if hasattr(ch_type, "element_type") else ch_type, "tzinfo", None)
+    if extended and dtype == "datetime64[D]":
+        expected = expected.astype("datetime64[s]")
+    if timezone is not None:
+        expected = pd.DatetimeIndex(expected, tz="UTC").tz_convert(timezone)
+    if not extended:
+        expected = [None if tick is None else value for value, tick in zip(expected, values)]
+    pd.testing.assert_series_equal(pd.Series(result), pd.Series(expected))
+    if not extended and nulls == "all":
+        assert result == [None] * len(values)
+    elif not extended and dtype != "datetime64[ns]" and int(pd.__version__.split(".", 1)[0]) < 3:
+        assert isinstance(result, list)
+    else:
+        assert not isinstance(result, list)
+
 
 @pytest.mark.parametrize("type_name,dtype,ticks", _TEMPORAL_CASES)
 @pytest.mark.parametrize("wrapper", ["{}", "SimpleAggregateFunction(anyLast, {})"])
@@ -918,7 +974,7 @@ def test_nullable_datetime64_nanosecond_pandas_buffers(core, monkeypatch, wrappe
         assert frame.c0.tolist() == [None] * len(ticks)
     else:
         expected = pd.DatetimeIndex(np.array(values, dtype="datetime64[ns]"))
-        if timezone is not None and nulls != "all":
+        if timezone is not None:
             expected = expected.tz_localize("UTC").tz_convert(ZoneInfo(timezone))
         pd.testing.assert_series_equal(frame.c0, pd.Series(expected, name="c0"))
     del batch, result
@@ -949,7 +1005,8 @@ def test_nullable_datetime64_nanosecond_empty_chunks(core, monkeypatch, extended
 
 @pytest.mark.parametrize("missing", [False, True])
 @pytest.mark.parametrize("timezone", [None, "America/New_York"])
-def test_nullable_datetime64_nanosecond_valid_nat(core, missing, timezone):
+@pytest.mark.parametrize("extended", [False, True])
+def test_nullable_datetime64_nanosecond_valid_nat(core, missing, timezone, extended):
     np = pytest.importorskip("numpy")
     pd = pytest.importorskip("pandas")
     declared = "Nullable(DateTime64(9))" if timezone is None else f"Nullable(DateTime64(9, '{timezone}'))"
@@ -958,13 +1015,34 @@ def test_nullable_datetime64_nanosecond_valid_nat(core, missing, timezone):
     wire = wire[:-24] + np.array([-(2**63), 0, 13], dtype="<i8").tobytes()
     batch = core.ColBatch.decode_native(wire)
     converter = rustnumpy._build_converter(
-        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True, query_tz="UTC")
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=extended, query_tz="UTC")
     )
     frame = pd.DataFrame({"c0": converter(None, batch, 0)})
     expected = pd.DatetimeIndex(np.array([-(2**63), None if missing else 0, 13], dtype="datetime64[ns]"))
     if timezone is not None:
         expected = expected.tz_localize("UTC").tz_convert(ZoneInfo(timezone))
     pd.testing.assert_series_equal(frame.c0, pd.Series(expected, name="c0"))
+
+
+@pytest.mark.parametrize("timezone", [None, "America/New_York"])
+@pytest.mark.parametrize("scale,unit", [(3, "ms"), (9, "ns")])
+def test_nullable_datetime64_valid_nat_is_not_all_null(core, timezone, scale, unit):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    declared = f"Nullable(DateTime64({scale}))" if timezone is None else f"Nullable(DateTime64({scale}, '{timezone}'))"
+    batch = _batch(core, [declared], [[-(2**63), None]])
+    converter = rustnumpy._build_converter(
+        get_from_name(declared), QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=False, query_tz="UTC")
+    )
+    legacy_inference = scale != 9 and int(pd.__version__.split(".", 1)[0]) < 3
+    expected = pd.DatetimeIndex(np.array([None, None], dtype=f"datetime64[{'ns' if legacy_inference else unit}]"))
+    if timezone is not None and not legacy_inference:
+        expected = expected.tz_localize("UTC").tz_convert(ZoneInfo(timezone))
+    result = converter(None, batch, 0)
+    pd.testing.assert_series_equal(pd.Series(result), pd.Series(expected))
+    if legacy_inference:
+        assert result[0] is not None and pd.isna(result[0])
+        assert result[1] is None
 
 
 @pytest.mark.parametrize(

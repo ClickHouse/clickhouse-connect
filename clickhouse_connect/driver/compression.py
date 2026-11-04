@@ -1,8 +1,10 @@
 import sys
 import zlib
 
-import lz4
-import lz4.frame
+try:
+    import lz4.frame as _lz4_frame
+except ImportError:
+    _lz4_frame = None
 
 try:
     if sys.version_info >= (3, 14):
@@ -35,6 +37,20 @@ def _require_zstd():
     return _zstd
 
 
+LZ4_MISSING_MESSAGE = "lz4 compression requires the lz4 package. Install it with: pip install 'clickhouse-connect[lz4]'"
+
+
+def _require_lz4():
+    if _lz4_frame is None:
+        raise ImportError(LZ4_MISSING_MESSAGE)
+    return _lz4_frame
+
+
+def _lz4_decompressor():
+    """Returns an LZ4FrameDecompressor for incremental decompression."""
+    return _require_lz4().LZ4FrameDecompressor()
+
+
 def _zstd_compress(data: bytes) -> bytes:
     """One-shot compression."""
     return _require_zstd().compress(data)
@@ -50,7 +66,9 @@ def _zstd_decompressor():
     return _require_zstd().ZstdDecompressor()
 
 
-available_compression = ["lz4"]
+available_compression = []
+if _lz4_frame is not None:
+    available_compression.append("lz4")
 if _zstd is not None:
     available_compression.append("zstd")
 if brotli:
@@ -84,7 +102,7 @@ class GzipCompressor(Compressor, tag="gzip", thread_safe=False):
 
 class Lz4Compressor(Compressor, tag="lz4", thread_safe=False):
     def __init__(self):
-        self.comp = lz4.frame.LZ4FrameCompressor()
+        self.comp = _require_lz4().LZ4FrameCompressor()
 
     def compress_block(self, block):
         output = self.comp.begin(len(block))
