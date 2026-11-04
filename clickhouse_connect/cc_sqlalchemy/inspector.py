@@ -22,6 +22,7 @@ from clickhouse_connect.driver.client import _INTERNAL_QUERY_FORMATS
 
 _INTERNAL_QUERY_OPTION = "ch_internal_query"
 _INTERNAL_QUERY_SENTINEL = object()
+_EXPRESSION_KEYS = ("server_default", "clickhouse_materialized", "clickhouse_alias", "clickhouse_ttl")
 
 
 class _NoSuchTableError(NoSuchTableError, NoResultFound):
@@ -147,10 +148,6 @@ def get_dictionary_metadata(connection, table_name: str, schema: str | None = No
     return metadata
 
 
-# Column keys whose reflected values are SQL expression strings
-EXPRESSION_KEYS = ("server_default", "clickhouse_materialized", "clickhouse_alias", "clickhouse_ttl")
-
-
 def get_columns(connection, table_name: str, schema: str | None = None) -> list[dict[str, Any]]:
     table_metadata = get_table_metadata(connection, table_name, schema)
     if table_metadata.engine == "Dictionary":
@@ -210,7 +207,7 @@ class ChInspector(Inspector):
                     continue
                 col_type = col.pop("type")
                 # Reflection returns expressions as SQL strings; Column needs clauses.
-                for key in EXPRESSION_KEYS:
+                for key in _EXPRESSION_KEYS:
                     if isinstance(col.get(key), str):
                         col[key] = text(col[key])
                 col_args = canonical_schema_kwargs({key: value for key, value in col.items() if value is not None}, COLUMN_OPTIONS)
