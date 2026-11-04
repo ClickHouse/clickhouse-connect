@@ -501,7 +501,9 @@ Reflected columns carry `server_default` for `DEFAULT` expressions. Reflected
 SQLAlchemy objects use dialect-specific options such as `clickhousedb_codec`,
 `clickhousedb_ttl`, `clickhousedb_materialized`, and `clickhousedb_alias` when present.
 The public dictionaries returned by `Inspector.get_columns()` retain the
-corresponding `clickhouse_*` keys.
+corresponding `clickhouse_*` keys. In these dictionaries, `server_default`,
+`clickhouse_materialized`, `clickhouse_alias`, and `clickhouse_ttl` are SQL strings.
+To build a `Column` from them, wrap each one in `sqlalchemy.text()`.
 
 Use `clickhousedb_*` for new table and column declarations. Driver-generated
 metadata and Alembic revisions use these names. ClickHouse Connect also reads
