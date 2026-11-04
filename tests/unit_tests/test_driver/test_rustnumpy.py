@@ -490,7 +490,7 @@ def test_object_convert_numpy_keeps_stdlib_aware_datetimes(type_name):
     tz = ZoneInfo("America/Denver")
     values = [None, datetime.fromtimestamp(13, tz), datetime.fromtimestamp(79, tz)]
 
-    converter = rustnumpy._build_converter(get_from_name(f"Nullable({type_name})"), QueryContext(use_numpy=True))
+    converter = rustnumpy._make_object_convert(get_from_name(f"Nullable({type_name})"), QueryContext(use_numpy=True))
     result = converter(None, _ObjectExitBatch(values), 0)
 
     assert list(result) == values
@@ -504,7 +504,7 @@ def test_object_convert_numpy_aware_datetimes_without_pandas(monkeypatch, type_n
     tz = ZoneInfo("America/Denver")
     values = [None, datetime.fromtimestamp(13, tz)]
 
-    converter = rustnumpy._build_converter(get_from_name(f"Nullable({type_name})"), QueryContext(use_numpy=True))
+    converter = rustnumpy._make_object_convert(get_from_name(f"Nullable({type_name})"), QueryContext(use_numpy=True))
     result = converter(None, _ObjectExitBatch(values), 0)
 
     assert list(result) == values
@@ -656,9 +656,9 @@ def test_scalar_temporal_dispatch_boundaries(type_name, needs_arrow):
 
 
 @pytest.mark.parametrize("type_name", ["Date", "Date32", "DateTime", "DateTime64(0)", "DateTime64(3)", "DateTime64(6)"])
-@pytest.mark.parametrize("wrapper", ["Nullable({})", "SimpleAggregateFunction(anyLast, Nullable({}))"])
+@pytest.mark.parametrize("wrapper", ["LowCardinality(Nullable({}))", "Array(Nullable({}))", "Tuple(Nullable({}))"])
 @pytest.mark.parametrize("as_pandas,extended", [(False, False), (True, False), (True, True)])
-def test_nullable_date_and_timestamp_keep_object_exit(monkeypatch, type_name, wrapper, as_pandas, extended):
+def test_nested_and_low_card_nullable_temporals_keep_object_exit(monkeypatch, type_name, wrapper, as_pandas, extended):
     ch_type = get_from_name(wrapper.format(type_name))
     marker = object()
     monkeypatch.setattr(rustnumpy, "_make_object_convert", lambda _type, _context: lambda *_args: marker)
