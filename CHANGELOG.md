@@ -7,6 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- With the Rust codec, direct nullable `Date`, `Date32`, `DateTime`, and `DateTime64` columns, including `SimpleAggregateFunction` wrappers, now match the Python codec's NumPy cell types and pandas dtypes. NumPy results contain `numpy.datetime64` cells instead of Python `date` or `datetime` objects, with `None` for SQL NULL. Extended pandas output keeps declared timezones across all-NULL blocks. NumPy and pandas output also supports year-0000 `Date32` values.
 - SQLAlchemy `Inspector.get_columns()` now returns plain SQL strings instead of `TextClause` objects for the `server_default`, `clickhouse_materialized`, `clickhouse_alias` and `clickhouse_ttl` keys, so column expressions can be serialized (for example with `json.dumps`). Code that builds `Column` objects directly from these values must wrap expressions in `sqlalchemy.text()` or use `Table(..., autoload_with=engine)`. Table reflection still turns them into SQL clauses, so reflected `Table` objects and Alembic comparisons are unchanged. Closes [#1141](https://github.com/ClickHouse/clickhouse-connect/issues/1141).
 - Placeholder-like text inside SQL strings, quoted identifiers, comments, and heredocs no longer selects server-side parameter binding, so client-side `%(name)s` parameters bind correctly alongside it. These queries now follow normal client-side percent formatting, so a bare literal `%` can raise `ValueError`. Escape it as `%%` when passing parameters. Closes [#1146](https://github.com/ClickHouse/clickhouse-connect/issues/1146).
 - Dictionaries bound to named `Tuple` parameters now use the declared field order, including nested tuples and arrays, fixing tuple parsing errors in plain client queries and SQLAlchemy single-row and async inserts. Missing or extra fields raise `ProgrammingError`. Closes [#1148](https://github.com/ClickHouse/clickhouse-connect/issues/1148).
@@ -14,6 +15,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
+- The Rust codec reads scalar nullable date and datetime columns from typed buffers instead of building Python objects per row, which speeds up NumPy and pandas results.
 - SQLAlchemy `Tuple` now accepts an `elements` mapping from field names to ClickHouse SQLAlchemy type classes or instances, preserving field order and quoting names automatically. Closes [#1144](https://github.com/ClickHouse/clickhouse-connect/issues/1144).
 - The Python codec serializes `UUID` insert columns faster when values are `uuid.UUID` objects, integers or strings, by building the column bytes in one pass instead of per value. Inserting 500k rows with two UUID columns took about 20% less time in local tests.
 
