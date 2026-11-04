@@ -4,7 +4,7 @@ import gc
 import logging
 import time
 import weakref
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -1541,10 +1541,7 @@ def test_rust_codec_nullable_named_tz_df_parity(client_factory, call, type_name)
 
 
 @pytest.mark.parametrize("type_name", ["DateTime('America/Denver')", "DateTime64(3, 'America/Denver')"])
-def test_rust_codec_nullable_named_tz_np_object_cells(client_factory, call, type_name):
-    # query_np object columns keep stdlib datetime cells; the pd.Timestamp wrap is pandas-only.
-    # The python codec renders these cells as naive-UTC np.datetime64, a pre-existing scalar-type
-    # divergence, so parity here is on the UTC instants.
+def test_rust_codec_nullable_named_tz_np_scalar_parity(client_factory, call, type_name):
     np = pytest.importorskip("numpy")
     rust_client = client_factory(native_codec="rust_strict")
     python_client = client_factory(native_codec="python")
@@ -1555,9 +1552,71 @@ def test_rust_codec_nullable_named_tz_np_object_cells(client_factory, call, type
 
     assert rust_values[0] is None and python_values[0] is None
     for rust_value, python_value in zip(rust_values[1:], python_values[1:]):
-        assert type(rust_value) is datetime
-        assert isinstance(python_value, np.datetime64)
-        assert np.datetime64(rust_value.astimezone(timezone.utc).replace(tzinfo=None)) == python_value
+        assert type(rust_value) is type(python_value) is np.datetime64
+        assert rust_value.dtype == python_value.dtype
+        assert rust_value == python_value
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("block_size", [3, 79])
+@pytest.mark.parametrize("nulls", ["none", "some", "first", "last", "all", "empty"])
+def test_rust_codec_nullable_temporal_buffer_parity(client_factory, call, consume_stream, extended, block_size, nulls):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    rust_client = client_factory(native_codec="rust_strict")
+    python_client = client_factory(native_codec="python")
+    columns = [
+        ("Date", "toDate('2024-01-01') + number", "D"),
+        ("Date32", "toDate32('2299-01-01') + number", "D"),
+        ("DateTime", "toDateTime(1700000000 + number)", "s"),
+        ("DateTime64(3)", "toDateTime64(-1000000000 + number, 3)", "ms"),
+        *[
+            (
+                f"DateTime64({scale}, 'America/Santiago')",
+                f"toDateTime64(1700000000 + number, {scale}, 'America/Santiago')",
+                unit,
+            )
+            for scale, unit in [(0, "s"), (3, "ms"), (6, "us"), (9, "ns")]
+        ],
+        ("DateTime('America/Santiago')", "toDateTime(1700000000 + number, 'America/Santiago')", "s"),
+        ("SimpleAggregateFunction(anyLast, Nullable(Date))", "toDate('2024-01-01') + number", "D"),
+        (
+            "SimpleAggregateFunction(anyLast, Nullable(DateTime64(3, 'America/Santiago')))",
+            "toDateTime64(1700000000 + number, 3, 'America/Santiago')",
+            "ms",
+        ),
+    ]
+    condition = {"none": "0", "some": "number % 3 = 1", "first": "number < 3", "last": "number >= 6", "all": "1", "empty": "0"}[nulls]
+    expressions = [
+        f"CAST(if({condition}, NULL, {value}) AS "
+        f"{type_name if type_name.startswith('SimpleAggregateFunction') else f'Nullable({type_name})'}) AS c{index}"
+        for index, (type_name, value, _unit) in enumerate(columns)
+    ]
+    query = f"SELECT {', '.join(expressions)} FROM numbers({0 if nulls == 'empty' else 9})"
+    settings = {"max_block_size": block_size, "max_threads": 1}
+    kwargs = {"settings": settings, "use_extended_dtypes": extended}
+    frame = call(rust_client.query_df, query, **kwargs)
+    pd.testing.assert_frame_equal(frame, call(python_client.query_df, query, **kwargs))
+    rust_frames, python_frames = [], []
+    consume_stream(call(rust_client.query_df_stream, query, **kwargs), rust_frames.append)
+    consume_stream(call(python_client.query_df_stream, query, **kwargs), python_frames.append)
+    assert len(rust_frames) == len(python_frames)
+    for actual, expected in zip(rust_frames, python_frames):
+        pd.testing.assert_frame_equal(actual, expected)
+    if extended and nulls != "empty":
+        for index in [4, 5, 6, 7, 8, 10]:
+            assert str(frame[f"c{index}"].dtype).endswith(", America/Santiago]")
+    output = call(rust_client.query_np, query, settings=settings)
+    expected = call(python_client.query_np, query, settings=settings)
+    assert output.dtype == expected.dtype and output.shape == expected.shape
+    np.testing.assert_array_equal(output, expected)
+    for row in output:
+        for value, (_type_name, _expression, unit) in zip(row, columns):
+            assert value is None or type(value) is np.datetime64 and value.dtype == np.dtype(f"datetime64[{unit}]")
+    pieces = []
+    consume_stream(call(rust_client.query_np_stream, query, settings=settings), pieces.append)
+    if pieces:
+        np.testing.assert_array_equal(np.concatenate(pieces), output)
 
 
 def test_rust_codec_np_df_stream_parity(client_factory, call, consume_stream):
@@ -1909,7 +1968,7 @@ def test_rust_codec_nullable_datetime64_nanoseconds(client_factory, call, consum
     frame = call(rust_client.query_df, query, **kwargs)
     python_frame = call(python_client.query_df, query, **kwargs)
     for index, name in enumerate(frame):
-        object_blocks = block_size == 1 and (not extended or index % len(wrappers) >= 2 or index >= len(wrappers))
+        object_blocks = block_size == 1 and (not extended or index % len(wrappers) >= 2)
         assert frame[name].dtype == (np.dtype(object) if object_blocks else expected_frame[name].dtype)
         pd.testing.assert_index_equal(pd.DatetimeIndex(frame[name]), pd.DatetimeIndex(expected_frame[name]))
         pd.testing.assert_index_equal(pd.DatetimeIndex(python_frame[name]), pd.DatetimeIndex(expected_frame[name]))

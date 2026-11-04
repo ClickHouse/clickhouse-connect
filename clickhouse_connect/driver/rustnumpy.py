@@ -334,26 +334,36 @@ def _make_datetime_convert(ch_type: DateTimeBase, as_pandas: bool, active_tz: An
     return convert
 
 
-def _make_nullable_datetime_pandas_convert(
-    ch_type: DateTimeBase, extended: bool, active_tz: Any, object_convert: BlockConverter
+def _make_nullable_temporal_pandas_convert(
+    ch_type: Date | DateTimeBase, extended: bool, active_tz: Any, object_convert: BlockConverter
 ) -> BlockConverter:
-    """Keep nanosecond ticks without changing all-null column inference."""
+    """Mask typed temporal buffers while preserving per-block pandas inference."""
     dtype = options.np.dtype(ch_type.np_type)
+    nanoseconds = options.np.datetime_data(dtype)[0] == "ns"
+    scalar_list = not extended and not nanoseconds and _pandas_infers_ns_temporals()
     safe_min = options.np.datetime64(-(2**63) + 1, "ns") + options.np.timedelta64(1, "D")
     safe_max = options.np.datetime64(2**63 - 1, "ns") - options.np.timedelta64(1, "D")
 
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
         values, null_count = _temporal_buffer_values(col_batch, index, dtype)
-        if null_count == len(values):
-            return values if extended else [None] * len(values)
+        if not extended and null_count == len(values):
+            return [None] * len(values)
+        result = values
         if active_tz is not None:
             result = options.pd.DatetimeIndex(values, tz="UTC").tz_convert(active_tz)
-            edges = options.np.flatnonzero((values < safe_min) | (values > safe_max))
-            if len(edges) and not _boxes_in_range(result, edges):
-                # Timezone-local scalar values can exceed the nanosecond range.
-                return object_convert(_arrow_table, col_batch, index)
-            return result
-        return values
+            if nanoseconds:
+                edges = options.np.flatnonzero((values < safe_min) | (values > safe_max))
+                if len(edges) and not _boxes_in_range(result, edges):
+                    # Timezone-local scalar values can exceed the nanosecond range.
+                    return object_convert(_arrow_table, col_batch, index)
+        if scalar_list:
+            scalars = list(result)
+            if null_count:
+                null_mask = _join_chunks([_buffer_null_mask(column) for column in col_batch.column_buffers(index)], "bool")
+                for null_index in options.np.flatnonzero(null_mask).tolist():
+                    scalars[null_index] = None
+            return scalars
+        return result.astype(ch_type.pandas_dtype) if isinstance(ch_type, Date) else result
 
     return convert
 
@@ -367,7 +377,7 @@ def _boxes_in_range(index: Any, positions: Any) -> bool:
     return True
 
 
-def _make_nullable_datetime_numpy_convert(ch_type: DateTimeBase) -> BlockConverter:
+def _make_nullable_temporal_numpy_convert(ch_type: Date | DateTimeBase) -> BlockConverter:
     dtype = options.np.dtype(ch_type.np_type)
 
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
@@ -399,8 +409,8 @@ def _make_nullable_datetime_numpy_convert(ch_type: DateTimeBase) -> BlockConvert
     return convert
 
 
-def _pandas_infers_ns_timedeltas() -> bool:
-    """pandas < 3 infers timedelta64[ns] for the object arrays the Python codec's nullable
+def _pandas_infers_ns_temporals() -> bool:
+    """pandas < 3 infers a nanosecond unit for the scalar lists the Python codec's nullable
     temporal path hands to the DataFrame constructor. pandas >= 3 keeps the scalar unit."""
     return int(options.pd.__version__.split(".", 1)[0]) < 3
 
@@ -411,7 +421,7 @@ def _make_time_convert(
     use_extended_dtypes: bool = False,
 ) -> BlockConverter:
     dtype = options.np.dtype(ch_type.np_type)
-    nullable_pandas_ns = as_pandas and not use_extended_dtypes and _pandas_infers_ns_timedeltas()
+    nullable_pandas_ns = as_pandas and not use_extended_dtypes and _pandas_infers_ns_temporals()
 
     def convert(_arrow_table: Any, col_batch: Any, index: int) -> Any:
         values, null_count = _temporal_buffer_values(col_batch, index, dtype)
@@ -908,12 +918,12 @@ def _numeric_buffer_type(ch_type: ClickHouseType) -> ClickHouseType | None:
     return None
 
 
-def _datetime_buffer_type(ch_type: ClickHouseType) -> tuple[DateTimeBase, bool] | None:
+def _temporal_buffer_type(ch_type: ClickHouseType) -> tuple[Date | DateTimeBase, bool] | None:
     nullable = ch_type.nullable
     while isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
         ch_type = ch_type.element_type
         nullable = nullable or ch_type.nullable
-    return (ch_type, nullable) if isinstance(ch_type, DateTimeBase) and not ch_type.low_card else None
+    return (ch_type, nullable) if isinstance(ch_type, (Date, DateTimeBase)) and not ch_type.low_card else None
 
 
 def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Converter:
@@ -923,19 +933,19 @@ def _build_converter(ch_type: ClickHouseType, context: QueryContext) -> _Convert
     if isinstance(ch_type, SimpleAggregateFunction) and not ch_type.low_card:
         ch_type = ch_type.element_type
     _validate_time64_units(ch_type)
-    datetime_buffer_type = _datetime_buffer_type(ch_type)
-    if datetime_buffer_type is not None:
-        datetime_type, nullable = datetime_buffer_type
-        np_type = datetime_type.np_type
-        if nullable and np_type == "datetime64[ns]":
+    temporal_buffer_type = _temporal_buffer_type(ch_type)
+    if temporal_buffer_type is not None:
+        temporal_type, nullable = temporal_buffer_type
+        # Validate precision before nested aliases can fall through to object conversion.
+        _ = temporal_type.np_type
+        if nullable:
             if not context.as_pandas:
-                return _Converter(False, _make_nullable_datetime_numpy_convert(datetime_type))
-            extended = context.use_extended_dtypes and isinstance(ch_type, DateTimeBase)
+                return _Converter(False, _make_nullable_temporal_numpy_convert(temporal_type))
+            extended = context.use_extended_dtypes and isinstance(ch_type, (Date, DateTimeBase))
+            active_tz = context.active_tz(temporal_type.tzinfo) if isinstance(temporal_type, DateTimeBase) else None
             return _Converter(
                 False,
-                _make_nullable_datetime_pandas_convert(
-                    datetime_type, extended, context.active_tz(datetime_type.tzinfo), _make_object_convert(ch_type, context)
-                ),
+                _make_nullable_temporal_pandas_convert(temporal_type, extended, active_tz, _make_object_convert(ch_type, context)),
             )
     if isinstance(ch_type, BFloat16) and not ch_type.low_card:
         extended = ch_type.nullable and context.as_pandas and context.use_extended_dtypes
