@@ -68,14 +68,9 @@ class Array(ClickHouseType):
             all_values = final_type.read_column_data(source, level_size, ctx, read_state)
         else:
             all_values = []
-        column = all_values if isinstance(all_values, list) else list(all_values)
+        column = all_values if type(all_values) is list else list(all_values)
         for offset_range in reversed(offset_sizes):
-            data = []
-            last = 0
-            for x in offset_range:
-                data.append(column[last:x])
-                last = x
-            column = data
+            column = data_conv.build_array_rows(column, offset_range)
         return column
 
     def write_column_prefix(self, dest: bytearray):

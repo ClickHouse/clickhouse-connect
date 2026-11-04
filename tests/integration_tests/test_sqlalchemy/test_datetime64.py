@@ -101,6 +101,18 @@ def test_datetime64_typed_shapes(datetime_engine, type_, value, expected):
         assert conn.exec_driver_sql(compiled).scalar_one() == expected
 
 
+@pytest.mark.parametrize("literal_execute", [False, True])
+def test_pandas_timestamp_datetime64_nanoseconds(datetime_engine, literal_execute):
+    pd = pytest.importorskip("pandas")
+    value = pd.Timestamp("2024-01-02 03:04:05.123456789", tz="UTC")
+    stamp = sa.cast(sa.bindparam("stamp", value, DateTime64(9, "UTC"), literal_execute=literal_execute), DateTime64(9, "UTC"))
+    statement = sa.select(sa.func.toString(stamp))
+    with datetime_engine.connect() as conn:
+        assert conn.execute(statement).scalar_one() == "2024-01-02 03:04:05.123456789"
+        compiled = str(statement.compile(datetime_engine, compile_kwargs={"literal_binds": True}))
+        assert conn.exec_driver_sql(compiled).scalar_one() == "2024-01-02 03:04:05.123456789"
+
+
 def test_datetime64_expanding_and_literal_execute(datetime_engine):
     value = sa.cast(sa.literal(STAMP, DateTime64(6, "UTC")), DateTime64(6, "UTC"))
     with datetime_engine.connect() as conn:

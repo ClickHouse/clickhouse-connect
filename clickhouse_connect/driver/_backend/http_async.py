@@ -811,7 +811,9 @@ class HttpAsyncBackend:
                 if query_session:
                     self._active_session = None
 
-    async def ping(self) -> bool:
+    async def ping(self, timeout: float | None = None) -> bool:
+        if timeout is not None and not timeout > 0:
+            raise ProgrammingError("ping timeout must be greater than zero")
         lease = self.session_lease
         if lease is None or lease.session.closed:
             return False
@@ -829,8 +831,8 @@ class HttpAsyncBackend:
             lease.acquire()
         try:
             url = f"{self.url.rstrip('/')}/ping"
-            timeout = aiohttp.ClientTimeout(total=3.0)
-            get_kwargs: dict[str, Any] = {"timeout": timeout}
+            request_timeout = aiohttp.ClientTimeout(total=3.0 if timeout is None else timeout)
+            get_kwargs: dict[str, Any] = {"timeout": request_timeout}
             if self.proxy_url:
                 get_kwargs["proxy"] = self.proxy_url
             if self.server_host_name:

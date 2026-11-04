@@ -1,18 +1,21 @@
 import ipaddress
 import os
+import re
 import time
 import uuid
 import zoneinfo
 from array import array
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from datetime import time as dt_time
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from clickhouse_connect import common
-from clickhouse_connect.driver import tzutil
+from clickhouse_connect.cc_sqlalchemy.datatypes.base import _DateTime64QueryParam
+from clickhouse_connect.driver import binding, tzutil
 from clickhouse_connect.driver.binding import (
     DT64Param,
     _binary_bind_value,
@@ -161,6 +164,16 @@ def test_format_query_value_time(value, expected):
 def test_format_bind_value_time(value, expected):
     assert format_bind_value(value) == expected
     assert format_bind_value(value, top_level=False) == f"'{expected}'"
+
+
+def test_dt64param_keeps_pandas_timestamp_nanoseconds():
+    ts = pd.Timestamp("2024-01-02 03:04:05.123456789")
+    assert format_bind_value(DT64Param(ts)) == "2024-01-02 03:04:05.123456789"
+    assert format_query_value(DT64Param(ts)) == "'2024-01-02 03:04:05.123456789'"
+    assert format_bind_value(DT64Param(pd.Timestamp("2024-01-02 03:04:05.000000007"))) == "2024-01-02 03:04:05.000000007"
+    assert format_bind_value(DT64Param(pd.Timestamp("2024-01-02 03:04:05.123456"))) == "2024-01-02 03:04:05.123456"
+    _, params = bind_query("SELECT {d:DateTime64(9)}", {"d": ts}, server_tz=timezone.utc)
+    assert params == {"param_d": "2024-01-02 03:04:05.123456789"}
 
 
 @pytest.mark.parametrize(
@@ -324,6 +337,175 @@ class TestBindQueryDateTime64Precision:
         query = "SELECT {vals:Array(Tuple(DateTime64(6), String))}"
         _, params = bind_query(query, {"vals": [(self.dt, "user_1")]}, server_tz=self.utc)
         assert params["param_vals"] == "[('2025-01-01 12:00:00.250306', 'user_1')]"
+
+    @pytest.mark.parametrize("separator", [" ", "\t", "\n"])
+    def test_unnamed_tuple_trailing_whitespace(self, separator):
+        query = f"SELECT {{val:Tuple(DateTime64(6){separator}, DateTime64(6){separator})}}"
+        _, params = bind_query(query, {"val": (self.dt, self.dt)}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 12:00:00.250306', '2025-01-01 12:00:00.250306')"
+
+    def test_named_tuple(self):
+        query = "SELECT {val:Tuple(a DateTime64(6), b String)}"
+        _, params = bind_query(query, {"val": (self.dt, "user_1")}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 12:00:00.250306', 'user_1')"
+
+    @pytest.mark.parametrize("separator", ["\t", "\n"])
+    @pytest.mark.parametrize("container", ["Tuple", "Nested"])
+    def test_named_element_whitespace(self, separator, container):
+        query = f"SELECT {{val:{container}(stamp{separator}DateTime64(6, 'Asia/Tokyo'))}}"
+        value = (self.dt,) if container == "Tuple" else [(self.dt,)]
+        _, params = bind_query(query, {"val": value}, server_tz=self.utc)
+        expected = "('2025-01-01 21:00:00.250306')"
+        assert params["param_val"] == (expected if container == "Tuple" else f"[{expected}]")
+
+    def test_named_tuple_tz_hint(self):
+        query = "SELECT {val:Tuple(a DateTime64(6, 'Asia/Tokyo'))}"
+        _, params = bind_query(query, {"val": (self.dt,)}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 21:00:00.250306')"
+
+    def test_tuple_element_tz_hints(self):
+        query = "SELECT {val:Tuple(a DateTime64(6, 'Asia/Tokyo'), b DateTime64(6, 'UTC'))}"
+        _, params = bind_query(query, {"val": (self.dt, self.dt)}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 21:00:00.250306', '2025-01-01 12:00:00.250306')"
+
+    @pytest.mark.parametrize("name", ["`a(b)`", "`a``b`", "`a\\`b`", '"a""b"'])
+    def test_quoted_tuple_element_name(self, name):
+        query = f"SELECT {{val:Tuple({name} DateTime64(6, 'Asia/Tokyo'))}}"
+        _, params = bind_query(query, {"val": (self.dt,)}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 21:00:00.250306')"
+
+    @pytest.mark.parametrize("param_type", [DT64Param, _DateTime64QueryParam])
+    @pytest.mark.parametrize("element_type", ["DateTime64(6, 'Asia/Tokyo')", "Variant(DateTime64(6, 'Asia/Tokyo'), String)"])
+    def test_tuple_element_tz_hint_applies_to_dt64param(self, param_type, element_type):
+        query = f"SELECT {{val:Tuple(a {element_type})}}"
+        wrapped = param_type(self.dt)
+        _, params = bind_query(query, {"val": (wrapped,)}, server_tz=self.utc)
+        assert params["param_val"] == "('2025-01-01 21:00:00.250306')"
+        assert wrapped.tz is None
+
+    def test_nested(self):
+        query = "SELECT {vals:Nested(a DateTime64(6), b String)}"
+        _, params = bind_query(query, {"vals": [(self.dt, "user_1")]}, server_tz=self.utc)
+        assert params["param_vals"] == "[('2025-01-01 12:00:00.250306', 'user_1')]"
+
+    def test_variant(self):
+        query = "SELECT {val:Variant(DateTime64(6), String)}"
+        _, params = bind_query(query, {"val": self.dt}, server_tz=self.utc)
+        assert params["param_val"] == "2025-01-01 12:00:00.250306"
+
+    def test_variant_with_datetime_alternative_unchanged(self):
+        query = "SELECT {val:Variant(DateTime, DateTime64(6))}"
+        _, params = bind_query(query, {"val": self.dt}, server_tz=self.utc)
+        assert params["param_val"] == "2025-01-01 12:00:00"
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.parametrize(
+        "other_type",
+        [
+            "String",
+            "Enum8('datetime' = 1)",
+            "Tuple(last_datetime String)",
+            "Array(Tuple(`last_datetime` String))",
+            "Nested(last_datetime String)",
+            "Map(String, Array(Tuple(last_datetime String)))",
+            "LowCardinality(Nullable(Enum8('datetime' = 1)))",
+        ],
+    )
+    def test_variant_single_datetime64_alternative_promotes(self, reverse, other_type):
+        alternatives = ["DateTime64(6, 'Asia/Tokyo')", other_type]
+        if reverse:
+            alternatives.reverse()
+        type_hint = f"Variant({', '.join(alternatives)})"
+        _, params = bind_query(f"SELECT {{val:{type_hint}}}", {"val": self.dt}, server_tz=self.utc)
+        assert params["param_val"] == "2025-01-01 21:00:00.250306"
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.parametrize(
+        "other_type",
+        [
+            "DateTime",
+            "DateTime32",
+            "Nullable(DateTime64(3))",
+            "Array(Tuple(last_datetime DateTime64(3)))",
+            "Nested(last_datetime DateTime64(3))",
+            "Map(String, Array(DateTime64(3)))",
+            "Variant(DateTime64(3), String)",
+            "Tuple(last_datetime dAtEtImE64(3))",
+        ],
+    )
+    def test_variant_nested_datetime_alternative_unchanged(self, reverse, other_type):
+        alternatives = ["DateTime64(6)", other_type]
+        if reverse:
+            alternatives.reverse()
+        _, params = bind_query(f"SELECT {{val:Variant({', '.join(alternatives)})}}", {"val": self.dt}, server_tz=self.utc)
+        assert params["param_val"] == "2025-01-01 12:00:00"
+
+    def test_variant_nested_single_alternative_promotes(self):
+        query = "SELECT {val:Array(Variant(DateTime64(6), String))}"
+        _, params = bind_query(query, {"val": [self.dt]}, server_tz=self.utc)
+        assert params["param_val"] == "['2025-01-01 12:00:00.250306']"
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.parametrize(
+        "alternatives, expected, expected_reversed",
+        [
+            (
+                ["DateTime64(3, 'UTC')", "DateTime64(6, 'Asia/Tokyo')"],
+                "2025-01-01 12:00:00",
+                "2025-01-01 21:00:00",
+            ),
+            (
+                ["DateTime('Asia/Tokyo')", "DateTime64(6, 'UTC')"],
+                "2025-01-01 21:00:00",
+                "2025-01-01 12:00:00",
+            ),
+            (
+                ["Array(DateTime64(3, 'UTC'))", "DateTime('Asia/Tokyo')"],
+                "2025-01-01 12:00:00",
+                "2025-01-01 21:00:00",
+            ),
+            (
+                ["DateTime32('Asia/Tokyo')", "DateTime64(6, 'UTC')"],
+                "2025-01-01 12:00:00",
+                "2025-01-01 12:00:00",
+            ),
+        ],
+    )
+    def test_variant_several_datetime_alternatives_unchanged(self, reverse, alternatives, expected, expected_reversed):
+        alternatives = list(alternatives)
+        if reverse:
+            alternatives.reverse()
+            expected = expected_reversed
+        type_hint = f"Variant({', '.join(alternatives)})"
+        _, params = bind_query(f"SELECT {{val:{type_hint}}}", {"val": self.dt}, server_tz=self.utc)
+        assert params["param_val"] == expected
+
+    @pytest.mark.parametrize(
+        "container", ["Array(Tuple(cache_stamp DateTime64(6), cache_key Int32))", "Nested(cache_stamp DateTime64(6), cache_key Int32)"]
+    )
+    def test_container_types_parsed_once_per_hint(self, monkeypatch, container):
+        binding._container_element_types.cache_clear()
+        parser = Mock(wraps=binding.parse_columns)
+        monkeypatch.setattr(binding, "parse_columns", parser)
+        values = [(self.dt, key) for key in range(13)]
+        query = f"SELECT {{val:{container}}}"
+        _, first = bind_query(query, {"val": values}, server_tz=self.utc)
+        parse_count = parser.call_count
+        assert 0 < parse_count <= 2
+        _, second = bind_query(query, {"val": values}, server_tz=self.utc)
+        assert parser.call_count == parse_count
+        assert first == second
+        assert first["param_val"].count(".250306") == len(values)
+
+    def test_map(self):
+        query = "SELECT {val:Map(String, DateTime64(6))}"
+        original = common.get_setting("dict_parameter_format")
+        common.set_setting("dict_parameter_format", "map")
+        try:
+            _, params = bind_query(query, {"val": {"user_1": self.dt}}, server_tz=self.utc)
+        finally:
+            common.set_setting("dict_parameter_format", original)
+        assert params["param_val"] == "{'user_1':'2025-01-01 12:00:00.250306'}"
 
     def test_tz_hint_with_precision(self):
         berlin = zoneinfo.ZoneInfo("Europe/Berlin")
@@ -711,12 +893,13 @@ class TestBindQueryDollarInParamName:
             "SELECT \u2018{id$x:Int32}\u2019",
         ],
     )
-    def test_decoy_placeholder_routes_server_side(self, query):
-        # Detection uses the regex over the raw query text, matching shipped 1.x semantics,
-        # so decoys inside strings and comments still route server-side.
-        q, params = bind_query(query, {"id$x": 13})
-        assert q == query
-        assert params == {"param_id$x": "13"}
+    def test_decoy_placeholder_uses_client_side_binding(self, query):
+        query += "\n, %(a)s"
+        parameters = {"id$x": 79, "a": 13}
+        q, params = bind_query(query, parameters)
+        assert q == query.replace("%(a)s", "13")
+        assert params == {}
+        assert not binding._binding_keeps_query_structure(query, parameters)
 
     @pytest.mark.parametrize(
         "query",
@@ -726,17 +909,124 @@ class TestBindQueryDollarInParamName:
             "SELECT '{idé:Int32}', '100%'",
         ],
     )
-    def test_decoy_placeholder_with_percent_literal_routes_server_side(self, query):
-        # Any shipped-1.x decoy match must keep the query off the client-side `%` path.
-        q, params = bind_query(query, {"a": "user_1"})
+    def test_decoy_placeholder_requires_percent_escaping(self, query):
+        with pytest.raises(ValueError):
+            bind_query(query, {"a": "user_1"})
+        q, params = bind_query(query.replace("%", "%%"), {"a": "user_1"})
         assert q == query
-        assert params == {"param_a": "user_1"}
+        assert params == {}
 
-    def test_decoy_type_hint_applies_alongside_real_placeholder(self):
+    def test_decoy_type_hint_is_ignored_alongside_real_placeholder(self):
         query = "SELECT '{fake$x:DateTime64(6)}', {real$x:Int32}"
         q, params = bind_query(query, {"fake$x": self.dt, "real$x": 13}, server_tz=self.utc)
         assert q == query
-        assert params == {"param_fake$x": "2026-01-01 12:00:00.250306", "param_real$x": "13"}
+        assert params == {"param_fake$x": "2026-01-01 12:00:00", "param_real$x": "13"}
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT 13 // {p:Int32}\n, %(a)s",
+            "SELECT 13 # {p:Int32}\n, %(a)s",
+            "SELECT 13 #!{p:Int32}\n, %(a)s",
+            "SELECT 13 /* outer /* {p:Int32} */ outer */, %(a)s",
+            "SELECT $${p:Int32}$$, %(a)s",
+            "SELECT $1${p:Int32}$1$, %(a)s",
+            "SELECT \u201c{p:Int32}\u201d, %(a)s",
+        ],
+    )
+    def test_additional_decoy_tokens_use_client_side_binding(self, query):
+        q, params = bind_query(query, {"a": 13})
+        assert q == query.replace("%(a)s", "13")
+        assert params == {}
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT '{p:Int32}, %(a)s",
+            'SELECT "{p:Int32}, %(a)s',
+            "SELECT `{p:Int32}, %(a)s",
+            "SELECT /* {p:Int32}, %(a)s",
+            "SELECT \u2018{p:Int32}, %(a)s",
+            "SELECT '{p:Int32}', {real:Int32}, 'unterminated %(a)s",
+        ],
+    )
+    def test_invalid_token_preserves_server_side_routing(self, query):
+        parameters = {"p": 79, "a": 13}
+        q, params = bind_query(query, parameters)
+        assert q == query
+        assert params == {"param_p": "79", "param_a": "13"}
+        assert binding._binding_keeps_query_structure(query, parameters)
+
+    def test_real_placeholder_preserves_mixed_binding_behavior(self):
+        query = "SELECT '{fake:Int32}', {real:Int32}, %(a)s"
+        parameters = {"real": 79, "a": 13}
+        q, params = bind_query(query, parameters)
+        assert q == query
+        assert params == {"param_real": "79", "param_a": "13"}
+        assert binding._binding_keeps_query_structure(query, parameters)
+
+    def test_decoy_with_binary_bind_uses_client_side_binding(self):
+        q, params = bind_query("SELECT '{p:Int32}', $x$, %(a)s", {"$x$": b"user_1", "a": 13})
+        assert q == b"SELECT '{p:Int32}', $x$user_1$x$, 13"
+        assert params == {}
+
+    @pytest.mark.parametrize(
+        "query, expected",
+        [
+            ("SELECT $x$, {a:Int32}, $x$", b"SELECT $x$user_1$x$, {a:Int32}, $x$user_1$x$"),
+            ("SELECT $x$, $t${d:Int32}$t$, {a:Int32}, $x$", b"SELECT $x$user_1$x$, $t${d:Int32}$t$, {a:Int32}, $x$user_1$x$"),
+            ("SELECT $x$, '{d:Int32}', {a:Int32}, $x$", b"SELECT $x$user_1$x$, '{d:Int32}', {a:Int32}, $x$user_1$x$"),
+        ],
+    )
+    def test_server_bind_between_repeated_binary_markers(self, query, expected):
+        q, params = bind_query(query, {"$x$": b"user_1", "a": 13})
+        assert q == expected
+        assert params == {"param_a": "13"}
+
+    def test_decoy_between_repeated_binary_markers_uses_client_side_binding(self):
+        q, params = bind_query("SELECT $x$, '{d:Int32}', %(a)s, $x$", {"$x$": b"user_1", "a": 13})
+        assert q == b"SELECT $x$user_1$x$, '{d:Int32}', 13, $x$user_1$x$"
+        assert params == {}
+
+    def test_no_placeholder_skips_sql_tokenization(self, monkeypatch):
+        tokenize = Mock(side_effect=AssertionError("Unexpected SQL tokenization"))
+        monkeypatch.setattr(binding, "_next_sql_token", tokenize)
+        assert binding._server_bind_matches("SELECT %(a)s, '{not a bind}'", ()) == []
+
+    def test_placeholder_without_opaque_tokens_skips_sql_tokenization(self, monkeypatch):
+        tokenize = Mock(side_effect=AssertionError("Unexpected SQL tokenization"))
+        monkeypatch.setattr(binding, "_next_sql_token", tokenize)
+        query = "SELECT {a:Int32}, {b:String}, 13 #x {c:Int32}\n"
+        assert binding._server_bind_matches(query, ()) == [("a", "Int32"), ("b", "String"), ("c", "Int32")]
+
+    def test_opaque_tokens_after_last_placeholder_skip_sql_tokenization(self, monkeypatch):
+        tokenize = Mock(side_effect=AssertionError("Unexpected SQL tokenization"))
+        monkeypatch.setattr(binding, "_next_sql_token", tokenize)
+        query = "SELECT {a:Int32} WHERE s = 'x' /* note */ AND t = 'unterminated"
+        assert binding._server_bind_matches(query, ()) == [("a", "Int32")]
+
+    def test_unterminated_token_after_last_placeholder_keeps_lexed_matches(self):
+        query = "SELECT '{p:Int32}', {real:Int32}, 'unterminated"
+        assert binding._server_bind_matches(query, ()) == [("real", "Int32")]
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT {a:Int32}",
+            "SELECT {a:Int32} WHERE b IN ({c:Array(UInt8)}) -{d:Int32}",
+            "SELECT 13{a:Int32}, abc{b:String}, {idé:Int32}, {13:Int32}",
+            "SELECT {a:Int32 {b:Int32}}",
+            "SELECT {a:Int32}#x {b:Int32}",
+            "SELECT {a:Enum8('x' = 1)}, {b:Int32}",
+        ],
+    )
+    def test_opaque_token_shortcut_matches_sql_tokenization(self, query, monkeypatch):
+        unpatched = binding._server_bind_matches(query, ("b",))
+        monkeypatch.setattr(binding, "_opaque_sql_opener_re", re.compile(r"(?!)"))
+        shortcut = binding._server_bind_matches(query, ("b",))
+        monkeypatch.setattr(binding, "_opaque_sql_opener_re", re.compile(r""))
+        tokenized = binding._server_bind_matches(query, ("b",))
+        assert unpatched == shortcut == tokenized
 
     def test_hash_without_required_suffix_does_not_hide_placeholder(self):
         query = "SELECT 1 #x {id$x:Int32}, %(a)s"

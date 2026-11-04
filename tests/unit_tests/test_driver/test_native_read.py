@@ -4,17 +4,19 @@ from datetime import date, datetime, timezone
 from ipaddress import IPv4Address
 from uuid import UUID
 
+import numpy as np
 import pytest
 from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.dynamic import typed_variant
+from clickhouse_connect.driver import ctypes
 from clickhouse_connect.driver.buffer import ResponseBuffer as PyResponseBuffer
 from clickhouse_connect.driver.exceptions import DataError, InternalError, NotSupportedError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext, QueryResult
 from clickhouse_connect.driver.transform import NativeTransform
-from tests.helpers import bytes_source
+from tests.helpers import bytes_source, native_insert_block
 from tests.unit_tests.test_driver.binary import NESTED_BINARY
 
 UINT16_NULLS = """
@@ -78,6 +80,60 @@ def check_result(result, expected, row_num=0, col_num=0):
 def test_uint16_nulls():
     result = parse_response(bytes_source(UINT16_NULLS))
     assert result.result_set == [(None,), (20,), (None,), (40,)]
+
+
+def test_date32_native_read():
+    dates = [date(2400, 2, 29), date(1, 1, 1), date(1600, 3, 1), date(9999, 12, 31), date(1500, 2, 28), date(1970, 1, 1)]
+    days = [value.toordinal() - date(1970, 1, 1).toordinal() for value in dates]
+    payload = struct.pack(f"<{len(days)}i", *days)
+    date_type = registry.get_from_name("Date32")
+    for chunk_size in (1, 7, 256):
+        source = bytes_source(payload, chunk_size, cls=ctypes.RespBuffCls)
+        assert list(ctypes.data_conv.read_date32_col(source, len(days))) == dates, chunk_size
+    header = bytes((1, len(days), 1)) + b"d\x06Date32"
+    source = bytes_source(header + payload, chunk_size=7, cls=ctypes.RespBuffCls)
+    assert parse_response(source).result_rows == [(value,) for value in dates]
+    source = bytes_source(payload, cls=ctypes.RespBuffCls)
+    assert list(date_type.read_column(source, len(days), QueryContext(query_formats={"Date32": "int"}))) == days
+    source = bytes_source(payload, cls=ctypes.RespBuffCls)
+    result = date_type.read_column(source, len(days), QueryContext(use_numpy=True))
+    assert result.dtype == "datetime64[D]"
+    assert result.astype("int64").tolist() == days
+
+    source = bytes_source(b"\x01\x00\x01d\x06Date32", cls=ctypes.RespBuffCls)
+    assert parse_response(source).result_rows == []
+
+    shapes = [
+        ("Date32", dates),
+        ("Nullable(Date32)", [None, *dates]),
+        ("Array(Date32)", [dates, []]),
+        ("Tuple(Date32)", [(value,) for value in dates]),
+        ("Array(Tuple(Nullable(Date32)))", [[(None,), *((value,) for value in dates)], []]),
+        ("LowCardinality(Date32)", [*dates, dates[0]]),
+        ("LowCardinality(Nullable(Date32))", [None, *dates, None]),
+    ]
+    for type_name, values in shapes:
+        data = native_insert_block([(value,) for value in values], ["d"], [registry.get_from_name(type_name)])
+        source = bytes_source(bytes(data), cls=ctypes.RespBuffCls)
+        assert parse_response(source).result_rows == [(value,) for value in values], type_name
+    # NULL uses a zero date payload, decoded before the null map is applied.
+    days = date(1600, 1, 1).toordinal() - date(1970, 1, 1).toordinal()
+    source = bytes_source(b"\x01\x00" + struct.pack("<2i", 0, days), cls=ctypes.RespBuffCls)
+    nullable = registry.get_from_name("Nullable(Date32)")
+    assert list(nullable.read_column(source, 2, QueryContext())) == [None, date(1600, 1, 1)]
+
+    for day in (-719163, 2932897, -(2**31), 2**31 - 1, -719528):
+        payload = struct.pack("<i", day)
+        source = bytes_source(payload, cls=ctypes.RespBuffCls)
+        with pytest.raises(ValueError):
+            ctypes.data_conv.read_date32_col(source, 1)
+        source = bytes_source(payload, cls=ctypes.RespBuffCls)
+        assert list(date_type.read_column(source, 1, QueryContext(query_formats={"Date32": "int"}))) == [day]
+    # Year zero is valid on the server, but cannot be represented by datetime.date.
+    payload = struct.pack("<i", -719528)
+    source = bytes_source(b"\x01\x01\x01d\x06Date32" + payload, cls=ctypes.RespBuffCls)
+    with pytest.raises(ValueError):
+        _ = parse_response(source).result_rows
 
 
 def test_low_cardinality():
@@ -224,6 +280,24 @@ def test_empty_tuple_native_markers_and_stream_alignment(buffer_cls):
 
     assert tuple_type.read_column_data(source, 3, QueryContext(), []) == ((), (), ())
     assert list(uint8_type.read_column_data(source, 3, QueryContext(), None)) == [13, 79, 80]
+
+
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+@pytest.mark.parametrize("type_name", ["Array(UInt8)", "Array(String)", "UInt64", "FixedString(4)", "Nullable(String)"])
+def test_zero_row_column_as_first_read(buffer_cls, type_name):
+    source = bytes_source(bytes((79,)), cls=buffer_cls)
+
+    assert list(registry.get_from_name(type_name).read_column(source, 0, QueryContext())) == []
+    assert source.read_byte() == 79
+
+
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+def test_empty_string_after_one_byte_first_chunk(buffer_cls):
+    # The length byte arrives alone, so the C buffer has not loaded a chunk before the zero byte read
+    source = bytes_source(bytes((0, 79)), chunk_size=1, cls=buffer_cls)
+
+    assert source.read_leb128_str() == ""
+    assert source.read_byte() == 79
 
 
 def test_empty_tuple_native_write_and_size():
@@ -456,6 +530,40 @@ def test_nullable_empty_tuple_composes_in_containers(type_name, values, expected
     assert ch_type.read_column(source, 3, QueryContext()) == expected
     assert list(registry.get_from_name("UInt8").read_column(source, 3, QueryContext())) == [13, 79, 80]
     assert ch_type.insert_name == type_name
+
+
+@pytest.mark.parametrize(
+    "type_name, values",
+    [
+        ("Array(UInt8)", [[13, 79], [], [80]]),
+        ("Array(UInt8)", [[], [], []]),
+        ("Array(Nullable(String))", [["user_1", None], [], ["user_2"]]),
+        ("Array(LowCardinality(String))", [["user_1", "user_2"], [], ["user_1"]]),
+        ("Array(Array(UInt8))", [[[13], []], [], [[79, 80]]]),
+        ("Array(Array(Array(UInt8)))", [[[[13]], [[], [79]]], [[]], []]),
+    ],
+)
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+def test_array_native_round_trip_and_stream_alignment(type_name, values, buffer_cls):
+    ch_type = registry.get_from_name(type_name)
+    dest = bytearray()
+    ch_type.write_column(values, dest, InsertContext("", [], []))
+    source = bytes_source(bytes(dest) + bytes((13, 79, 80)), cls=buffer_cls)
+
+    assert ch_type.read_column(source, len(values), QueryContext()) == values
+    assert list(registry.get_from_name("UInt8").read_column(source, 3, QueryContext())) == [13, 79, 80]
+
+
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+def test_array_numpy_read_keeps_numpy_scalars(buffer_cls):
+    ch_type = registry.get_from_name("Array(Array(UInt64))")
+    values = [[[13, 79], []], [], [[80]]]
+    dest = bytearray()
+    ch_type.write_column(values, dest, InsertContext("", [], []))
+
+    result = ch_type.read_column(bytes_source(bytes(dest), cls=buffer_cls), 3, QueryContext(use_numpy=True))
+    assert result == values
+    assert {type(v) for row in result for inner in row for v in inner} == {np.uint64}
 
 
 @pytest.mark.parametrize(

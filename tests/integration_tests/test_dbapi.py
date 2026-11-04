@@ -30,6 +30,21 @@ def dbapi_connection_fixture(test_config: TestConfig, test_db: str):
     connection.close()
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT '{p:String}', %(a)s",
+        "SELECT '{p:String}', %(a)s AS `{p:Int32}`",
+        "SELECT '{p:String}', /* {p:Int32} */ %(a)s",
+        "SELECT $tag${p:String}$tag$, %(a)s",
+    ],
+)
+def test_execute_with_decoy_placeholder(dbapi_connection, query):
+    with dbapi_connection.cursor() as cursor:
+        cursor.execute(query, {"a": 13})
+        assert cursor.fetchone() == ("{p:String}", 13)
+
+
 def test_executemany_with_tuple_rows(dbapi_connection, table_context: Callable):
     """Regression test: executemany with sequence rows (e.g. Airflow's
     DbApiHook.insert_rows) used to crash with AttributeError in _try_bulk_insert.

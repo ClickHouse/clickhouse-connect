@@ -817,8 +817,14 @@ class AsyncClient(Client):
             return ""
         return QuerySummary(execution.summary)
 
-    async def ping(self) -> bool:  # type: ignore[override]
-        return await self._backend.ping()
+    async def ping(self, timeout: float | None = None) -> bool:  # type: ignore[override]
+        """
+        Validate the connection. Network failures return False (see debug logs).
+        :param timeout: Positive total timeout in seconds for the HTTP request. Defaults to 3 seconds when None.
+        :raises ProgrammingError: If timeout is zero or negative.
+        :return: ClickHouse server is up and reachable
+        """
+        return await self._backend.ping(timeout)
 
     async def raw_query(  # type: ignore[override]
         self,

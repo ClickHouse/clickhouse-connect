@@ -89,7 +89,6 @@ def run_setup():
             'tzdata; sys_platform == "win32"',
             'backports.zstd>=1.3.0; python_version<"3.14"',
             'lz4; python_version<"3.14"',
-            'lz4>=4.4.5; python_version>="3.14"',
         ],
         extras_require={
             "sqlalchemy": ["sqlalchemy>=1.4.40,<3.0"],
@@ -107,6 +106,7 @@ def run_setup():
             "tzlocal": ["tzlocal>=4.0"],
             "tzdata": ["tzdata"],
             "async": ["aiohttp>=3.9.0"],
+            "lz4": ["lz4>=4.4.5"],
             "chdb": ["chdb>=4.1.7"],
             "rust": ["clickhouse-connect-core>=0.2.1,<0.3"],
         },

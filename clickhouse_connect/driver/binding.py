@@ -1,10 +1,12 @@
+import copy
 import ipaddress
 import re
 import uuid
 import zoneinfo
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from enum import Enum
+from functools import lru_cache
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -12,7 +14,7 @@ from clickhouse_connect import common
 from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.common import dict_copy
 from clickhouse_connect.driver.exceptions import ProgrammingError
-from clickhouse_connect.driver.parser import parse_callable
+from clickhouse_connect.driver.parser import parse_callable, parse_columns
 from clickhouse_connect.json_impl import any_to_json
 
 BS = "\\"
@@ -21,8 +23,8 @@ must_escape = (BS, "'", "`", "\t", "\n")
 # a bareword only through ASCII letters, digits, and underscores and never absorb `$`.
 _BIND_NAME_PATTERN = r"(?:[A-Za-z_][A-Za-z0-9_$]*|\$[A-Za-z0-9_][A-Za-z0-9_$]*|[0-9]+[A-Za-z_][A-Za-z0-9_]*)"
 _bind_name_re = re.compile(rf"{_BIND_NAME_PATTERN}\Z")
-# Routing keeps the shipped 1.x `\w+` names in the union so decoy placeholders such as
-# `{13:Int32}` or `{idé:Int32}` still select server-side binding. `\w` cannot absorb `$`.
+# Routing keeps the shipped 1.x `\w+` names such as `{13:Int32}` or `{idé:Int32}`
+# in the union for unquoted placeholders. `\w` cannot absorb `$`.
 external_bind_re = re.compile(rf"\{{({_BIND_NAME_PATTERN}|\w+):([^}}]+)\}}")
 _heredoc_re = re.compile(r"\$[A-Za-z0-9_]*\$")
 _heredoc_start_re = re.compile(r"(?=(\$[A-Za-z0-9_]*\$))")
@@ -649,8 +651,42 @@ def _binary_bind_values(parameters: dict[str, Any]) -> dict[str, Any]:
     return binary_binds
 
 
+# Openers of tokens the SQL lexer skips or treats as opaque. An opaque span can only hide a
+# placeholder that starts after it opens, so without an opener before the last raw match the
+# raw regex and the token scan agree and routing skips the token loop.
+_opaque_sql_opener_re = re.compile("[" + re.escape("".join(_quote_closers) + "".join(_curly_quote_closers) + "$") + r"]|/\*|--|//|#[ !]")
+
+
 def _server_bind_matches(query: str, binary_names: Collection[str]) -> list[tuple[str, str]]:
-    return [(name, type_str) for name, type_str in external_bind_re.findall(query) if name not in binary_names]
+    raw_matches = list(external_bind_re.finditer(query))
+    if not raw_matches:
+        return []
+    filtered = [(match.group(1), match.group(2)) for match in raw_matches if match.group(1) not in binary_names]
+    last_end = raw_matches[-1].end()
+    if _opaque_sql_opener_re.search(query, 0, last_end) is None:
+        return filtered
+
+    # Each binary marker becomes its own heredoc after substitution, so it never opens one here.
+    heredoc_ends = (
+        {match.group(1): match.start() for match in _heredoc_start_re.finditer(query) if match.group(1) not in binary_names}
+        if "$" in query
+        else {}
+    )
+    matches = []
+    index = 0
+    while index < last_end:
+        token, token_end = _next_sql_token(query, index, heredoc_ends)
+        if token == _SQL_TOKEN_INVALID:
+            return filtered
+        if token == _SQL_TOKEN_TRIVIA:
+            index = token_end
+            continue
+        if query[index] == "{":
+            match = external_bind_re.fullmatch(query, index, token_end)
+            if match is not None and match.group(1) not in binary_names:
+                matches.append((match.group(1), match.group(2)))
+        index = token_end
+    return matches
 
 
 def _binding_keeps_query_structure(query: str, parameters: Sequence | dict[str, Any] | None) -> bool:
@@ -684,20 +720,30 @@ def _legacy_naive_datetime_binding() -> bool:
 
 
 class DT64Param:
-    def __init__(self, value: datetime):
+    tz: tzinfo | None = None
+
+    def __init__(self, value: datetime, tz: tzinfo | None = None):
         self.value = value
+        self.tz = tz
 
     def format(self, tz: tzinfo | None, top_level: bool) -> str:
+        if self.tz is not None:
+            tz = self.tz
         value = self.value
         if _legacy_naive_datetime_binding():
             if tz:
                 value = value.astimezone(tz)
         elif tz is not None and _datetime_is_aware(value):
             value = value.astimezone(tz)
-        s = value.strftime("%Y-%m-%d %H:%M:%S.%f")
-        if top_level:
-            return s
-        return f"'{s}'"
+        return self._render(value, top_level)
+
+    @staticmethod
+    def _render(value: datetime, top_level: bool) -> str:
+        rendered = value.strftime("%Y-%m-%d %H:%M:%S.%f")
+        nanosecond = getattr(value, "nanosecond", 0)
+        if nanosecond:
+            rendered += f"{nanosecond:03d}"
+        return rendered if top_level else f"'{rendered}'"
 
 
 def quote_identifier(identifier: str) -> str:
@@ -750,15 +796,75 @@ def finalize_query(query: str, parameters: Sequence | dict[str, Any] | None, ser
     return query % tuple(format_query_value(v, server_tz) for v in parameters)
 
 
+# Cached because containers unwrap the same element type for every value
+@lru_cache(maxsize=256)
 def _unwrap_outer(type_str: str) -> tuple[str, tuple]:
     """Strip LowCardinality/Nullable wrappers and return (base_name, args)"""
     base = type_str.strip()
-    if base[:15].lower() == "lowcardinality(":
-        base = base[15:-1]
-    if base[:9].lower() == "nullable(":
-        base = base[9:-1]
-    base_name, values, _ = parse_callable(base)
-    return base_name, values
+    while True:
+        base_name, values, _ = parse_callable(base)
+        if base_name.lower() not in ("lowcardinality", "nullable") or len(values) != 1:
+            return base_name, values
+        base = str(values[0])
+
+
+@lru_cache(maxsize=256)
+def _container_element_types(type_str: str) -> tuple[str, ...]:
+    """Parse Tuple or Nested element types."""
+    return _container_columns(type_str)[1]
+
+
+@lru_cache(maxsize=256)
+def _container_columns(type_str: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    _, values = _unwrap_outer(type_str)
+    return parse_columns(f"({', '.join(str(t).strip() for t in values)})")
+
+
+def _named_tuple_values(names: tuple[str, ...], value: Mapping) -> tuple:
+    missing = [name for name in names if name not in value]
+    unexpected = [name for name in value if name not in names]
+    if missing or unexpected:
+        raise ProgrammingError(f"Named Tuple fields do not match: missing {missing!r}, unexpected {unexpected!r}")
+    return tuple(value[name] for name in names)
+
+
+def _normalize_named_tuples(type_str: str, value: Any) -> Any:
+    """Put mapping values in the declared order of named Tuple fields."""
+    if value is None or "tuple" not in type_str.lower():
+        return value
+    try:
+        base_name, types = _unwrap_outer(type_str)
+        base_name = base_name.lower()
+        columns = _container_columns(type_str) if base_name == "tuple" else None
+    except Exception:
+        return value
+    if columns is not None:
+        names, element_types = columns
+        if names and isinstance(value, Mapping):
+            value = _named_tuple_values(names, value)
+        if isinstance(value, tuple) and len(value) == len(element_types):
+            return tuple(_normalize_named_tuples(t, item) for t, item in zip(element_types, value))
+    elif base_name == "array" and types and isinstance(value, (list, tuple)):
+        items = (_normalize_named_tuples(str(types[0]), item) for item in value)
+        return tuple(items) if isinstance(value, tuple) else list(items)
+    elif base_name == "map" and len(types) == 2 and isinstance(value, dict) and common.get_setting("dict_parameter_format") == "map":
+        key_type, value_type = (str(t) for t in types)
+        return {_normalize_named_tuples(key_type, key): _normalize_named_tuples(value_type, item) for key, item in value.items()}
+    return value
+
+
+@lru_cache(maxsize=256)
+def _mentions_datetime(type_str: str) -> bool:
+    """Find datetime types without counting field names or enum labels."""
+    base_name, values = _unwrap_outer(type_str)
+    base_name = base_name.lower()
+    if base_name in ("datetime", "datetime32", "datetime64"):
+        return True
+    if base_name in ("tuple", "nested"):
+        return any(_mentions_datetime(t) for t in _container_element_types(type_str))
+    if base_name in ("array", "map", "variant", "nullable", "lowcardinality"):
+        return any(_mentions_datetime(str(t)) for t in values)
+    return False
 
 
 def _extract_tz_from_type(type_str: str) -> tzinfo | None:
@@ -786,6 +892,12 @@ def _extract_tz_from_type(type_str: str) -> tzinfo | None:
         return None
 
 
+@lru_cache(maxsize=256)
+def _datetime64_type_tz(type_str: str) -> tzinfo | None:
+    """Cached _extract_tz_from_type, since containers resolve the same element type for every value."""
+    return _extract_tz_from_type(type_str)
+
+
 def _promote_datetime64(type_str: str, value):
     """Wrap values bound to a DateTime64 hint in DT64Param to preserve precision."""
     if value is None or "datetime64" not in type_str.lower():
@@ -793,13 +905,33 @@ def _promote_datetime64(type_str: str, value):
     try:
         base_name, values = _unwrap_outer(type_str)
         base_name = base_name.lower()
+        if base_name == "variant" and isinstance(value, (datetime, DT64Param)):
+            datetime_alts = [str(t) for t in values if _mentions_datetime(str(t))]
+            if len(datetime_alts) == 1 and _unwrap_outer(datetime_alts[0])[0].lower() == "datetime64":
+                return _promote_datetime64(datetime_alts[0], value)
         if base_name == "datetime64":
-            return DT64Param(value) if isinstance(value, datetime) else value
+            tz = _datetime64_type_tz(type_str)
+            if isinstance(value, datetime):
+                return DT64Param(value, tz)
+            if isinstance(value, DT64Param) and value.tz is None and tz is not None:
+                promoted = copy.copy(value)
+                promoted.tz = tz
+                return promoted
+            return value
         if base_name == "array" and values and isinstance(value, (list, tuple)):
             inner = str(values[0])
             return type(value)(_promote_datetime64(inner, x) for x in value)
-        if base_name == "tuple" and isinstance(value, tuple) and len(values) == len(value):
-            return tuple(_promote_datetime64(str(t), x) for t, x in zip(values, value))
+        if base_name == "tuple" and isinstance(value, tuple):
+            element_types = _container_element_types(type_str)
+            if len(element_types) == len(value):
+                return tuple(_promote_datetime64(t, x) for t, x in zip(element_types, value))
+        if base_name == "nested" and isinstance(value, (list, tuple)):
+            element_types = _container_element_types(type_str)
+            element_type = f"Tuple({', '.join(element_types)})"
+            return type(value)(_promote_datetime64(element_type, x) for x in value)
+        if base_name == "map" and isinstance(value, dict) and len(values) == 2 and common.get_setting("dict_parameter_format") == "map":
+            key_type, value_type = (str(t) for t in values)
+            return {_promote_datetime64(key_type, k): _promote_datetime64(value_type, v) for k, v in value.items()}
         return value
     except Exception:
         return value
@@ -853,9 +985,7 @@ def bind_query(
         for key in binary_binds.keys():
             del params_copy[key]
 
-        # Placeholder detection and routing always use the regex over the raw query text,
-        # matching shipped 1.x semantics. The lexer scan below only validates non-buffer
-        # `$name$` keys against server heredoc parsing.
+        # Validate non-buffer `$name$` keys against server heredoc parsing.
         if nonbinary_marker_keys and any(key in query for key in nonbinary_marker_keys):
             match_objects, raw_markers = _external_bind_matches(query, nonbinary_marker_keys)
             for key in params_copy:
@@ -910,6 +1040,7 @@ def bind_query(
                 tz = server_tz
                 param_type = param_types.get(k)
                 if param_type is not None:
+                    v = _normalize_named_tuples(param_type, v)
                     hint_tz = _extract_tz_from_type(param_type)
                     if hint_tz is not None:
                         tz = hint_tz

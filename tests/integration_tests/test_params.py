@@ -1,7 +1,7 @@
 import os
 import time
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -122,6 +122,61 @@ def test_datetime_64_params(param_client: Client, call):
     assert result[0] == dt_values
 
 
+@pytest.mark.parametrize(
+    "type_hint, value, expected",
+    [
+        ("Tuple(a DateTime64(6), b Int32)", (datetime(2024, 1, 2, 3, 4, 5, 123456), 1), "('2024-01-02 03:04:05.123456',1)"),
+        (
+            "Tuple(a DateTime64(6, 'Asia/Tokyo'))",
+            (datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc),),
+            "('2024-01-02 12:04:05.123456')",
+        ),
+        (
+            "Tuple(a DateTime64(6, 'Asia/Tokyo'))",
+            (DT64Param(datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc)),),
+            "('2024-01-02 12:04:05.123456')",
+        ),
+        (
+            "Tuple(a DateTime64(6, 'Asia/Tokyo'), b DateTime64(6, 'UTC'))",
+            (datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc),) * 2,
+            "('2024-01-02 12:04:05.123456','2024-01-02 03:04:05.123456')",
+        ),
+        ("Nested(a DateTime64(6))", [(datetime(2024, 1, 2, 3, 4, 5, 123456),)], "[('2024-01-02 03:04:05.123456')]"),
+        ("Variant(DateTime64(6), String)", datetime(2024, 1, 2, 3, 4, 5, 123456), "2024-01-02 03:04:05.123456"),
+    ],
+)
+def test_datetime64_params_in_containers(param_client: Client, call, type_hint, value, expected):
+    result = call(param_client.query, f"SELECT toString({{p:{type_hint}}})", parameters={"p": value})
+    assert result.first_row[0] == expected
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("other_type", ["String", "Enum8('datetime' = 1)", "Tuple(last_datetime String)"])
+def test_datetime64_variant_single_alternative(param_client: Client, call, reverse, other_type):
+    alternatives = ["DateTime64(6, 'Asia/Tokyo')", other_type]
+    if reverse:
+        alternatives.reverse()
+    type_hint = f"Variant({', '.join(alternatives)})"
+    value = datetime(2024, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc)
+    query = (
+        "SELECT variantType(v), toUnixTimestamp64Micro(variantElement(v, 'DateTime64(6, \\'Asia/Tokyo\\')')) "
+        f"FROM (SELECT {{p:{type_hint}}} AS v)"
+    )
+    result = call(param_client.query, query, parameters={"p": value})
+    assert result.first_row == ("DateTime64(6, 'Asia/Tokyo')", 1704164645123456)
+
+
+def test_datetime64_params_in_map(param_client: Client, call):
+    original = common.get_setting("dict_parameter_format")
+    common.set_setting("dict_parameter_format", "map")
+    try:
+        value = {"k": datetime(2024, 1, 2, 3, 4, 5, 123456)}
+        result = call(param_client.query, "SELECT toString({p:Map(String, DateTime64(6))})", parameters={"p": value})
+    finally:
+        common.set_setting("dict_parameter_format", original)
+    assert result.first_row[0] == "{'k':'2024-01-02 03:04:05.123456'}"
+
+
 def test_pyformat_64_datetime_params(param_client: Client, call):
     parameters = {f"stamp_{index}": datetime(2026, 1, 1, 12, 0, index % 60, 250306) for index in range(1, 65)}
     query = "SELECT " + ", ".join(f"%({name})s" for name in parameters)
@@ -201,10 +256,49 @@ def test_non_binary_value_for_raw_binary_marker_raises(param_client: Client, cal
         call(param_client.query, "SELECT $x$ AS v", parameters={"$x$": 13})
 
 
-def test_decoy_placeholder_with_dollar_literal_routes_server_side(param_client: Client, call):
-    # The decoy matches and sends a harmless extra param, and the query routes server-side.
-    row = call(param_client.query, "SELECT '{a:String}', '100%$'", parameters={"a": "user_1"}).first_row
+def test_server_bind_between_repeated_binary_markers(param_client: Client, call):
+    row = call(
+        param_client.query,
+        "SELECT $x$ AS v1, {a:Int32} AS a, $x$ AS v2",
+        parameters={"$x$": b"user_1", "a": 13},
+    ).first_row
+    assert row == ("user_1", 13, "user_1")
+
+
+def test_decoy_placeholder_with_escaped_percent_literal(param_client: Client, call):
+    row = call(param_client.query, "SELECT '{a:String}', '100%%$'", parameters={"a": "user_1"}).first_row
     assert row == ("{a:String}", "100%$")
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "WITH '{p:String}' AS unused SELECT %(a)s",
+        r"WITH 'it\'s {p:String}' AS unused SELECT %(a)s",
+        "WITH 'it''s {p:String}' AS unused SELECT %(a)s",
+        "SELECT %(a)s AS `{p:String}`",
+        'SELECT %(a)s AS "{p:String}"',
+        "SELECT /* {p:String} */ %(a)s",
+        "SELECT /* outer /* {p:String} */ outer */ %(a)s",
+        "SELECT -- {p:String}\n %(a)s",
+        "SELECT // {p:String}\n %(a)s",
+        "SELECT # {p:String}\n %(a)s",
+        "SELECT #!{p:String}\n %(a)s",
+        "WITH $${p:String}$$ AS unused SELECT %(a)s",
+        "WITH $tag${p:String}$tag$ AS unused SELECT %(a)s",
+        "WITH $1${p:String}$1$ AS unused SELECT %(a)s",
+    ],
+)
+@pytest.mark.parametrize("method", ["query", "command", "raw_query"])
+def test_decoy_placeholder_with_client_side_binding(param_client: Client, call, query, method):
+    kwargs = {"fmt": "TabSeparated"} if method == "raw_query" else {}
+    result = call(getattr(param_client, method), query, parameters={"a": 13}, **kwargs)
+    if method == "query":
+        assert result.first_row == (13,)
+    elif method == "command":
+        assert result == 13
+    else:
+        assert result == b"13\n"
 
 
 def test_dollar_delimited_str_param_binds(param_client: Client, call):

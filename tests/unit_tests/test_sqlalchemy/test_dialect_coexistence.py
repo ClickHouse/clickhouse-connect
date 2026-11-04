@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.schema import CreateTable
+from sqlalchemy.sql.elements import TextClause
 
 from clickhouse_connect.cc_sqlalchemy import inspector as inspector_module
 from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
@@ -319,16 +320,24 @@ def test_foreign_dialect_coexistence(foreign_dialect_path, provider, cache):
 
 @pytest.mark.parametrize("kind", ["table", "dictionary"])
 def test_reflection_preserves_public_keys_and_copies_canonical_metadata(monkeypatch, kind):
+    expressions = [
+        ("default_value", "DEFAULT", "13", "server_default"),
+        ("materialized_value", "MATERIALIZED", "id + 13", "clickhouse_materialized"),
+        ("alias_value", "ALIAS", "id + 79", "clickhouse_alias"),
+    ]
+    if kind == "table":
+        expressions.append(("ttl_value", "TTL", "id + INTERVAL 1 DAY", "clickhouse_ttl"))
     rows = [
         SimpleNamespace(
-            name="value",
+            name=name,
             type="UInt32",
             comment="",
             codec_expression="ZSTD(3)",
-            ttl_expression="id + INTERVAL 1 DAY",
-            default_type="MATERIALIZED",
-            default_expression="id + 13",
+            ttl_expression=expression if clause == "TTL" else "",
+            default_type=clause if clause != "TTL" else "",
+            default_expression=expression if clause != "TTL" else "",
         )
+        for name, clause, expression, _key in expressions
     ]
     connection = SimpleNamespace(execute=lambda *_args, **_kwargs: rows)
     table_metadata = SimpleNamespace(engine="Dictionary" if kind == "dictionary" else "Memory", engine_full="Memory", comment="")
@@ -337,16 +346,20 @@ def test_reflection_preserves_public_keys_and_copies_canonical_metadata(monkeypa
         inspector_module,
         "get_dictionary_create_sql",
         lambda *_args: (
-            "CREATE DICTIONARY default.lookup (\n`value` UInt32 MATERIALIZED id + 13\n)\n"
-            "PRIMARY KEY value\nSOURCE(CLICKHOUSE(TABLE 'source'))\nLAYOUT(FLAT())\nLIFETIME(MIN 0 MAX 79)"
+            "CREATE DICTIONARY default.lookup (\n"
+            + ",\n".join(f"`{name}` UInt32 {clause} {expression}" for name, clause, expression, _key in expressions)
+            + "\n)\nPRIMARY KEY default_value\nSOURCE(CLICKHOUSE(TABLE 'source'))\nLAYOUT(FLAT())\nLIFETIME(MIN 0 MAX 79)"
         ),
     )
     public_columns = inspector_module.get_columns(connection, "lookup", "default")
-    assert "clickhouse_materialized" in public_columns[0]
-    assert not any(key.startswith("clickhousedb_") for key in public_columns[0])
+    assert len(public_columns) == len(expressions)
+    for column, (name, _clause, expression, key) in zip(public_columns, expressions):
+        assert column["name"] == name
+        assert isinstance(column[key], str)
+        assert column[key] == expression
+        assert not any(key.startswith("clickhousedb_") for key in column)
     if kind == "table":
         assert public_columns[0]["clickhouse_codec"] == "ZSTD(3)"
-        assert str(public_columns[0]["clickhouse_ttl"]) == "id + INTERVAL 1 DAY"
     else:
         public_metadata = inspector_module.get_dictionary_metadata(connection, "lookup", "default")
         assert public_metadata["clickhouse_table_type"] == "dictionary"
@@ -361,10 +374,15 @@ def test_reflection_preserves_public_keys_and_copies_canonical_metadata(monkeypa
     inspector_module.ChInspector.reflect_table(target, table)
     for reflected in (table, table.to_metadata(sa.MetaData())):
         assert all(key.startswith("clickhousedb_") for key in dict(reflected.kwargs))
-        assert "clickhousedb_materialized" in dict(reflected.c.value.kwargs)
-        assert not any(key.startswith("clickhouse_") for key in dict(reflected.c.value.kwargs))
+        for name, _clause, expression, key in expressions:
+            column = reflected.c[name]
+            assert not any(key.startswith("clickhouse_") for key in dict(column.kwargs))
+            clause = column.server_default.arg if key == "server_default" else column.kwargs[key.replace("clickhouse_", "clickhousedb_")]
+            assert isinstance(clause, TextClause)
+            assert clause.text == expression
         sql = str(CreateTable(reflected).compile(dialect=ClickHouseDialect()))
-        assert "MATERIALIZED id + 13" in sql
+        for _name, clause, expression, _key in expressions:
+            assert f"{clause} {expression}" in sql
         if kind == "dictionary":
             assert "CREATE DICTIONARY" in sql
         else:
