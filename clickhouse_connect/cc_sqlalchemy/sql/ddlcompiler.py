@@ -119,9 +119,9 @@ class ClickHouseDDLHelper:
         return render_setting_value(value)
 
 
-def column_specification(dialect, column: Column) -> str:
+def column_specification(dialect, column: Column, *, include_type: bool = True) -> str:
     compiler = dialect.ddl_compiler(dialect, None)
-    return compiler.get_column_specification(column)
+    return compiler.get_column_specification(column, include_type=include_type)
 
 
 class ChDDLCompiler(DDLCompiler):
@@ -190,10 +190,12 @@ class ChDDLCompiler(DDLCompiler):
     def visit_drop_column(self, drop, **_):
         return f"ALTER TABLE {format_table(drop.element)} DROP COLUMN {quote_identifier(drop.column.name)}"
 
-    def get_column_specification(self, column: Column, **_):
-        effective_type = ClickHouseDDLHelper.effective_column_type(column)
-        compiled_type = self.dialect.type_compiler.process(effective_type, type_expression=column)
-        text = f"{quote_identifier(column.name)} {compiled_type}"
+    def get_column_specification(self, column: Column, include_type: bool = True, **_):
+        text = quote_identifier(column.name)
+        if include_type:
+            effective_type = ClickHouseDDLHelper.effective_column_type(column)
+            compiled_type = self.dialect.type_compiler.process(effective_type, type_expression=column)
+            text += f" {compiled_type}"
         materialized = ClickHouseDDLHelper.get_option(column, "materialized")
         alias = ClickHouseDDLHelper.get_option(column, "alias")
         # DEFAULT, MATERIALIZED, and ALIAS are mutually exclusive in ClickHouse.

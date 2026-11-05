@@ -22,6 +22,7 @@ from clickhouse_connect.driver.client import _INTERNAL_QUERY_FORMATS
 
 _INTERNAL_QUERY_OPTION = "ch_internal_query"
 _INTERNAL_QUERY_SENTINEL = object()
+VIEW_ENGINE_KINDS = {"View": "view", "MaterializedView": "materialized_view", "WindowView": "window_view", "LiveView": "live_view"}
 _EXPRESSION_KEYS = ("server_default", "clickhouse_materialized", "clickhouse_alias", "clickhouse_ttl")
 
 
@@ -68,6 +69,23 @@ def get_table_metadata(connection, table_name, schema=None):
 def get_engine(connection, table_name, schema=None):
     row = get_table_metadata(connection, table_name, schema)
     return build_engine(row.engine_full)
+
+
+def get_view_definition(connection, view_name: str, schema: str | None = None) -> str | None:
+    """Return the stored SELECT of a view or materialized view, or None for other objects."""
+    database = _database_name(connection, schema)
+    result_set = connection.execute(
+        with_internal_query_formats(
+            text("SELECT as_select FROM system.tables WHERE database = :database AND name = :view_name AND engine IN :engines").bindparams(
+                bindparam("database", type_=String()),
+                bindparam("view_name", type_=String()),
+                bindparam("engines", expanding=True),
+            )
+        ),
+        {"database": database, "view_name": view_name, "engines": sorted(VIEW_ENGINE_KINDS)},
+    )
+    row = next(result_set, None)
+    return row.as_select if row else None
 
 
 def get_dictionary_create_sql(connection, table_name: str, schema: str | None = None) -> str:
@@ -219,8 +237,14 @@ class ChInspector(Inspector):
                     table.kwargs[key] = value
                 return
 
-            table.engine = build_engine(table_metadata.engine_full)
             table.comment = table_metadata.comment or None
+            view_kind = VIEW_ENGINE_KINDS.get(table_metadata.engine)
+            if view_kind is not None:
+                # Views carry no engine. Record the kind so autogenerate can tell them from tables.
+                table.engine = None
+                table.kwargs["clickhousedb_table_type"] = view_kind
+                return
+            table.engine = build_engine(table_metadata.engine_full)
             if table.engine is not None:
                 table.kwargs["clickhousedb_engine"] = table.engine
 

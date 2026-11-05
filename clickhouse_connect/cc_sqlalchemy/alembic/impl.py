@@ -9,6 +9,7 @@ from sqlalchemy import Column, Index, MetaData, String, Table, TypeDecorator, te
 from sqlalchemy.sql.dml import Delete, Update
 from sqlalchemy.sql.elements import quoted_name
 
+from clickhouse_connect.cc_sqlalchemy._schema import canonical_schema_kwargs
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType, sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import JSON as ChSqlaJSON  # noqa: N811
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import AggregateFunction as ChSqlaAggregateFunction
@@ -32,6 +33,15 @@ from clickhouse_connect.datatypes.registry import parse_name
 from clickhouse_connect.driver.binding import quote_identifier
 
 __all__ = ["ClickHouseImpl"]
+
+# Column properties that MODIFY COLUMN can remove, in deterministic emit order.
+# DEFAULT is driven by server_default, so it is handled separately.
+_REMOVABLE_COLUMN_PROPERTIES = (
+    ("materialized", "MATERIALIZED"),
+    ("alias", "ALIAS"),
+    ("codec", "CODEC"),
+    ("ttl", "TTL"),
+)
 
 _STANDARD_INDEX_MESSAGE = (
     "ClickHouse data skipping indexes cannot be created with SQLAlchemy Index, "
@@ -290,44 +300,66 @@ class ClickHouseImpl(DefaultImpl):
             column_name = name
 
         settings = ClickHouseDDLHelper.render_settings(kw.get("clickhouse_settings"))
-        will_modify = nullable is not None or server_default is not False or type_ is not None
+        # Explicit canonical None removes a property, even alongside a legacy value.
+        for prop, _ in _REMOVABLE_COLUMN_PROPERTIES:
+            if f"clickhousedb_{prop}" in kw:
+                kw.pop(f"clickhouse_{prop}", None)
+        column_kwargs = canonical_schema_kwargs(kw, (prop for prop, _ in _REMOVABLE_COLUMN_PROPERTIES))
 
-        if comment is not False and not will_modify:
+        passthrough: dict[str, Any] = {}
+        removals: list[str] = []
+        if server_default is None:
+            removals.append("DEFAULT")
+        for prop_name, keyword in _REMOVABLE_COLUMN_PROPERTIES:
+            canonical = f"clickhousedb_{prop_name}"
+            if canonical not in column_kwargs:
+                continue
+            value = column_kwargs[canonical]
+            if value is None:
+                removals.append(keyword)
+            else:
+                passthrough[canonical] = value
+
+        has_default_value = server_default is not False and server_default is not None
+        modify_needed = type_ is not None or nullable is not None or has_default_value or bool(passthrough)
+
+        if comment is not False and not modify_needed:
             self._exec(text(self._comment_column_sql(table_name, column_name, comment, schema, settings)))
 
-        if not will_modify:
-            return
-
-        if type_ is not None:
-            effective_type = type_
-        else:
-            effective_type = existing_type
-        if effective_type is None:
-            raise CommandError(f"ClickHouse alter_column requires existing_type for {table_name}.{column_name}")
-        if nullable is not None:
-            effective_type = self._set_type_nullable(effective_type, nullable)
-
-        sql = [
-            "ALTER TABLE",
-            full_table(table_name, schema),
-            "MODIFY COLUMN",
-        ]
-        if if_exists:
-            sql.append("IF EXISTS")
-        sql.append(
-            column_specification(
-                self.dialect,
-                Column(
-                    column_name,
-                    effective_type,
-                    server_default=None if server_default is False else server_default,
-                    comment=existing_comment if comment is False else comment,
-                ),
+        if modify_needed:
+            effective_type = type_ if type_ is not None else existing_type
+            if effective_type is None and (type_ is not None or nullable is not None or has_default_value):
+                raise CommandError(f"ClickHouse alter_column requires existing_type for {table_name}.{column_name}")
+            if nullable is not None:
+                effective_type = self._set_type_nullable(effective_type, nullable)
+            modify_sql = ["ALTER TABLE", full_table(table_name, schema), "MODIFY COLUMN"]
+            if if_exists:
+                modify_sql.append("IF EXISTS")
+            modify_sql.append(
+                column_specification(
+                    self.dialect,
+                    Column(
+                        column_name,
+                        effective_type,
+                        server_default=server_default if has_default_value else None,
+                        comment=existing_comment if comment is False else comment,
+                        **passthrough,
+                    ),
+                    include_type=effective_type is not None,
+                )
             )
-        )
-        if settings:
-            sql.extend(["SETTINGS", settings])
-        self._exec(text(" ".join(sql)))
+            if settings:
+                modify_sql.extend(["SETTINGS", settings])
+            self._exec(text(" ".join(modify_sql)))
+
+        for keyword in removals:
+            remove_sql = ["ALTER TABLE", full_table(table_name, schema), "MODIFY COLUMN"]
+            if if_exists:
+                remove_sql.append("IF EXISTS")
+            remove_sql.extend([quote_identifier(column_name), "REMOVE", keyword])
+            if settings:
+                remove_sql.extend(["SETTINGS", settings])
+            self._exec(text(" ".join(remove_sql)))
 
     def compare_type(self, inspector_column: Any, metadata_column: Any) -> bool:
         """Compare reflected and metadata ClickHouse column types for autogenerate."""
