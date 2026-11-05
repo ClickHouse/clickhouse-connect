@@ -214,7 +214,7 @@ def _definitions_match(
     row = context.connection.execute(with_internal_query_formats(statement), queries).fetchone()
     if row is None or len(row) != len(queries) or not all(isinstance(value, str) and value for value in row):
         raise ValueError("Server returned no formatted index definitions")
-    formatted = dict(zip(queries, row))
+    formatted = dict(zip(queries, cast(Sequence[str], row)))
     # IndexDescription::getIndexFromAST lowercases the type name; empty arguments do not change the type.
     shapes = [
         re.sub(
