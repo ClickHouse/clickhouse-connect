@@ -20,6 +20,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime, String
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     Distributed,
     File,
+    GraphiteMergeTree,
     Memory,
     MergeTree,
     Null,
@@ -404,6 +405,69 @@ def _compare_with(connection, reflected: Table, declared: Table) -> ops.ModifyTa
 )
 def test_positional_args_pair_across_quoting_and_families(server_engine, declared_engine):
     assert _compare(_reflected(server_engine), _declared(declared_engine)).is_empty()
+
+
+@pytest.mark.parametrize("engine_name", ["GraphiteMergeTree", "Distributed"])
+@pytest.mark.parametrize(
+    ("reflected_arg", "declared_arg", "matches"),
+    [
+        ("'rollup-cold'", "rollup - cold", False),
+        ("'events-v2'", "'events - v2'", False),
+        ("'rollup.cold'", "rollup . cold", False),
+        ("'`rollup`'", "rollup", False),
+        ("'(rollup)'", "rollup", False),
+        ("' rollup '", "rollup", False),
+        ("'rollup-cold'", "rollup-cold", True),
+        ("'events-v2'", "'events-v2'", True),
+        (r"'rollup\\cold'", r"rollup\cold", True),
+        (r"'rollup\ncold'", "rollup\ncold", True),
+        (r"'rollup\'cold'", "'rollup''cold'", True),
+        ("'rollup''cold'", "rollup'cold", True),
+        ("'rollup-cold'", r"'rollup\x2dcold'", True),
+        ("'rollupx2dcold'", r"'rollup\x2dcold'", False),
+        (r"'rollup\x2dcold'", "rollup-cold", True),
+        (r"'rollup\\x2dcold'", r"rollup\x2dcold", True),
+        (r"'rollup\qcold'", r"rollup\qcold", True),
+        (r"'rollup\qcold'", "rollupqcold", False),
+        (r"'rollup\Ncold'", "rollupcold", True),
+        (r"'rollup\a\e\vcold'", "rollup\a\x1b\vcold", True),
+        (r"'rollup\xc3\xa9'", "rollup\u00e9", True),
+        (r"'rollup\'''cold'", "rollup''cold", True),
+        (r"'rollup\xff'", r"'rollup\xff'", True),
+        ("'rollup'", r"'rollup\xff'", False),
+    ],
+)
+def test_literal_engine_args_preserve_contents(engine_name, reflected_arg, declared_arg, matches):
+    if engine_name == "GraphiteMergeTree":
+        reflected = _reflected(f"GraphiteMergeTree({reflected_arg}) ORDER BY a")
+        declared = _declared(GraphiteMergeTree(config_section=declared_arg, order_by="a"))
+        option = "config_section"
+    else:
+        reflected = _reflected(f"Distributed('cluster', 'database', {reflected_arg})")
+        declared = _declared(Distributed(cluster="cluster", database="database", table=declared_arg))
+        option = "table"
+    connection = _StubConnection()
+    if matches:
+        assert _compare_with(connection, reflected, declared).is_empty()
+    else:
+        with pytest.raises(UnsupportedTableChangeError) as excinfo:
+            _compare_with(connection, reflected, declared)
+        assert [drift.option for drift in excinfo.value.drifts] == [option]
+    assert not connection.statements
+
+
+@pytest.mark.parametrize(
+    ("reflected_arg", "declared_arg"),
+    [
+        ("rand( )", "rand()"),
+        ("cityHash64( `a` )", "cityHash64(a)"),
+        ("'part_a' || 'part_b'", "'part_a'||'part_b'"),
+    ],
+)
+def test_unquoted_engine_args_keep_expression_comparison(reflected_arg, declared_arg):
+    reflected = _reflected(f"Distributed('cluster', 'database', 'events', {reflected_arg})")
+    declared = _declared(Distributed(cluster="cluster", database="database", table="events", sharding_key=declared_arg))
+    assert _compare(reflected, declared).is_empty()
 
 
 def test_positional_arg_drift_across_families_uses_declared_name():

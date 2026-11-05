@@ -22,7 +22,6 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     _render_engine_expr,
     _render_setting_value,
     _render_summing_columns,
-    _strip_string_quotes,
 )
 from clickhouse_connect.cc_sqlalchemy.inspector import with_internal_query_formats
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
@@ -30,6 +29,7 @@ from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import split_top_level, walk_sql
 from clickhouse_connect.driver.binding import _format_identifier, _skip_quoted_token
 from clickhouse_connect.driver.common import unescape_identifier
+from clickhouse_connect.driver.parser import parse_callable
 
 __all__ = ["COMPARE_TABLE_OPTIONS_OPT", "TableOptionDrift", "UnsupportedTableChangeError"]
 
@@ -257,24 +257,68 @@ def _positional_arg_names(engine: TableEngine) -> list[str]:
     return [arg_name for arg_name in type(engine).arg_names if arg_name not in _DEPLOYMENT_ARGS]
 
 
+def _string_literal_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value.startswith("'") or _skip_quoted_token(value, 0, "'") != len(value):
+        return None
+    # ReadHelpers::parseComplexEscapeSequence at server v26.6.1.1193-stable.
+    escapes = {"a": "\a", "b": "\b", "e": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v", "0": "\0"}
+    decoded = bytearray()
+    for match in re.finditer(r"\\x[0-9A-Fa-f]{2}|\\.|''|.", value[1:-1], re.DOTALL):
+        token = match.group()
+        if token.startswith("\\"):
+            escape = token[1:]
+            if len(escape) == 3 and escape.startswith("x"):
+                decoded.append(int(escape[1:], 16))
+                continue
+            if escape == "x":
+                return None
+            if escape == "N":
+                continue
+            token = escapes.get(escape, escape)
+            if token not in "\\'\"`/=" and ord(token) >= 32:
+                decoded.extend(b"\\")
+        elif token == "''":
+            token = "'"
+        decoded.extend(token.encode("utf-8"))
+    try:
+        return decoded.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 def _compare_engine_args(connection: Any, declared: TableEngine, reflected: TableEngine) -> list[_Difference]:
     # Pair by position so ReplicatedReplacingMergeTree(ver) lines up with reflected ReplacingMergeTree(version).
     declared_names = _positional_arg_names(declared)
     reflected_names = _positional_arg_names(reflected)
+    reflected_args = dict(zip(type(reflected).arg_names, parse_callable(reflected.full_engine)[1]))
     drifts: list[_Difference] = []
     for index in range(max(len(declared_names), len(reflected_names))):
         declared_name = declared_names[index] if index < len(declared_names) else None
         reflected_name = reflected_names[index] if index < len(reflected_names) else None
         declared_value = declared._orig_kwargs.get(declared_name) if declared_name else None
-        reflected_value = reflected._orig_kwargs.get(reflected_name) if reflected_name else None
+        reflected_value = reflected_args.get(reflected_name) if reflected_name else None
         if declared_value is None and reflected_value is None:
             continue
         if declared_name == "columns":
             declared_text = _render_summing_columns(declared_value)
         else:
-            declared_text = _declared_clause(_strip_string_quotes(declared_value))
-        reflected_text = None if reflected_value is None else str(_strip_string_quotes(reflected_value))
-        if declared_text is None or reflected_text is None or not _expressions_match(connection, declared_text, reflected_text):
+            declared_text = _declared_clause(declared_value)
+        reflected_text = None if reflected_value is None else str(reflected_value)
+        declared_literal = _string_literal_value(declared_text)
+        if declared_literal is not None:
+            declared_text = declared_literal
+        reflected_literal = _string_literal_value(reflected_text)
+        if reflected_literal is not None:
+            reflected_text = reflected_literal
+            matches = declared_text == reflected_text
+        else:
+            matches = (
+                declared_text is not None and reflected_text is not None and _expressions_match(connection, declared_text, reflected_text)
+            )
+        if not matches:
             drifts.append((declared_name or reflected_name or "engine", reflected_text, declared_text))
     return drifts
 
