@@ -347,7 +347,9 @@ def test_filters_legacy_indexes_and_implicit_indexes(run_sqlalchemy, test_db, ch
 
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("expression", ["value", "date(ts)", "concat(LCASE(label), ':tag')", "(value, label)"])
-def test_analyzer_coverage_is_required_only_when_used(run_sqlalchemy, test_db, ch_name, enabled, expression):
+def test_analyzer_coverage_is_required_only_when_used(run_sqlalchemy, test_client, test_db, ch_name, enabled, expression):
+    if not enabled and test_client.min_version("26.9"):
+        pytest.skip("enable_analyzer cannot be disabled on ClickHouse 26.9+")
     table_name = ch_name("analyzer_coverage")
     metadata = _metadata(table_name, test_db, ClickHouseIndex("value_idx", expression, "minmax"))
     requires_analyzer = expression != "value"

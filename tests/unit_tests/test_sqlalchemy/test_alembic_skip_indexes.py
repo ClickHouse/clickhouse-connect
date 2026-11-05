@@ -464,7 +464,11 @@ def test_empty_type_arguments_compare_equally(declared_type, reflected_type):
         ("extra", 46, False, False, False),
     ],
 )
-def test_unknown_identifier_requires_new_physical_declared_column(identifier, code, is_alias, is_reflected, changed):
+@pytest.mark.parametrize("lookup_kind", ["expression", "expression or function"])
+@pytest.mark.parametrize("scope_separator", [" in scope", ". In scope", ". Maybe you meant: ['value']. In scope"])
+def test_unknown_identifier_requires_new_physical_declared_column(
+    identifier, code, is_alias, is_reflected, changed, lookup_kind, scope_separator
+):
     context = _context()
     declared = ClickHouseIndex("value_idx", "extra", "minmax", 1)
     reflected = ClickHouseIndex("value_idx", "value", "minmax", 1)
@@ -485,7 +489,7 @@ def test_unknown_identifier_requires_new_physical_declared_column(identifier, co
     error = DBAPIError(
         None,
         None,
-        DatabaseError(f"Unknown expression or function identifier `{identifier}` in scope SELECT ...", code=code),
+        DatabaseError(f"Unknown {lookup_kind} identifier `{identifier}`{scope_separator} SELECT ...", code=code),
     )
     result = Mock()
     result.fetchall.return_value = ["analyzed extra"]

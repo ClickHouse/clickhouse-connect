@@ -245,7 +245,7 @@ def _definitions_match(
     except DBAPIError as ex:
         if not isinstance(ex.orig, Error) or ex.orig.code != 47:
             raise
-        missing = re.search(r"Unknown expression(?: or function)? identifier `([^`]+)` in scope", str(ex.orig))
+        missing = re.search(r"Unknown expression(?: or function)? identifier `([^`]+)`", str(ex.orig))
         if missing is None:
             raise
         physical_additions = [
