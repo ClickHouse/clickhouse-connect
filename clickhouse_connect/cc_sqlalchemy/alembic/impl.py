@@ -5,8 +5,8 @@ from typing import Any, Literal, cast
 
 from alembic.ddl.impl import DefaultImpl
 from alembic.util import CommandError
-from sqlalchemy import Column, Index, MetaData, String, Table, TypeDecorator, text
-from sqlalchemy.sql.dml import Delete, Update
+from sqlalchemy import Column, Index, MetaData, String, Table, TypeDecorator, insert, text
+from sqlalchemy.sql.dml import Delete, Insert, Update
 from sqlalchemy.sql.elements import quoted_name
 
 from clickhouse_connect.cc_sqlalchemy._schema import canonical_schema_kwargs
@@ -31,6 +31,7 @@ from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import (
 from clickhouse_connect.datatypes.dynamic import JSON as ChJSON  # noqa: N811
 from clickhouse_connect.datatypes.registry import parse_name
 from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.driver.client import Client
 
 __all__ = ["ClickHouseImpl"]
 
@@ -178,6 +179,8 @@ class ClickHouseImpl(DefaultImpl):
         multiparams=None,
         params=None,
     ) -> Any:
+        if isinstance(construct, Insert) and self._is_version_table_construct(construct):
+            return self._exec_version_insert(construct, execution_options)
         if isinstance(construct, Update) and self._is_version_table_construct(construct):
             return self._exec_version_update(construct, execution_options)
         if isinstance(construct, Delete) and self._is_version_table_construct(construct):
@@ -465,6 +468,24 @@ class ClickHouseImpl(DefaultImpl):
             return False
         return _render_ch_type(type_obj)
 
+    def _exec_version_insert(self, construct: Insert, execution_options=None):
+        values = construct._values
+        if not values:
+            raise CommandError("ClickHouse Alembic version insert is missing values")
+        version_value = self._compile_clause(list(values.values())[0])
+        setting = "deduplicate_insert = 'disable'"
+        if not self.as_sql and self.connection is not None:
+            dbapi_connection = self.connection.connection.dbapi_connection
+            get_driver_connection = getattr(self.dialect, "get_driver_connection", None)
+            driver_connection = get_driver_connection(dbapi_connection) if get_driver_connection is not None else dbapi_connection
+            client = cast(Client, getattr(driver_connection, "client", driver_connection))
+            if "deduplicate_insert" not in client.server_settings:
+                setting = "insert_deduplicate = 0"
+        return super()._exec(
+            text(f"INSERT INTO {self._version_table_name} (version_num) SETTINGS {setting} VALUES ({version_value})"),
+            execution_options=execution_options,
+        )
+
     def _exec_version_update(self, construct: Update, execution_options=None):
         # Alembic emits a normal SQLAlchemy Update here, but ClickHouse version tracking
         # needs insert + mutation delete semantics. SQLAlchemy does not expose a stable
@@ -473,9 +494,8 @@ class ClickHouseImpl(DefaultImpl):
         values = construct._values
         if not values:
             raise CommandError("ClickHouse Alembic version update is missing values")
-        version_value = self._compile_clause(list(values.values())[0])
         where_clause = self._compile_version_where(construct)
-        self._exec(text(f"INSERT INTO {self._version_table_name} (version_num) VALUES ({version_value})"))
+        self._exec(insert(construct.table).values(values), execution_options=execution_options)
         self._exec(text(f"ALTER TABLE {self._version_table_name} DELETE WHERE {where_clause} SETTINGS mutations_sync = 2"))
         return SimpleNamespace(rowcount=1)
 

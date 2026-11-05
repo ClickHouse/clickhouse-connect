@@ -207,6 +207,12 @@ For ClickHouse specifically, this version of `env.py`:
 - `clickhouse_writer(...)` ensures generated revisions include required ClickHouse imports
 - `version_table="alembic_version"` configures a compatible version table
 
+Version-table inserts bypass insert deduplication so downgrades can restore earlier
+revision rows. Offline SQL uses `SETTINGS deduplicate_insert = 'disable'` and needs
+that setting on the target server. Online migrations fall back to
+`insert_deduplicate = 0` when the newer setting is unavailable. This does not change
+deduplication for your data tables.
+
 ## Step 7: Generate the initial migration
 
 Now we are at the key point where:

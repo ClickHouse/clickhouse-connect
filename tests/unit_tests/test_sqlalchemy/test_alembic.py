@@ -934,6 +934,7 @@ def test_alembic_impl_version_table_sql():
     )
 
     impl.create_table(version_table)
+    impl._exec(version_table.insert().values(version_num=literal_column("'base'")))
 
     update_stmt = (
         version_table.update().values(version_num=literal_column("'head'")).where(version_table.c.version_num == literal_column("'base'"))
@@ -945,9 +946,42 @@ def test_alembic_impl_version_table_sql():
     sql = buffer.getvalue()
     assert "CREATE TABLE `alembic_version`" in sql
     assert "Engine MergeTree" in sql
-    assert "INSERT INTO `alembic_version` (version_num) VALUES ('head')" in sql
+    assert "INSERT INTO `alembic_version` (version_num) SETTINGS deduplicate_insert = 'disable' VALUES ('base')" in sql
+    assert "INSERT INTO `alembic_version` (version_num) SETTINGS deduplicate_insert = 'disable' VALUES ('head')" in sql
     assert "ALTER TABLE `alembic_version` DELETE WHERE `version_num` = 'base' SETTINGS mutations_sync = 2" in sql
     assert "ALTER TABLE `alembic_version` DELETE WHERE `version_num` = 'old' SETTINGS mutations_sync = 2" in sql
+
+
+@pytest.mark.parametrize("modern_setting", [False, True])
+def test_version_insert_uses_supported_deduplication_setting(modern_setting):
+    connection = Mock()
+    connection.connection.dbapi_connection.client.server_settings = {"deduplicate_insert": object()} if modern_setting else {}
+    impl = ClickHouseImpl(ClickHouseDialect(), connection, False, False, StringIO(), {})
+    version = impl.version_table_impl(version_table="alembic_version", version_table_schema=None, version_table_pk=True)
+    impl._exec(version.insert().values(version_num=literal_column("'revision_1'")))
+    setting = "deduplicate_insert = 'disable'" if modern_setting else "insert_deduplicate = 0"
+    assert f"SETTINGS {setting} VALUES ('revision_1')" in str(connection.execute.call_args.args[0])
+
+
+def test_user_table_inserts_keep_default_deduplication():
+    buffer = StringIO()
+    impl = ClickHouseImpl(ClickHouseDialect(), None, True, False, buffer, {})
+    table = Table("events", MetaData(), Column("value", types.UInt32()), MergeTree(order_by="value"))
+    impl._exec(table.insert().values(value=13))
+    assert "deduplicate" not in buffer.getvalue()
+
+
+@pytest.mark.parametrize("update", [False, True])
+def test_offline_version_writes_disable_deduplication(update):
+    buffer = StringIO()
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"as_sql": True, "output_buffer": buffer})
+    version = context._version
+    statement = version.update() if update else version.insert()
+    statement = statement.values(version_num=literal_column("'revision_1'"))
+    if update:
+        statement = statement.where(version.c.version_num == literal_column("'revision_0'"))
+    context.impl._exec(statement)
+    assert "SETTINGS deduplicate_insert = 'disable' VALUES ('revision_1')" in buffer.getvalue()
 
 
 def test_version_table_schema_desync():

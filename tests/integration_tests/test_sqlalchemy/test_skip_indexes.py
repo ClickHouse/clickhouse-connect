@@ -34,6 +34,11 @@ def run_sqlalchemy(client_mode, call, test_engine, test_config):
     from sqlalchemy.ext.asyncio import create_async_engine
 
     async def run_async(work):
+        query = {}
+        if test_config.cloud:
+            query["select_sequential_consistency"] = "1"
+        if test_config.insert_quorum:
+            query["insert_quorum"] = str(test_config.insert_quorum)
         engine = create_async_engine(
             URL.create(
                 "clickhousedb+async",
@@ -42,6 +47,7 @@ def run_sqlalchemy(client_mode, call, test_engine, test_config):
                 host=test_config.host,
                 port=test_config.port,
                 database=test_config.test_database,
+                query=query,
             )
         )
         try:
@@ -502,5 +508,32 @@ def test_index_edit_cannot_reference_filtered_new_column(run_sqlalchemy, test_db
         initial.create_all(connection)
         with pytest.raises(IndexComparisonError, match="new_value"):
             _diff(connection, desired, table_name, include_object=filter_column)
+
+    run_sqlalchemy(workflow)
+
+
+def test_version_heads_survive_revisiting_revisions(run_sqlalchemy, test_db, ch_name):
+    version_name = ch_name("version_deduplication")
+
+    def workflow(connection):
+        connection.exec_driver_sql(
+            f"CREATE TABLE {full_table(version_name, test_db)} (version_num String) "
+            "ENGINE MergeTree ORDER BY version_num SETTINGS non_replicated_deduplication_window=100"
+        )
+        context = MigrationContext.configure(connection, opts={"version_table": version_name, "version_table_schema": test_db})
+        version = context._version
+        context.impl._exec(version.insert().values(version_num=sa.literal_column("'revision_1'")))
+        assert context.get_current_heads() == ("revision_1",)
+        for before, after in (("revision_1", "revision_2"), ("revision_2", "revision_1"), ("revision_1", "revision_2")):
+            context.impl._exec(
+                version.update()
+                .values(version_num=sa.literal_column(repr(after)))
+                .where(version.c.version_num == sa.literal_column(repr(before)))
+            )
+            assert context.get_current_heads() == (after,)
+        context.impl._exec(version.delete().where(version.c.version_num == sa.literal_column("'revision_2'")))
+        assert context.get_current_heads() == ()
+        context.impl._exec(version.insert().values(version_num=sa.literal_column("'revision_1'")))
+        assert context.get_current_heads() == ("revision_1",)
 
     run_sqlalchemy(workflow)
