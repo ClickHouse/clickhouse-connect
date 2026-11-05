@@ -71,6 +71,7 @@ Supported features include:
   `ARRAY JOIN` (single and multi-column), `FINAL`, `SAMPLE`, compound selects, and materialized CTEs
 - `VALUES` table function syntax
 - Lightweight `DELETE` statements
+- Declarative data skipping indexes with `ClickHouseIndex` and explicit inspection with `get_clickhouse_indexes()`
 - **Alembic** schema migrations (autogenerate, upgrade/downgrade, ClickHouse engine support)
 
 A small number of features require SQLAlchemy 2.x. `Values.cte()` specifically requires SQLAlchemy 2.0.42 or later.
@@ -91,6 +92,14 @@ autogeneration of migration scripts from SQLAlchemy metadata. ClickHouse table e
 Supported operations include create/drop table, add/alter/drop/rename column, type and nullability
 changes, defaults, comments, and ClickHouse-specific features like `IF EXISTS` guards, column
 placement with `AFTER`, and operation-level `clickhouse_settings` on column add/alter/drop.
+
+Alembic compares explicit skip indexes by default. Indexes missing from managed table metadata generate drops,
+including indexes created only by earlier imperative migrations. Before upgrading, declare them with
+`ClickHouseIndex`, exclude unmanaged indexes with Alembic filters, or pass `clickhousedb_compare_indexes=False`
+to `context.configure()`. Index edits generate separate drop and add operations. Downgrade restores definitions,
+but neither direction restores prior materialization. Generate index operations with `render_as_batch=False`.
+Physical batch recreation of tables with explicit indexes requires complete `copy_from` metadata.
+See the [skip-index documentation](https://clickhouse.com/docs/integrations/language-clients/python/sqlalchemy#sqlalchemy-skip-indexes) for declaration, reflection, and comparison limits.
 
 To get started, install the Alembic extra:
 

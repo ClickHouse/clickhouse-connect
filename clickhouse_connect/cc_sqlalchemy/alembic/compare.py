@@ -33,7 +33,7 @@ from clickhouse_connect.driver.parser import parse_callable
 
 __all__ = ["COMPARE_TABLE_OPTIONS_OPT", "TableOptionDrift", "UnsupportedTableChangeError"]
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("alembic.autogenerate.compare.clickhouse_table_options")
 
 COMPARE_TABLE_OPTIONS_OPT = "clickhousedb_compare_table_options"
 _KEY_CLAUSES = ("order_by", "partition_by", "primary_key", "sample_by", "ttl")
@@ -407,4 +407,5 @@ def _compare_table_options(
     if differences:
         raise UnsupportedTableChangeError([TableOptionDrift(table_name, schema, *difference) for difference in differences])
     if changed:
+        logger.info("Detected changed table settings on %r", table_name)
         modify_table_ops.ops.append(_ModifyClickHouseTableSettingsOp(table_name, changed, schema=schema, existing_settings=existing))

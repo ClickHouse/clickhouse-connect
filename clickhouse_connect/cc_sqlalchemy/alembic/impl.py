@@ -22,7 +22,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import SimpleAggregateF
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Tuple as ChSqlaTuple
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import _Variant as ChSqlaVariant
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
-from clickhouse_connect.cc_sqlalchemy.inspector import with_internal_query_formats
+from clickhouse_connect.cc_sqlalchemy.inspector import get_clickhouse_indexes, with_internal_query_formats
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import (
     ClickHouseDDLHelper,
@@ -45,7 +45,7 @@ _REMOVABLE_COLUMN_PROPERTIES = (
 
 _STANDARD_INDEX_MESSAGE = (
     "ClickHouse data skipping indexes cannot be created with SQLAlchemy Index, "
-    "Column(index=True), op.create_index, or op.drop_index. Use op.add_clickhouse_index "
+    "Column(index=True), op.create_index, or op.drop_index. Use ClickHouseIndex declarations, or op.add_clickhouse_index "
     "and op.drop_clickhouse_index for ClickHouse data skipping indexes, or op.execute "
     "for custom DDL."
 )
@@ -222,11 +222,18 @@ class ClickHouseImpl(DefaultImpl):
         super().create_table(table, **kw)
 
     def prep_table_for_batch(self, batch_impl: Any, table: Table) -> None:
-        """Reject unsupported SQLAlchemy indexes before batch DDL starts."""
+        """Reject incomplete index metadata before batch recreation starts."""
         batch_indexes = batch_impl.new_indexes
         existing_indexes = batch_impl.indexes
         if batch_indexes or existing_indexes or _has_standard_index(table):
             _reject_standard_index()
+        if batch_impl.reflected:
+            assert self.connection is not None
+            if get_clickhouse_indexes(self.connection, table.name, table.schema):
+                raise CommandError(
+                    "Automatic batch recreation cannot preserve explicit ClickHouse indexes. "
+                    "Pass a complete Table with its ClickHouseIndex definitions as copy_from to batch_alter_table()."
+                )
         super().prep_table_for_batch(batch_impl, table)
 
     def drop_column(

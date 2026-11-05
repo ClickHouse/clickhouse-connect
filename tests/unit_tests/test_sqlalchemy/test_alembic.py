@@ -1138,6 +1138,8 @@ def test_alembic_public_exports():
 
     assert set(ch_alembic.__all__) == {
         "COMPARE_TABLE_OPTIONS_OPT",
+        "COMPARE_INDEXES_OPT",
+        "IndexComparisonError",
         "patch_alembic_version",
         "clickhouse_writer",
         "include_object",
@@ -1928,6 +1930,64 @@ def test_clickhouse_custom_ops_autogenerate_render():
         "op.reload_clickhouse_dictionary(",
     ):
         assert expected in generated
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        _AddClickHouseIndexOp("events", "idx_1", "user_id", "minmax"),
+        _AddClickHouseIndexesOp("events", [ClickHouseIndex("idx_1", "user_id", "minmax")]),
+        _DropClickHouseIndexOp("events", "idx_1"),
+        _DropClickHouseIndexesOp("events", ["idx_1"]),
+        _MaterializeClickHouseIndexOp("events", "idx_1"),
+        _AddClickHouseProjectionOp("events", "proj_1", "SELECT user_id"),
+        _AddClickHouseProjectionsOp("events", [ClickHouseProjection("proj_1", "SELECT user_id")]),
+        _DropClickHouseProjectionOp("events", "proj_1"),
+        _DropClickHouseProjectionsOp("events", ["proj_1"]),
+        _MaterializeClickHouseProjectionOp("events", "proj_1"),
+        _ModifyClickHouseTableSettingsOp("events", {"merge_with_ttl_timeout": 79}),
+        _ResetClickHouseTableSettingsOp("events", ["merge_with_ttl_timeout"]),
+        _CreateClickHouseMaterializedViewOp("events_mv", "events", "SELECT user_id FROM events"),
+        _DropClickHouseMaterializedViewOp("events_mv"),
+        _CreateClickHouseDictionaryOp(
+            "dim_lookup",
+            [Column("id", types.UInt32())],
+            primary_key="id",
+            source="CLICKHOUSE(TABLE 'events')",
+            layout="FLAT",
+            lifetime="MIN 0 MAX 10",
+        ),
+        _DropClickHouseDictionaryOp("dim_lookup"),
+        _ReloadClickHouseDictionaryOp("dim_lookup"),
+    ],
+    ids=lambda operation: type(operation).__name__,
+)
+def test_clickhouse_custom_ops_reject_batch_rendering(operation):
+    context = MigrationContext.configure(dialect=ClickHouseDialect())
+    with pytest.raises(CommandError, match="do not support batch rendering.*render_as_batch=False"):
+        render_python_code(
+            ops.UpgradeOps(ops=[ops.ModifyTableOps("events", ops=[operation])]),
+            migration_context=context,
+            render_as_batch=True,
+        )
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("indexes", [None, ()])
+def test_empty_index_options_do_not_change_table_rendering(reverse, indexes):
+    context = MigrationContext.configure(dialect=ClickHouseDialect())
+    autogen_context = AutogenContext(
+        context,
+        opts={"sqlalchemy_module_prefix": "sa.", "alembic_module_prefix": "op.", "user_module_prefix": None},
+    )
+    table = Table("events", MetaData(), Column("value", types.UInt32()), MergeTree(order_by="value"))
+    operation = ops.CreateTableOp.from_table(table)
+    if reverse:
+        operation = operation.reverse()
+    expected = render.render_op_text(autogen_context, operation)
+    kwargs = operation.table_kw if reverse else operation.kw
+    kwargs["clickhousedb_indexes"] = indexes
+    assert render.render_op_text(autogen_context, operation) == expected
 
 
 def test_clickhouse_custom_op_renderers_add_value_object_imports():

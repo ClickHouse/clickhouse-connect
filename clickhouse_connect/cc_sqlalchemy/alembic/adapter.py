@@ -9,7 +9,7 @@ from alembic.runtime.migration import MigrationContext
 from alembic.util import CommandError, DispatchPriority, PriorityDispatchResult
 
 from clickhouse_connect.cc_sqlalchemy._schema import COLUMN_OPTIONS, TABLE_OPTIONS, canonical_schema_kwargs
-from clickhouse_connect.cc_sqlalchemy.alembic.impl import ClickHouseImpl
+from clickhouse_connect.cc_sqlalchemy.alembic.impl import _STANDARD_INDEX_MESSAGE, ClickHouseImpl
 from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
     ClickHouseIndex,
     ClickHouseProjection,
@@ -178,7 +178,9 @@ def _render_create_table(autogen_context: AutogenContext, op: ops.CreateTableOp)
 
     table_kwargs = canonical_schema_kwargs(op.kw, TABLE_OPTIONS)
     for key in sorted(table_kwargs):
-        rendered += f",\n{key.replace(' ', '_')}={table_kwargs[key]!r}"
+        value = _render_table_option(autogen_context, key, table_kwargs[key])
+        if value is not None:
+            rendered += f",\n{key.replace(' ', '_')}={value}"
 
     if op.if_not_exists is not None:
         rendered += f",\nif_not_exists={bool(op.if_not_exists)!r}"
@@ -219,7 +221,9 @@ def _render_drop_table(autogen_context: AutogenContext, op: ops.DropTableOp) -> 
         arguments.append(f"if_exists={bool(op.if_exists)!r}")
     table_kwargs = canonical_schema_kwargs(op.table_kw, TABLE_OPTIONS)
     for key in sorted(table_kwargs):
-        arguments.append(f"{key.replace(' ', '_')}={table_kwargs[key]!r}")
+        value = _render_table_option(autogen_context, key, table_kwargs[key])
+        if value is not None:
+            arguments.append(f"{key.replace(' ', '_')}={value}")
     if arguments:
         rendered += ",\n" + ",\n".join(arguments)
     rendered += ")"
@@ -237,6 +241,9 @@ def _render_kwargs(kwargs: list[tuple[str, object]]) -> list[str]:
 
 
 def _render_op_call(autogen_context: AutogenContext, name: str, args: list[str], kwargs: list[tuple[str, object]]) -> str:
+    if autogen_context._has_batch:
+        subject = "ClickHouse index operations" if "index" in name else "ClickHouse operations"
+        raise CommandError(f"{subject} do not support batch rendering. Generate with render_as_batch=False.")
     prefix = render._alembic_autogenerate_prefix(autogen_context)
     params = args + _render_kwargs(kwargs)
     return f"{prefix}{name}({', '.join(params)})"
@@ -256,6 +263,14 @@ def _render_clickhouse_index(autogen_context: AutogenContext, index: ClickHouseI
     )
     params = [repr(index.name), repr(index.expression), repr(index.type_)] + _render_kwargs(kwargs)
     return f"ClickHouseIndex({', '.join(params)})"
+
+
+def _render_table_option(autogen_context: AutogenContext, name: str, value: Any) -> str | None:
+    if name == "clickhousedb_indexes":
+        if not value:
+            return None
+        return "(" + ", ".join(_render_clickhouse_index(autogen_context, index) for index in value) + ",)"
+    return repr(value)
 
 
 def _render_clickhouse_projection(autogen_context: AutogenContext, projection: ClickHouseProjection) -> str:
@@ -491,14 +506,11 @@ def include_object(object_: Any, name: str | None, type_: str, reflected: bool, 
     Standard filter for ClickHouse system tables and internal objects.
     """
     if type_ == "index":
+        if isinstance(object_, ClickHouseIndex):
+            return True
         if reflected:
             return False
-        raise CommandError(
-            "ClickHouse data skipping indexes cannot be created with SQLAlchemy Index, "
-            "Column(index=True), or autogenerate. Use op.add_clickhouse_index "
-            "and op.drop_clickhouse_index for ClickHouse data skipping indexes, "
-            "or op.execute for custom DDL."
-        )
+        raise CommandError(_STANDARD_INDEX_MESSAGE)
 
     # Guard against None name which can happen in some Alembic versions/contexts
     if not name:

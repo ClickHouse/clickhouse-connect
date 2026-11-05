@@ -5,6 +5,7 @@ from typing import Any
 
 TABLE_OPTIONS = (
     "engine",
+    "indexes",
     "table_type",
     "dictionary_source",
     "dictionary_layout",
