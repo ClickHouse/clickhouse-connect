@@ -622,6 +622,44 @@ reflected = Table(
 )
 ```
 
+## Projections {#sqlalchemy-projections}
+
+Declare SELECT projections as table arguments, without requiring Alembic:
+
+```python
+from sqlalchemy import Column, MetaData, Table, inspect
+from clickhouse_connect.cc_sqlalchemy import ClickHouseProjection, engines, types
+
+metadata = MetaData()
+events = Table(
+    "events",
+    metadata,
+    Column("value", types.UInt32),
+    Column("label", types.String),
+    ClickHouseProjection("by_label", "SELECT value, label ORDER BY label, value"),
+    engines.MergeTree(order_by="value"),
+)
+metadata.create_all(engine)
+
+projections = inspect(engine).get_clickhouse_projections("events")
+```
+
+`select` is the raw SQL inside the projection's parentheses. Definitions are immutable and projection names must be unique within a table. The `clickhousedb_projections` table option also accepts a sequence of `ClickHouseProjection` definitions. `Table.to_metadata()` preserves declarations, and `CREATE TABLE` renders them inline. Dictionaries reject projection declarations. `if_not_exists`, `first`, and `after_projection` remain available for imperative ALTER helpers and do not affect inline creation or comparison. Imports from `clickhouse_connect.cc_sqlalchemy.alembic` and `.alembic.operations`, including the existing positional constructor arguments, remain supported.
+
+`Inspector.get_clickhouse_projections()` returns the stored SELECT definitions, preserving wildcards, aliases, grouping, and ordering. It refuses projection-level `WITH SETTINGS` and index-based projection forms because the SELECT-only API cannot preserve those definitions completely. Catalog failures also raise an error. Ordinary `Table(..., autoload_with=engine)` does not read the projection catalog. To copy columns and projections explicitly:
+
+```python
+inspector = inspect(engine)
+reflected = Table(
+    "events",
+    MetaData(),
+    autoload_with=engine,
+    clickhousedb_projections=inspector.get_clickhouse_projections("events"),
+)
+```
+
+Inspection requires a visible target table and access to the `database`, `table`, `name`, `type`, `query`, and `settings` fields in `system.projections`. ClickHouse added this catalog in 24.9.1.3278. Its presence alone does not establish comparison support. The driver checks capabilities through the catalog and normalization queries.
+
 ## Alembic migrations {#sqlalchemy-alembic}
 
 ClickHouse Connect includes Alembic integration for ClickHouse schema migrations. Install it with:
@@ -672,9 +710,22 @@ ClickHouse-specific `op.*` helpers cover:
 - Materialized view creation and removal.
 - Dictionary creation, removal, and reload.
 
+**Upgrade note:** Alembic compares explicit skip indexes and SELECT projections by default. Objects created only by earlier imperative migrations can generate drops when absent from managed table metadata. Before upgrading, declare them with `ClickHouseIndex` or `ClickHouseProjection`, exclude unmanaged objects with `include_name` or `include_object`, or disable the relevant comparison in `context.configure()`:
+
+```python
+context.configure(
+    connection=connection,
+    target_metadata=metadata,
+    clickhousedb_compare_indexes=False,
+    clickhousedb_compare_projections=False,
+)
+```
+
+Each option skips its catalog reads and table-drop downgrade snapshots. Edits generate separate drop and add operations. Downgrade restores definitions, but neither direction restores prior materialization. Replacing a projection discards its existing projection parts. Review that rebuild cost and run `MATERIALIZE PROJECTION` explicitly when existing parts need the replacement immediately. Index materialization also remains explicit.
+
 Declare skip indexes with `ClickHouseIndex` for autogenerate support, or use the existing `op.add_clickhouse_index` and `op.drop_clickhouse_index` helpers in explicit revisions. Imports from `clickhouse_connect.cc_sqlalchemy.alembic` and `.alembic.operations` remain supported. Standard SQLAlchemy `Index`, `Column(index=True)`, `op.create_index`, and `op.drop_index` remain rejected.
 
-For managed tables, declarations own the explicit live index set by default. An undeclared explicit index produces a drop operation, including indexes previously created only by imperative migrations. A changed expression, index type, parameter, or effective granularity produces an adjacent drop followed by an add. Downgrade restores the prior definition. Operations remain visible to `process_revision_directives` before rendering. Neither direction restores prior materialization, and no `MATERIALIZE INDEX` is generated. Materialize explicitly if existing parts need the index immediately.
+For managed tables, declarations own the explicit live index set by default. An undeclared explicit index produces a drop operation, including indexes previously created only by imperative migrations. A changed expression, index type, parameter, or effective granularity produces a separate drop followed by an add. Downgrade restores the prior definition. Operations remain visible to `process_revision_directives` before rendering. Policy hooks should pair index and projection edits by schema, table, and object name. Do not rely on adjacency. Neither direction restores prior materialization, and no `MATERIALIZE INDEX` is generated. Materialize explicitly if existing parts need the index immediately.
 
 Generate index additions, removals, and edits with `render_as_batch=False`. Their helpers do not support Alembic's deferred batch queue, so `render_as_batch=True` raises an error during generation. Inline indexes in table creation and table-drop downgrade snapshots remain supported.
 
@@ -682,17 +733,7 @@ The same restriction applies to other custom ClickHouse operations inside a batc
 
 For physical batch recreation with `op.batch_alter_table()`, pass a complete `copy_from` Table containing the columns, engine, and `clickhousedb_indexes`. Use the explicit reflection example above to load both columns and indexes, or supply complete metadata for offline migrations. Automatic online recreation reads the index catalog at execution time and refuses tables with explicit indexes before creating or dropping tables. The autogenerate comparison opt-out does not bypass this guard.
 
-Before upgrading an existing Alembic environment, declare its explicit indexes, filter unmanaged indexes, or disable index comparison:
-
-```python
-context.configure(
-    connection=connection,
-    target_metadata=metadata,
-    clickhousedb_compare_indexes=False,
-)
-```
-
-This option disables index comparison before any skip-index catalog reads during autogenerate. It also disables index snapshots for generated table-drop downgrades. Standard `include_name` and `include_object` hooks receive `type_="index"`. Name filters apply to both reflected and declared candidates so an excluded name remains unmanaged. Object filters receive the usual `reflected` and `compare_to` values; their index objects expose the definition fields and `.table`. For example, the standard Alembic unmanaged-object recipe, `reflected and compare_to is None`, protects imperative-only indexes. Table filters are respected before index catalog reads. Inline indexes on newly created tables are also filtered before policy hooks.
+Standard `include_name` and `include_object` hooks receive `type_="index"`. Name filters apply to both reflected and declared candidates so an excluded name remains unmanaged. Object filters receive the usual `reflected` and `compare_to` values. Their index objects expose the definition fields and `.table`. For example, the standard Alembic unmanaged-object recipe, `reflected and compare_to is None`, protects imperative-only indexes. Table filters are respected before index catalog reads. Inline indexes on newly created tables are also filtered before policy hooks.
 
 Comparison uses server formatting and analysis to account for ClickHouse spellings and defaults. Expression analysis uses the current table, server functions, and settings. It requires the analyzer and the expected `EXPLAIN` output. These capabilities were verified against ClickHouse 26.8, with source review at 26.6. The catalog field alone does not establish comparison support on an older server. Changed `ALIAS` definitions that affect an index require an explicit column migration before index comparison.
 
@@ -700,9 +741,23 @@ An index edit can reference a physical column added in the same revision. If ana
 
 Empty type parentheses and case differences, such as `minmax()`, `MinMax()`, and `minmax`, compare equally. Omitted type arguments are not expanded for comparison: changing between `bloom_filter` and `bloom_filter(0.025)` can produce a one-time drop and add even though the server uses that default.
 
-Comparison does not establish equivalence for arbitrary SQL expressions. Different analyzed forms can produce a replacement even when the expressions return the same values. Review such changes or manage those indexes with explicit migrations and filters.
+Comparison does not establish equivalence for arbitrary SQL expressions. When normalization succeeds but the resulting forms differ, autogenerate generates a replacement even if the expressions return the same values. Review such changes or manage those indexes with explicit migrations and filters.
 
 If catalog access, expression resolution, or the expected normalization output is unavailable, autogenerate raises `IndexComparisonError`, carrying the table, index, declared and reflected definitions, and the reason. Review edits carefully. The drop and add are separate, nontransactional statements. A failed add can leave the old index absent.
+
+### Projection autogenerate
+
+Alembic compares SELECT projections on managed tables by default. Declarations own the live projection set. Undeclared projections produce drops, and changed definitions produce separate drop and add operations. On each table, autogenerate orders projection drops, column additions and alterations, index operations, projection additions, then column drops. Alembic appends column drops after the table comparators finish. Pair edits by schema, table, and projection name in policy hooks. Other operations can appear between the drop and add. Downgrades restore the previous definitions, including projections on recreated dropped tables. Operations expose complete definitions to `process_revision_directives` before rendering. No `MATERIALIZE PROJECTION` is generated, and neither upgrade nor downgrade restores previous part materialization. Materialize explicitly when existing parts need the projection immediately.
+
+For `AggregatingMergeTree` and other engines with nonstandard merge behavior, ClickHouse rejects `ADD PROJECTION` when `deduplicate_merge_projection_mode='throw'`. Set it explicitly to `drop` or `rebuild` before applying projection additions or replacements, including replacements of projections originally declared inline.
+
+`include_name` and `include_object` receive `type_="projection"`. Name filters apply to both reflected and declared names. Object filters receive definitions with `.table`, `reflected`, and `compare_to`. The usual `reflected and compare_to is None` recipe protects imperative-only projections. Table filters run before catalog reads, and inline definitions on newly created tables are filtered before policy hooks. Unsupported definitions on filtered projections or unrelated tables do not block comparison.
+
+Comparison uses the server's full projection grammar formatter and the case-insensitive function names and aliases in `system.functions`, following ClickHouse's CREATE normalization. It preserves SELECT structure, including wildcards and aggregate expressions, rather than analyzing an ordinary SELECT against the live table. Formatting, identifier quoting, and registered case-insensitive function spellings compare equally. Case-sensitive names such as `sumIf` and `SumIf` remain distinct. When normalization succeeds but the resulting structures differ, autogenerate generates a replacement. Redundant parentheses or operator and function spellings such as `value + 13` and `plus(value, 13)` can therefore trigger drop and add operations. Comparison does not prove arbitrary SQL equivalence or validate column dependencies. A replacement can reference a physical column added earlier in the same revision. Review dependencies, including changed ALIAS columns, before applying it. Invalid dependencies fail when the DDL executes, and a failed add can leave the old projection absent because drop and add are separate nontransactional statements.
+
+Missing catalog fields, catalog access errors, unavailable formatting or function metadata, projection-level `WITH SETTINGS`, and index-based forms raise `ProjectionComparisonError` with the table, projection, declared and reflected definitions, and reason. A failure to normalize raises this diagnostic instead of generating a replacement. Filter unsupported projections or manage them with explicit migrations. If `query_masking_rules` changes the SELECT text returned by the catalog, comparison and replay may be unreliable. Use explicit migrations, filters, or the comparison opt-out for affected projections. Function normalization requires the `name`, `is_aggregate`, `case_insensitive`, and `alias_to` fields in `system.functions`. Support is checked by actual catalog and formatter queries rather than version strings.
+
+Generate projection additions, removals, and edits with `render_as_batch=False`. Inline CREATE definitions and table-drop downgrade snapshots remain supported. For physical batch recreation, provide complete `copy_from` metadata containing the columns, engine, and `clickhousedb_projections`. Automatic online recreation reads the projection catalog and refuses tables with projections before DDL. The comparison opt-out does not bypass that execution guard.
 
 See the complete [Alembic worked example](https://github.com/ClickHouse/clickhouse-connect/blob/main/clickhouse_connect/cc_sqlalchemy/alembic/WORKED_EXAMPLE.md). Users migrating from `clickhouse-sqlalchemy` should also read the [migration guide](https://github.com/ClickHouse/clickhouse-connect/blob/main/clickhouse_connect/cc_sqlalchemy/MIGRATING_FROM_CLICKHOUSE_SQLALCHEMY.md).
 

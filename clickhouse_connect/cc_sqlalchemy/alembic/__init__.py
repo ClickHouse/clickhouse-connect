@@ -1,4 +1,4 @@
-from clickhouse_connect.cc_sqlalchemy.alembic import compare, indexes, operations  # noqa: F401
+from clickhouse_connect.cc_sqlalchemy.alembic import compare, indexes, operations, projections  # noqa: F401
 from clickhouse_connect.cc_sqlalchemy.alembic.adapter import (
     clickhouse_writer,
     include_object,
@@ -11,6 +11,7 @@ from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
     ClickHouseIndex,
     ClickHouseProjection,
 )
+from clickhouse_connect.cc_sqlalchemy.alembic.projections import COMPARE_PROJECTIONS_OPT, ProjectionComparisonError
 from clickhouse_connect.cc_sqlalchemy.alembic.utils import (
     make_include_name,
     make_include_object,
@@ -20,6 +21,8 @@ from clickhouse_connect.cc_sqlalchemy.alembic.utils import (
 __all__ = [
     "COMPARE_TABLE_OPTIONS_OPT",
     "COMPARE_INDEXES_OPT",
+    "COMPARE_PROJECTIONS_OPT",
+    "ProjectionComparisonError",
     "IndexComparisonError",
     "patch_alembic_version",
     "clickhouse_writer",

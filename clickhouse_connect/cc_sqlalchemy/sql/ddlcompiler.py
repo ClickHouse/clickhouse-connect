@@ -12,6 +12,7 @@ from sqlalchemy.sql.visitors import Visitable
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
 from clickhouse_connect.cc_sqlalchemy.ddl.index import index_definition, table_indexes
+from clickhouse_connect.cc_sqlalchemy.ddl.projection import projection_definition, table_projections
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
 from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.driver.binding import format_str, quote_identifier
@@ -139,6 +140,8 @@ class ChDDLCompiler(DDLCompiler):
         if ClickHouseDDLHelper.is_dictionary(table):
             if table_indexes(table):
                 raise CompileError("Dictionaries do not support data skipping indexes")
+            if table_projections(table):
+                raise CompileError("Dictionaries do not support projections")
             return self._visit_create_dictionary(create, table, if_not_exists)
 
         engine = getattr(table, "engine", None) or ClickHouseDDLHelper.get_option(table, "engine")
@@ -150,6 +153,7 @@ class ChDDLCompiler(DDLCompiler):
         text += ", ".join(
             [self.get_column_specification(c.element) for c in create.columns]
             + [f"INDEX {index_definition(index)}" for index in table_indexes(table)]
+            + [f"PROJECTION {projection_definition(projection)}" for projection in table_projections(table)]
         )
         text += ") " + engine.compile()
         if table.comment:
