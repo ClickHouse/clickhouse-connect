@@ -236,10 +236,8 @@ def _definitions_match(
         context, expressions[0], conn_table
     ):
         raise ValueError("Index depends on changed ALIAS columns; migrate those columns explicitly before comparing the index")
-    if shapes[0] != shapes[1]:
-        return False
     if expressions[0] == expressions[1]:
-        return True
+        return shapes[0] == shapes[1]
     try:
         analyzed = _analyzed_expression(context, expressions[0], metadata_table)
     except DBAPIError as ex:
@@ -257,6 +255,8 @@ def _definitions_match(
         if not any(column.name == missing[1] for column in physical_additions):
             raise
         _analyzed_expression(context, expressions[0], metadata_table, added_columns=physical_additions)
+        return False
+    if shapes[0] != shapes[1]:
         return False
     return analyzed == _analyzed_expression(context, expressions[1], conn_table)
 

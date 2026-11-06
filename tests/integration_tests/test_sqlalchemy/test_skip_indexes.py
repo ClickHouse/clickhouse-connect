@@ -455,10 +455,11 @@ def test_autogenerate_shares_catalog_and_analyzer_reads(run_sqlalchemy, test_db,
     run_sqlalchemy(workflow)
 
 
-def test_index_edit_can_reference_column_added_in_same_revision(run_sqlalchemy, test_db, tmp_path, ch_name):
+@pytest.mark.parametrize(("type_", "granularity"), [("minmax", 1), ("set(79)", 1), ("minmax", 4), ("set(79)", 4)])
+def test_index_edit_can_reference_column_added_in_same_revision(run_sqlalchemy, test_db, tmp_path, ch_name, type_, granularity):
     table_name = ch_name("added_index_column")
     initial = _metadata(table_name, test_db, ClickHouseIndex("value_idx", "value", "minmax"))
-    desired = _metadata(table_name, test_db, ClickHouseIndex("value_idx", "new_value + 13", "minmax"))
+    desired = _metadata(table_name, test_db, ClickHouseIndex("value_idx", "new_value + 13", type_, granularity))
     desired.tables[f"{test_db}.{table_name}"].append_column(sa.Column("new_value", UInt32, key="new_value_key"))
 
     def workflow(connection):
@@ -481,10 +482,11 @@ def test_index_edit_can_reference_column_added_in_same_revision(run_sqlalchemy, 
 
 
 @pytest.mark.parametrize("expression", ["new_vlaue + 13", "new_value + missing", "missing + new_value"])
-def test_index_edit_unknown_column_still_raises(run_sqlalchemy, test_db, ch_name, expression):
+@pytest.mark.parametrize(("type_", "granularity"), [("minmax", 1), ("set(79)", 1), ("minmax", 4), ("set(79)", 4)])
+def test_index_edit_unknown_column_still_raises(run_sqlalchemy, test_db, ch_name, expression, type_, granularity):
     table_name = ch_name("unknown_index_column")
     initial = _metadata(table_name, test_db, ClickHouseIndex("value_idx", "value", "minmax"))
-    desired = _metadata(table_name, test_db, ClickHouseIndex("value_idx", expression, "minmax"))
+    desired = _metadata(table_name, test_db, ClickHouseIndex("value_idx", expression, type_, granularity))
     desired.tables[f"{test_db}.{table_name}"].append_column(sa.Column("new_value", UInt32))
 
     def workflow(connection):
@@ -496,10 +498,11 @@ def test_index_edit_unknown_column_still_raises(run_sqlalchemy, test_db, ch_name
     run_sqlalchemy(workflow)
 
 
-def test_index_edit_cannot_reference_filtered_new_column(run_sqlalchemy, test_db, ch_name):
+@pytest.mark.parametrize(("type_", "granularity"), [("minmax", 1), ("set(79)", 1), ("minmax", 4), ("set(79)", 4)])
+def test_index_edit_cannot_reference_filtered_new_column(run_sqlalchemy, test_db, ch_name, type_, granularity):
     table_name = ch_name("filtered_index_column")
     initial = _metadata(table_name, test_db, ClickHouseIndex("value_idx", "value", "minmax"))
-    desired = _metadata(table_name, test_db, ClickHouseIndex("value_idx", "new_value + 13", "minmax"))
+    desired = _metadata(table_name, test_db, ClickHouseIndex("value_idx", "new_value + 13", type_, granularity))
     desired.tables[f"{test_db}.{table_name}"].append_column(sa.Column("new_value", UInt32))
 
     def filter_column(obj, name, kind, reflected, compare_to):

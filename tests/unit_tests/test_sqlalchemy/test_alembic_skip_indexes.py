@@ -80,18 +80,21 @@ def test_edit_is_adjacent_drop_add_and_policy_visible(monkeypatch, caplog):
     new = ClickHouseIndex("value_idx", "value + 13", "set(79)", 4)
     context = _context()
     context.connection.execute.return_value.fetchone.return_value = (
-        "old declaration",
-        "old shape",
-        "SELECT value",
         "new declaration",
         "new shape",
         "SELECT value + 13",
+        "old declaration",
+        "old shape",
+        "SELECT value",
     )
+    context.connection.exec_driver_sql.return_value.fetchall.return_value = [("SELECT tuple(value + 13)",)]
     _, operation, _ = _compare(monkeypatch, [old], [new], context)
     assert [type(op) for op in operation.ops] == [_DropClickHouseIndexOp, _AddClickHouseIndexOp]
     drop, add = operation.ops
     assert drop.existing_index == old
     assert (add.expression, add.type_, add.granularity) == ("value + 13", "set(79)", 4)
+    assert context.connection.exec_driver_sql.call_count == 1
+    assert "SELECT tuple(value + 13)" in context.connection.exec_driver_sql.call_args.args[0]
     assert "Detected changed index" in caplog.text
     reverse = operation.reverse()
     assert [type(op) for op in reverse.ops] == [_DropClickHouseIndexOp, _AddClickHouseIndexOp]
@@ -466,11 +469,12 @@ def test_empty_type_arguments_compare_equally(declared_type, reflected_type):
 )
 @pytest.mark.parametrize("lookup_kind", ["expression", "expression or function"])
 @pytest.mark.parametrize("scope_separator", [" in scope", ". In scope", ". Maybe you meant: ['value']. In scope"])
+@pytest.mark.parametrize(("type_", "granularity"), [("minmax", 1), ("set(79)", 1), ("minmax", 4), ("set(79)", 4)])
 def test_unknown_identifier_requires_new_physical_declared_column(
-    identifier, code, is_alias, is_reflected, changed, lookup_kind, scope_separator
+    identifier, code, is_alias, is_reflected, changed, lookup_kind, scope_separator, type_, granularity
 ):
     context = _context()
-    declared = ClickHouseIndex("value_idx", "extra", "minmax", 1)
+    declared = ClickHouseIndex("value_idx", "extra", type_, granularity)
     reflected = ClickHouseIndex("value_idx", "value", "minmax", 1)
     metadata_table = _table()
     added_column = Column("extra", UInt32, key="extra_key", **({"clickhouse_alias": "value"} if is_alias else {}))
@@ -480,10 +484,10 @@ def test_unknown_identifier_requires_new_physical_declared_column(
         live_table.append_column(Column("extra", UInt32, clickhouse_alias="value"))
     context.connection.execute.return_value.fetchone.return_value = (
         "full declared definition",
-        "same shape",
+        f"{type_} {granularity}",
         "SELECT extra",
         "full reflected definition",
-        "same shape",
+        "minmax 1",
         "SELECT value",
     )
     error = DBAPIError(
@@ -497,9 +501,37 @@ def test_unknown_identifier_requires_new_physical_declared_column(
     if changed:
         assert not _definitions_match(context, declared, reflected, metadata_table, live_table, [added_column])
         assert r"CROSS JOIN null('\`extra\` UInt32')" in context.connection.exec_driver_sql.call_args.args[0]
+    elif is_reflected and (type_, granularity) != ("minmax", 1):
+        assert not _definitions_match(context, declared, reflected, metadata_table, live_table, [added_column])
+        assert context.connection.exec_driver_sql.call_count == 1
     else:
         with pytest.raises(DBAPIError):
             _definitions_match(context, declared, reflected, metadata_table, live_table, [added_column])
+
+
+@pytest.mark.parametrize(("type_", "granularity"), [("minmax", 1), ("set(79)", 1), ("minmax", 4), ("set(79)", 4)])
+def test_new_physical_column_fallback_validates_complete_expression(type_, granularity):
+    context = _context()
+    metadata_table = _table()
+    added_column = Column("extra", UInt32)
+    metadata_table.append_column(added_column)
+    declared = ClickHouseIndex("value_idx", "extra + missing", type_, granularity)
+    reflected = ClickHouseIndex("value_idx", "value", "minmax", 1)
+    context.connection.execute.return_value.fetchone.return_value = (
+        "full declared definition",
+        f"{type_} {granularity}",
+        "SELECT extra + missing",
+        "full reflected definition",
+        "minmax 1",
+        "SELECT value",
+    )
+    context.connection.exec_driver_sql.side_effect = [
+        DBAPIError(None, None, DatabaseError(f"Unknown expression identifier `{name}`", code=47)) for name in ("extra", "missing")
+    ]
+    with pytest.raises(DBAPIError, match="missing"):
+        _definitions_match(context, declared, reflected, metadata_table, _table(), [added_column])
+    assert context.connection.exec_driver_sql.call_count == 2
+    assert r"CROSS JOIN null('\`extra\` UInt32')" in context.connection.exec_driver_sql.call_args.args[0]
 
 
 def test_inspector_routes_explicit_index_reflection_through_dialect():
