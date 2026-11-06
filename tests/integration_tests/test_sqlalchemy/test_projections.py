@@ -195,7 +195,19 @@ def test_server_normalization_and_replay(run_sqlalchemy, test_db, ch_name, selec
         reflected = sa.inspect(connection).get_clickhouse_projections(table_name, test_db)
         Operations(MigrationContext.configure(connection)).drop_clickhouse_projection(table_name, "p", schema=test_db)
         Operations(MigrationContext.configure(connection)).add_clickhouse_projections(table_name, reflected, schema=test_db)
-        assert _diff(connection, metadata, table_name).upgrade_ops.is_empty()
+        upgrade_ops = _diff(connection, metadata, table_name).upgrade_ops
+        if not upgrade_ops.is_empty():
+            replayed = sa.inspect(connection).get_clickhouse_projections(table_name, test_db)
+            formatted = {
+                text: connection.execute(
+                    sa.text("SELECT formatQuerySingleLine(:query)"),
+                    {"query": f"CREATE TABLE _t (_v UInt8, PROJECTION _p ({text})) ENGINE MergeTree ORDER BY tuple()"},
+                ).scalar_one()
+                for text in (select, reflected[0].select, replayed[0].select)
+            }
+            pytest.fail(
+                f"Replayed projection drifted: created={reflected[0].select!r} replayed={replayed[0].select!r} formatted={formatted!r}"
+            )
 
     run_sqlalchemy(workflow)
 
