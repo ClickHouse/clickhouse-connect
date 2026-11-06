@@ -17,7 +17,7 @@ def test_engine_fixture(test_config: TestConfig) -> Iterator[Engine]:
         "&use_skip_indexes=0&ca_cert=certifi&query_limit=2333&compression=zstd"
     )
     if test_config.cloud:
-        conn_str += "&select_sequential_consistency=1"
+        conn_str += "&select_sequential_consistency=1&alter_sync=2"
     if test_config.insert_quorum:
         conn_str += f"&insert_quorum={test_config.insert_quorum}"
 

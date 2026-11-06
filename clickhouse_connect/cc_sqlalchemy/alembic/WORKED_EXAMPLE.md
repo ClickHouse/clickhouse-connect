@@ -207,6 +207,11 @@ For ClickHouse specifically, this version of `env.py`:
 - `clickhouse_writer(...)` ensures generated revisions include required ClickHouse imports
 - `version_table="alembic_version"` configures a compatible version table
 
+On ClickHouse Cloud, add `alter_sync=2` to the migration engine URL so schema
+changes finish across replicas before reflection. This matters if a connection is
+replaced or autogenerate follows an upgrade. `select_sequential_consistency=1`
+covers data reads, not schema changes.
+
 Version-table inserts bypass insert deduplication so downgrades can restore earlier
 revision rows. Offline SQL uses `SETTINGS deduplicate_insert = 'disable'` and needs
 that setting on the target server. Online migrations fall back to

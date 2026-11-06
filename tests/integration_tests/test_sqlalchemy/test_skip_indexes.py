@@ -37,6 +37,7 @@ def run_sqlalchemy(client_mode, call, test_engine, test_config):
         query = {}
         if test_config.cloud:
             query["select_sequential_consistency"] = "1"
+            query["alter_sync"] = "2"
         if test_config.insert_quorum:
             query["insert_quorum"] = str(test_config.insert_quorum)
         engine = create_async_engine(
