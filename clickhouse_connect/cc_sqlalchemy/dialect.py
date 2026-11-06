@@ -27,12 +27,14 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.base import (
     _QueryValueSignature,
     _typed_query_value,
 )
+from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex
 from clickhouse_connect.cc_sqlalchemy.inspector import (
     _INTERNAL_QUERY_OPTION,
     _INTERNAL_QUERY_SENTINEL,
     ChInspector,
     _database_name,
     _NoSuchTableError,
+    get_clickhouse_indexes,
     get_columns,
     get_table_metadata,
     get_view_definition,
@@ -556,6 +558,11 @@ class ClickHouseDialect(DefaultDialect):
 
     def get_indexes(self, connection, table_name, schema=None, **kw):
         return []
+
+    def get_clickhouse_indexes(
+        self, connection: Connection, table_name: str, schema: str | None = None, **kwargs: Any
+    ) -> list[ClickHouseIndex]:
+        return get_clickhouse_indexes(connection, table_name, schema)
 
     def get_unique_constraints(self, connection, table_name, schema=None, **kw):
         return []

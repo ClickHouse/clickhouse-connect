@@ -934,6 +934,7 @@ def test_alembic_impl_version_table_sql():
     )
 
     impl.create_table(version_table)
+    impl._exec(version_table.insert().values(version_num=literal_column("'base'")))
 
     update_stmt = (
         version_table.update().values(version_num=literal_column("'head'")).where(version_table.c.version_num == literal_column("'base'"))
@@ -945,9 +946,42 @@ def test_alembic_impl_version_table_sql():
     sql = buffer.getvalue()
     assert "CREATE TABLE `alembic_version`" in sql
     assert "Engine MergeTree" in sql
-    assert "INSERT INTO `alembic_version` (version_num) VALUES ('head')" in sql
+    assert "INSERT INTO `alembic_version` (version_num) SETTINGS deduplicate_insert = 'disable' VALUES ('base')" in sql
+    assert "INSERT INTO `alembic_version` (version_num) SETTINGS deduplicate_insert = 'disable' VALUES ('head')" in sql
     assert "ALTER TABLE `alembic_version` DELETE WHERE `version_num` = 'base' SETTINGS mutations_sync = 2" in sql
     assert "ALTER TABLE `alembic_version` DELETE WHERE `version_num` = 'old' SETTINGS mutations_sync = 2" in sql
+
+
+@pytest.mark.parametrize("modern_setting", [False, True])
+def test_version_insert_uses_supported_deduplication_setting(modern_setting):
+    connection = Mock()
+    connection.connection.dbapi_connection.client.server_settings = {"deduplicate_insert": object()} if modern_setting else {}
+    impl = ClickHouseImpl(ClickHouseDialect(), connection, False, False, StringIO(), {})
+    version = impl.version_table_impl(version_table="alembic_version", version_table_schema=None, version_table_pk=True)
+    impl._exec(version.insert().values(version_num=literal_column("'revision_1'")))
+    setting = "deduplicate_insert = 'disable'" if modern_setting else "insert_deduplicate = 0"
+    assert f"SETTINGS {setting} VALUES ('revision_1')" in str(connection.execute.call_args.args[0])
+
+
+def test_user_table_inserts_keep_default_deduplication():
+    buffer = StringIO()
+    impl = ClickHouseImpl(ClickHouseDialect(), None, True, False, buffer, {})
+    table = Table("events", MetaData(), Column("value", types.UInt32()), MergeTree(order_by="value"))
+    impl._exec(table.insert().values(value=13))
+    assert "deduplicate" not in buffer.getvalue()
+
+
+@pytest.mark.parametrize("update", [False, True])
+def test_offline_version_writes_disable_deduplication(update):
+    buffer = StringIO()
+    context = MigrationContext.configure(dialect=ClickHouseDialect(), opts={"as_sql": True, "output_buffer": buffer})
+    version = context._version
+    statement = version.update() if update else version.insert()
+    statement = statement.values(version_num=literal_column("'revision_1'"))
+    if update:
+        statement = statement.where(version.c.version_num == literal_column("'revision_0'"))
+    context.impl._exec(statement)
+    assert "SETTINGS deduplicate_insert = 'disable' VALUES ('revision_1')" in buffer.getvalue()
 
 
 def test_version_table_schema_desync():
@@ -1138,6 +1172,8 @@ def test_alembic_public_exports():
 
     assert set(ch_alembic.__all__) == {
         "COMPARE_TABLE_OPTIONS_OPT",
+        "COMPARE_INDEXES_OPT",
+        "IndexComparisonError",
         "patch_alembic_version",
         "clickhouse_writer",
         "include_object",
@@ -1928,6 +1964,64 @@ def test_clickhouse_custom_ops_autogenerate_render():
         "op.reload_clickhouse_dictionary(",
     ):
         assert expected in generated
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        _AddClickHouseIndexOp("events", "idx_1", "user_id", "minmax"),
+        _AddClickHouseIndexesOp("events", [ClickHouseIndex("idx_1", "user_id", "minmax")]),
+        _DropClickHouseIndexOp("events", "idx_1"),
+        _DropClickHouseIndexesOp("events", ["idx_1"]),
+        _MaterializeClickHouseIndexOp("events", "idx_1"),
+        _AddClickHouseProjectionOp("events", "proj_1", "SELECT user_id"),
+        _AddClickHouseProjectionsOp("events", [ClickHouseProjection("proj_1", "SELECT user_id")]),
+        _DropClickHouseProjectionOp("events", "proj_1"),
+        _DropClickHouseProjectionsOp("events", ["proj_1"]),
+        _MaterializeClickHouseProjectionOp("events", "proj_1"),
+        _ModifyClickHouseTableSettingsOp("events", {"merge_with_ttl_timeout": 79}),
+        _ResetClickHouseTableSettingsOp("events", ["merge_with_ttl_timeout"]),
+        _CreateClickHouseMaterializedViewOp("events_mv", "events", "SELECT user_id FROM events"),
+        _DropClickHouseMaterializedViewOp("events_mv"),
+        _CreateClickHouseDictionaryOp(
+            "dim_lookup",
+            [Column("id", types.UInt32())],
+            primary_key="id",
+            source="CLICKHOUSE(TABLE 'events')",
+            layout="FLAT",
+            lifetime="MIN 0 MAX 10",
+        ),
+        _DropClickHouseDictionaryOp("dim_lookup"),
+        _ReloadClickHouseDictionaryOp("dim_lookup"),
+    ],
+    ids=lambda operation: type(operation).__name__,
+)
+def test_clickhouse_custom_ops_reject_batch_rendering(operation):
+    context = MigrationContext.configure(dialect=ClickHouseDialect())
+    with pytest.raises(CommandError, match="do not support batch rendering.*render_as_batch=False"):
+        render_python_code(
+            ops.UpgradeOps(ops=[ops.ModifyTableOps("events", ops=[operation])]),
+            migration_context=context,
+            render_as_batch=True,
+        )
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("indexes", [None, ()])
+def test_empty_index_options_do_not_change_table_rendering(reverse, indexes):
+    context = MigrationContext.configure(dialect=ClickHouseDialect())
+    autogen_context = AutogenContext(
+        context,
+        opts={"sqlalchemy_module_prefix": "sa.", "alembic_module_prefix": "op.", "user_module_prefix": None},
+    )
+    table = Table("events", MetaData(), Column("value", types.UInt32()), MergeTree(order_by="value"))
+    operation = ops.CreateTableOp.from_table(table)
+    if reverse:
+        operation = operation.reverse()
+    expected = render.render_op_text(autogen_context, operation)
+    kwargs = operation.table_kw if reverse else operation.kw
+    kwargs["clickhousedb_indexes"] = indexes
+    assert render.render_op_text(autogen_context, operation) == expected
 
 
 def test_clickhouse_custom_op_renderers_add_value_object_imports():

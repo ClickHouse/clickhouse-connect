@@ -11,6 +11,7 @@ from sqlalchemy.sql.visitors import Visitable
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
+from clickhouse_connect.cc_sqlalchemy.ddl.index import index_definition, table_indexes
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
 from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.driver.binding import format_str, quote_identifier
@@ -136,6 +137,8 @@ class ChDDLCompiler(DDLCompiler):
         if_not_exists = " IF NOT EXISTS" if getattr(create, "if_not_exists", False) else ""
 
         if ClickHouseDDLHelper.is_dictionary(table):
+            if table_indexes(table):
+                raise CompileError("Dictionaries do not support data skipping indexes")
             return self._visit_create_dictionary(create, table, if_not_exists)
 
         engine = getattr(table, "engine", None) or ClickHouseDDLHelper.get_option(table, "engine")
@@ -144,7 +147,10 @@ class ChDDLCompiler(DDLCompiler):
                 f"ClickHouse table '{table.name}' requires an engine — specify e.g. MergeTree(order_by='id') as a table argument"
             )
         text = f"CREATE TABLE{if_not_exists} {format_table(table)} ("
-        text += ", ".join([self.get_column_specification(c.element) for c in create.columns])
+        text += ", ".join(
+            [self.get_column_specification(c.element) for c in create.columns]
+            + [f"INDEX {index_definition(index)}" for index in table_indexes(table)]
+        )
         text += ") " + engine.compile()
         if table.comment:
             text += f" COMMENT {self.sql_compiler.render_literal_value(table.comment, sqltypes.STRINGTYPE)}"

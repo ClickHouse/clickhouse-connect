@@ -583,6 +583,45 @@ with Session(engine) as session:
     session.commit()
 ```
 
+## Data skipping indexes {#sqlalchemy-skip-indexes}
+
+Declare ClickHouse data skipping indexes as table arguments. This API requires SQLAlchemy, and works without Alembic:
+
+```python
+from sqlalchemy import Column, MetaData, Table, inspect
+from clickhouse_connect.cc_sqlalchemy import ClickHouseIndex, engines, types
+
+metadata = MetaData()
+events = Table(
+    "events",
+    metadata,
+    Column("value", types.UInt32),
+    Column("label", types.String),
+    ClickHouseIndex("value_idx", "value", "minmax"),
+    ClickHouseIndex("label_idx", "label", "bloom_filter(0.01)", granularity=4),
+    engines.MergeTree(order_by="value"),
+)
+metadata.create_all(engine)
+
+indexes = inspect(engine).get_clickhouse_indexes("events")
+```
+
+Index expressions and types are raw ClickHouse SQL. Definitions are immutable and names must be unique within a table. Declarations are stored in the `clickhousedb_indexes` table option, which also accepts a sequence of `ClickHouseIndex` definitions. `Table.to_metadata()` preserves them. `CREATE TABLE` renders them inline. `if_not_exists`, `first`, and `after_index` remain available to imperative ALTER helpers and do not affect inline creation or schema comparison.
+
+`Inspector.get_clickhouse_indexes()` returns replayable definitions for explicit indexes. Reflected expressions use a `tuple(...)` wrapper to preserve ClickHouse's index expression list, including nested tuples. Server-created implicit indexes are excluded using the catalog's `creation` field. Catalog errors and unknown classifications raise an error. The catalog must expose `creation`. ClickHouse release notes document this field in 26.1.1.912 and the 25.12.2.54 backport. Compatibility is checked by the actual query rather than by a version string.
+
+Generic `Inspector.get_indexes()` keeps returning an empty list. `Table(..., autoload_with=engine)` does not read the skip-index catalog. To copy both columns and indexes explicitly:
+
+```python
+inspector = inspect(engine)
+reflected = Table(
+    "events",
+    MetaData(),
+    autoload_with=engine,
+    clickhousedb_indexes=inspector.get_clickhouse_indexes("events"),
+)
+```
+
 ## Alembic migrations {#sqlalchemy-alembic}
 
 ClickHouse Connect includes Alembic integration for ClickHouse schema migrations. Install it with:
@@ -607,6 +646,10 @@ The generated `alembic.ini` uses `script_location = %(here)s/alembic`. Keep that
 
 Import `clickhouse_connect.cc_sqlalchemy.alembic` in Alembic's `env.py` to register the dialect integration. Autogenerate supports common table evolution, including table creation and removal, column add/alter/drop, defaults, comments, and MergeTree table settings. Use manual operations for table and column renames. Review every generated migration before applying it.
 
+On ClickHouse Cloud, add `alter_sync=2` to the migration engine URL so later reflection sees completed schema changes across replicas. This matters when a connection is replaced or autogenerate runs immediately after an upgrade. `select_sequential_consistency=1` covers data reads, not schema changes.
+
+Version-table inserts bypass insert deduplication so a downgrade can restore a previously recorded revision. Generated offline SQL uses `SETTINGS deduplicate_insert = 'disable'`, which requires that setting on the target server. Online migrations use the legacy `insert_deduplicate = 0` setting when the server lacks the newer setting. Ordinary table inserts keep their configured deduplication behavior.
+
 Autogenerate compares the declared table engine with the server for tables present in both. Automatic migration of changes to engine family, positional engine arguments, `ORDER BY`, `PRIMARY KEY`, `PARTITION BY`, `SAMPLE BY`, and table `TTL` is unsupported, so a difference raises `UnsupportedTableChangeError` instead of writing an empty or misleading revision. Write an explicit migration after reviewing the server's ALTER support and the data affected. The exception carries a `drifts` tuple of `TableOptionDrift` records with the table, the option, and both spellings. Constructing the exception requires at least one drift, otherwise it raises `ValueError`. Expressions are compared after normalization, and when the text still differs the server's `formatQuerySingleLine` settles spellings such as `INTERVAL 30 DAY` against `toIntervalDay(30)`. Quoted engine arguments compare their decoded string contents exactly, including whitespace and punctuation. TTL clauses are formatted as `ALTER TABLE t MODIFY TTL ...`, preserving actions such as `DELETE WHERE`, `TO VOLUME`, and `RECOMPRESS`. `MergeTree` and the Cloud `Shared*` and `Replicated*` variants count as one family, and replication path arguments are not compared.
 
 Declared engine `settings` that differ from the server render as `op.modify_clickhouse_table_settings(...)`, with a downgrade that restores or resets each setting. Values and types from `system.merge_tree_settings` resolve defaults and equivalent boolean and numeric spellings; string settings keep their string meaning. Settings the model does not declare are preserved, including settings removed from the model after an earlier migration. Reflection cannot distinguish those settings from server-injected settings, so autogenerate never resets them automatically. Use `op.reset_clickhouse_table_settings(...)` explicitly when a reset is intended. Read-only settings such as `index_granularity` and `index_granularity_bytes` are compared and refused like keys. Pass `clickhousedb_compare_table_options=False` to `context.configure()` to skip the comparison.
@@ -629,7 +672,37 @@ ClickHouse-specific `op.*` helpers cover:
 - Materialized view creation and removal.
 - Dictionary creation, removal, and reload.
 
-ClickHouse data skipping indexes are not SQLAlchemy indexes. `Index`, `Column(index=True)`, `op.create_index`, and `op.drop_index` are rejected to avoid partial or incorrect DDL. Use `op.add_clickhouse_index` and `op.drop_clickhouse_index`.
+Declare skip indexes with `ClickHouseIndex` for autogenerate support, or use the existing `op.add_clickhouse_index` and `op.drop_clickhouse_index` helpers in explicit revisions. Imports from `clickhouse_connect.cc_sqlalchemy.alembic` and `.alembic.operations` remain supported. Standard SQLAlchemy `Index`, `Column(index=True)`, `op.create_index`, and `op.drop_index` remain rejected.
+
+For managed tables, declarations own the explicit live index set by default. An undeclared explicit index produces a drop operation, including indexes previously created only by imperative migrations. A changed expression, index type, parameter, or effective granularity produces an adjacent drop followed by an add. Downgrade restores the prior definition. Operations remain visible to `process_revision_directives` before rendering. Neither direction restores prior materialization, and no `MATERIALIZE INDEX` is generated. Materialize explicitly if existing parts need the index immediately.
+
+Generate index additions, removals, and edits with `render_as_batch=False`. Their helpers do not support Alembic's deferred batch queue, so `render_as_batch=True` raises an error during generation. Inline indexes in table creation and table-drop downgrade snapshots remain supported.
+
+The same restriction applies to other custom ClickHouse operations inside a batch block, including table settings, projections, and materialization. Generate these operations outside batch mode.
+
+For physical batch recreation with `op.batch_alter_table()`, pass a complete `copy_from` Table containing the columns, engine, and `clickhousedb_indexes`. Use the explicit reflection example above to load both columns and indexes, or supply complete metadata for offline migrations. Automatic online recreation reads the index catalog at execution time and refuses tables with explicit indexes before creating or dropping tables. The autogenerate comparison opt-out does not bypass this guard.
+
+Before upgrading an existing Alembic environment, declare its explicit indexes, filter unmanaged indexes, or disable index comparison:
+
+```python
+context.configure(
+    connection=connection,
+    target_metadata=metadata,
+    clickhousedb_compare_indexes=False,
+)
+```
+
+This option disables index comparison before any skip-index catalog reads during autogenerate. It also disables index snapshots for generated table-drop downgrades. Standard `include_name` and `include_object` hooks receive `type_="index"`. Name filters apply to both reflected and declared candidates so an excluded name remains unmanaged. Object filters receive the usual `reflected` and `compare_to` values; their index objects expose the definition fields and `.table`. For example, the standard Alembic unmanaged-object recipe, `reflected and compare_to is None`, protects imperative-only indexes. Table filters are respected before index catalog reads. Inline indexes on newly created tables are also filtered before policy hooks.
+
+Comparison uses server formatting and analysis to account for ClickHouse spellings and defaults. Expression analysis uses the current table, server functions, and settings. It requires the analyzer and the expected `EXPLAIN` output. These capabilities were verified against ClickHouse 26.8, with source review at 26.6. The catalog field alone does not establish comparison support on an older server. Changed `ALIAS` definitions that affect an index require an explicit column migration before index comparison.
+
+An index edit can reference a physical column added in the same revision. If analysis reports that scheduled new column as an unknown identifier, autogenerate validates the full expression with the added columns available, then emits the column addition before the index drop and add. Other unknown identifiers, including typos and columns excluded by filters, still raise `IndexComparisonError`.
+
+Empty type parentheses and case differences, such as `minmax()`, `MinMax()`, and `minmax`, compare equally. Omitted type arguments are not expanded for comparison: changing between `bloom_filter` and `bloom_filter(0.025)` can produce a one-time drop and add even though the server uses that default.
+
+Comparison does not establish equivalence for arbitrary SQL expressions. Different analyzed forms can produce a replacement even when the expressions return the same values. Review such changes or manage those indexes with explicit migrations and filters.
+
+If catalog access, expression resolution, or the expected normalization output is unavailable, autogenerate raises `IndexComparisonError`, carrying the table, index, declared and reflected definitions, and the reason. Review edits carefully. The drop and add are separate, nontransactional statements. A failed add can leave the old index absent.
 
 See the complete [Alembic worked example](https://github.com/ClickHouse/clickhouse-connect/blob/main/clickhouse_connect/cc_sqlalchemy/alembic/WORKED_EXAMPLE.md). Users migrating from `clickhouse-sqlalchemy` should also read the [migration guide](https://github.com/ClickHouse/clickhouse-connect/blob/main/clickhouse_connect/cc_sqlalchemy/MIGRATING_FROM_CLICKHOUSE_SQLALCHEMY.md).
 

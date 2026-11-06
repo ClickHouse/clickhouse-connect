@@ -8,27 +8,12 @@ from alembic.operations import MigrateOperation, Operations
 from alembic.operations.ops import ModifyTableOps
 from sqlalchemy import Column
 
+from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex, index_definition
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import column_specification, render_settings
 from clickhouse_connect.driver.binding import format_str, quote_identifier
 
 __all__ = ["ClickHouseIndex", "ClickHouseProjection"]
-
-
-@dataclass(frozen=True)
-class ClickHouseIndex:
-    """A data skipping index definition. expression and type_ are raw SQL passthrough."""
-
-    name: str
-    expression: str
-    type_: str
-    granularity: int | None = None
-    if_not_exists: bool = False
-    first: bool = False
-    after_index: str | None = None
-
-    def __post_init__(self) -> None:
-        _validate_position(self.first, self.after_index, "ClickHouseIndex")
 
 
 @dataclass(frozen=True)
@@ -75,12 +60,7 @@ def _render_add_index(index: ClickHouseIndex) -> str:
     parts = ["ADD INDEX"]
     if index.if_not_exists:
         parts.append("IF NOT EXISTS")
-    parts.append(quote_identifier(index.name))
-    parts.append(index.expression)
-    parts.append("TYPE")
-    parts.append(index.type_)
-    if index.granularity is not None:
-        parts.append(f"GRANULARITY {index.granularity}")
+    parts.append(index_definition(index))
     if index.first:
         parts.append("FIRST")
     elif index.after_index is not None:
@@ -172,6 +152,7 @@ class _AddClickHouseIndexOp(MigrateOperation):
             if_exists=True,
             schema=self.schema,
             clickhouse_settings=self.clickhouse_settings,
+            existing_index=ClickHouseIndex(self.name, self.expression, self.type_, self.granularity),
         )
 
 
@@ -262,12 +243,28 @@ class _DropClickHouseIndexOp(MigrateOperation):
         if_exists: bool = False,
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
+        existing_index: ClickHouseIndex | None = None,
     ) -> None:
         self.table_name = table_name
         self.name = name
         self.if_exists = if_exists
         self.schema = schema
         self.clickhouse_settings = clickhouse_settings
+        self.existing_index = existing_index
+
+    def reverse(self) -> MigrateOperation:
+        index = self.existing_index
+        if index is None:
+            return super().reverse()
+        return _AddClickHouseIndexOp(
+            self.table_name,
+            index.name,
+            index.expression,
+            index.type_,
+            granularity=index.granularity,
+            schema=self.schema,
+            clickhouse_settings=self.clickhouse_settings,
+        )
 
     @classmethod
     def drop_clickhouse_index(

@@ -1,16 +1,18 @@
 import ast
 import re
 from collections.abc import Collection
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import sqlalchemy.schema as sa_schema
 from sqlalchemy import String, bindparam, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.engine.reflection import Inspector
-from sqlalchemy.exc import NoResultFound, NoSuchTableError
+from sqlalchemy.exc import InvalidRequestError, NoResultFound, NoSuchTableError
 from sqlalchemy.sql.elements import TextClause
 
 from clickhouse_connect.cc_sqlalchemy._schema import COLUMN_OPTIONS, TABLE_OPTIONS, canonical_schema_kwargs
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
+from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import build_engine
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import (
@@ -19,6 +21,9 @@ from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import (
     split_top_level,
 )
 from clickhouse_connect.driver.client import _INTERNAL_QUERY_FORMATS
+
+if TYPE_CHECKING:
+    from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 
 _INTERNAL_QUERY_OPTION = "ch_internal_query"
 _INTERNAL_QUERY_SENTINEL = object()
@@ -69,6 +74,36 @@ def get_table_metadata(connection, table_name, schema=None):
 def get_engine(connection, table_name, schema=None):
     row = get_table_metadata(connection, table_name, schema)
     return build_engine(row.engine_full)
+
+
+def get_clickhouse_indexes(connection: Connection, table_name: str, schema: str | None = None) -> list[ClickHouseIndex]:
+    """Reflect explicit, replayable index definitions without guessing implicit names."""
+    database = _database_name(connection, schema)
+    try:
+        get_table_metadata(connection, table_name, database)
+    except NoResultFound as ex:
+        raise _NoSuchTableError(str(ex)) from ex
+    return _get_clickhouse_index_catalog(connection, database, table_name).get(table_name, [])
+
+
+def _get_clickhouse_index_catalog(connection: Connection, database: str, table_name: str | None = None) -> dict[str, list[ClickHouseIndex]]:
+    """Read index definitions for tables already known to exist."""
+    statement = text(
+        "SELECT table, name, expr, type_full, granularity, creation FROM system.data_skipping_indices "
+        "WHERE database = :database" + (" AND table = :table_name" if table_name is not None else "") + " ORDER BY table, name"
+    ).bindparams(bindparam("database", type_=String()))
+    parameters = {"database": database}
+    if table_name is not None:
+        statement = statement.bindparams(bindparam("table_name", type_=String()))
+        parameters["table_name"] = table_name
+    indexes: dict[str, list[ClickHouseIndex]] = {}
+    for row in connection.execute(with_internal_query_formats(statement), parameters):
+        if row.creation == "Implicit":
+            continue
+        if row.creation != "Explicit":
+            raise InvalidRequestError(f"Unrecognized ClickHouse index creation classification {row.creation!r}")
+        indexes.setdefault(row.table, []).append(ClickHouseIndex(row.name, f"tuple({row.expr})", row.type_full, row.granularity))
+    return indexes
 
 
 def get_view_definition(connection, view_name: str, schema: str | None = None) -> str | None:
@@ -197,6 +232,11 @@ def get_columns(connection, table_name: str, schema: str | None = None) -> list[
 
 
 class ChInspector(Inspector):
+    def get_clickhouse_indexes(self, table_name: str, schema: str | None = None, **kwargs: Any) -> list[ClickHouseIndex]:
+        """Return explicit skip indexes. Generic get_indexes remains unchanged."""
+        with self._operation_context() as connection:
+            return cast("ClickHouseDialect", self.dialect).get_clickhouse_indexes(connection, table_name, schema, **kwargs)
+
     def reflect_table(
         self,
         table,

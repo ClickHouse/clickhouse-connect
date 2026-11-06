@@ -207,6 +207,17 @@ For ClickHouse specifically, this version of `env.py`:
 - `clickhouse_writer(...)` ensures generated revisions include required ClickHouse imports
 - `version_table="alembic_version"` configures a compatible version table
 
+On ClickHouse Cloud, add `alter_sync=2` to the migration engine URL so schema
+changes finish across replicas before reflection. This matters if a connection is
+replaced or autogenerate follows an upgrade. `select_sequential_consistency=1`
+covers data reads, not schema changes.
+
+Version-table inserts bypass insert deduplication so downgrades can restore earlier
+revision rows. Offline SQL uses `SETTINGS deduplicate_insert = 'disable'` and needs
+that setting on the target server. Online migrations fall back to
+`insert_deduplicate = 0` when the newer setting is unavailable. This does not change
+deduplication for your data tables.
+
 ## Step 7: Generate the initial migration
 
 Now we are at the key point where:
@@ -765,3 +776,54 @@ The intended user experience is:
 - roll back bad revisions when needed
 
 If you find yourself needing features or hitting bugs, find us on [GitHub](https://github.com/ClickHouse/clickhouse-connect).
+
+## Declarative skip indexes
+
+Use `ClickHouseIndex` table arguments to include indexes in generated `CREATE TABLE`
+statements and to compare them on existing tables:
+
+```python
+from clickhouse_connect.cc_sqlalchemy import ClickHouseIndex
+
+# Inside Table(...):
+ClickHouseIndex("value_idx", "value", "minmax", granularity=4)
+```
+
+Explicit indexes absent from managed table metadata generate drops by default.
+Before upgrading an environment that used only `op.add_clickhouse_index`, declare
+those indexes, protect unmanaged objects with `include_name` or `include_object`,
+or pass `clickhousedb_compare_indexes=False` to `context.configure()`. The opt-out
+runs before index catalog reads. Catalog classification and server normalization
+must be available when comparison is enabled. Unavailable catalog access,
+expression resolution, or expected normalization output raises
+`IndexComparisonError` with structured definitions and a reason. Comparison uses
+the server's structural normal form. It does not prove arbitrary mathematical
+equivalence; different analyzed forms can produce replacement operations.
+
+Same-name edits generate separate drop and add operations. Their downgrades
+restore definitions, including indexes on a recreated dropped table, but do not
+restore old part materialization. Review the generated operations before running
+them and call `op.materialize_clickhouse_index` explicitly when required.
+
+An edited index can reference a physical column added in the same revision.
+When analysis names that scheduled new column as an unknown identifier,
+autogenerate validates the full expression with the added columns available,
+then emits `add_column` followed by the index drop and add. Downgrade restores
+the old index before dropping the column. Other unknown identifiers, including
+typos and columns excluded by filters, still raise `IndexComparisonError`.
+Changed `ALIAS` definitions that affect an index still require an explicit column
+migration before index comparison.
+
+Generate index add, drop, and edit operations with `render_as_batch=False`.
+ClickHouse index helpers do not participate in Alembic's deferred batch queue,
+so batch rendering of those operations raises an actionable error. Inline table
+creation and drop-table downgrade snapshots remain supported.
+
+Other custom ClickHouse operations inside a batch block, including table settings,
+projections, and materialization, are also refused during rendering.
+
+For physical batch recreation, pass a complete `copy_from` Table containing its
+`ClickHouseIndex` definitions. Automatic recreation reads the explicit-index
+catalog at execution time and refuses tables with explicit indexes before
+creating or dropping tables. Ordinary table autoload still omits skip indexes.
+The autogenerate comparison opt-out does not bypass this execution guard.
