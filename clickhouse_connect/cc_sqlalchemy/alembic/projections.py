@@ -216,7 +216,8 @@ def _ast_dump(context: AutogenContext, body: str, names: tuple[dict[str, str], d
         raise ValueError("Server returned no projection syntax tree")
     scalar, aggregate = names
     lines = []
-    for (line,) in rows:
+    for row in rows:
+        line = str(row[0])
         match = _AST_FUNCTION.match(line)
         if match:
             name = scalar.get(match.group(2).lower(), match.group(2))
