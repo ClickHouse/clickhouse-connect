@@ -22,7 +22,12 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import SimpleAggregateF
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Tuple as ChSqlaTuple
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import _Variant as ChSqlaVariant
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import MergeTree
-from clickhouse_connect.cc_sqlalchemy.inspector import get_clickhouse_indexes, with_internal_query_formats
+from clickhouse_connect.cc_sqlalchemy.inspector import (
+    _database_name,
+    _get_clickhouse_projection_catalog,
+    get_clickhouse_indexes,
+    with_internal_query_formats,
+)
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import (
     ClickHouseDDLHelper,
@@ -225,7 +230,7 @@ class ClickHouseImpl(DefaultImpl):
         super().create_table(table, **kw)
 
     def prep_table_for_batch(self, batch_impl: Any, table: Table) -> None:
-        """Reject incomplete index metadata before batch recreation starts."""
+        """Reject incomplete index and projection metadata before batch recreation starts."""
         batch_indexes = batch_impl.new_indexes
         existing_indexes = batch_impl.indexes
         if batch_indexes or existing_indexes or _has_standard_index(table):
@@ -236,6 +241,12 @@ class ClickHouseImpl(DefaultImpl):
                 raise CommandError(
                     "Automatic batch recreation cannot preserve explicit ClickHouse indexes. "
                     "Pass a complete Table with its ClickHouseIndex definitions as copy_from to batch_alter_table()."
+                )
+            database = _database_name(self.connection, table.schema)
+            if _get_clickhouse_projection_catalog(self.connection, database, table.name).get(table.name):
+                raise CommandError(
+                    "Automatic batch recreation cannot preserve explicit ClickHouse projections. "
+                    "Pass a complete Table with its ClickHouseProjection definitions as copy_from to batch_alter_table()."
                 )
         super().prep_table_for_batch(batch_impl, table)
 
