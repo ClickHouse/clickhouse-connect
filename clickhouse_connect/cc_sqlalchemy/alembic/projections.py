@@ -26,7 +26,7 @@ from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
 from clickhouse_connect.driver.binding import _SQL_TOKEN_INVALID, _SQL_TOKEN_OPEN_PAREN, _SQL_TOKEN_TRIVIA, _SQL_TOKEN_WORD, _next_sql_token
 
-logger = logging.getLogger("alembic.autogenerate.compare.clickhouse_projections")
+logger: logging.Logger = logging.getLogger("alembic.autogenerate.compare.clickhouse_projections")
 
 COMPARE_PROJECTIONS_OPT = "clickhousedb_compare_projections"
 
@@ -91,7 +91,9 @@ class ProjectionComparisonError(CommandError):
         self.table_name = table_name
         self.schema = schema
         self.projection_name = projection_name
-        self.reflected = ClickHouseProjection(reflected.name, reflected.select) if reflected is not None else None
+        self.reflected: ClickHouseProjection | None = (
+            ClickHouseProjection(reflected.name, reflected.select) if reflected is not None else None
+        )
         self.declared = declared
         self.reason = reason
         super().__init__(
