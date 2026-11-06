@@ -17,11 +17,13 @@ from clickhouse_connect.cc_sqlalchemy.alembic.operations import _AddClickHousePr
 from clickhouse_connect.cc_sqlalchemy.alembic.projections import (
     COMPARE_PROJECTIONS_OPT,
     ProjectionComparisonError,
+    _ast_dump,
     _compare_clickhouse_projections,
     _definitions_match,
     _filter_created_table_projections,
     _function_names,
     _normalize_function_names,
+    _projection_body,
 )
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import UInt32
 from clickhouse_connect.cc_sqlalchemy.ddl.projection import table_projections
@@ -30,6 +32,7 @@ from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 from clickhouse_connect.cc_sqlalchemy.inspector import _ProjectionCatalogEntry
 
 PROJECTIONS_MODULE = "clickhouse_connect.cc_sqlalchemy.alembic.projections"
+_FORMATTED = "CREATE TABLE _table (`_value` UInt8, PROJECTION _projection ({})) ENGINE = MergeTree ORDER BY tuple()"
 
 
 def _table(*projections):
@@ -87,7 +90,11 @@ def test_edits_pair_by_schema_table_and_name_for_policy_hooks(monkeypatch, caplo
     old = ClickHouseProjection("p", "SELECT value")
     new = ClickHouseProjection("p", "SELECT value + 13")
     context = _context()
-    context.connection.execute.return_value.fetchone.return_value = ("new definition", "old definition")
+    context.connection.execute.return_value.fetchone.return_value = (
+        _FORMATTED.format("SELECT value + 13"),
+        _FORMATTED.format("SELECT value"),
+    )
+    context.connection.exec_driver_sql.return_value.fetchall.side_effect = [[("new",)], [("old",)]] * 2
     other_old = ClickHouseProjection("other", "SELECT value")
     other_new = ClickHouseProjection("other", "SELECT value + 79")
     _, operation, _ = _compare(monkeypatch, [old, other_old], [new, other_new], context)
@@ -405,3 +412,76 @@ def test_string_aggregate_flags_keep_scalar_and_aggregate_functions_separate():
         ]
     )
     assert _function_names(context) == ({"date": "DATE"}, {"sum": "sum"})
+
+
+@pytest.mark.parametrize(
+    ("select", "expected"),
+    [
+        ("SELECT value ORDER BY value", ["SELECT", "ORDER"]),
+        ("WITH value AS v SELECT v WHERE v > 1 GROUP BY v", ["WITH", "SELECT", "WHERE", "GROUP"]),
+        ("SELECT value ORDER BY (value)", ["SELECT", "ORDER"]),
+        ("SELECT `ORDER`, 'WHERE' ORDER BY tuple(value)", ["SELECT", "ORDER"]),
+    ],
+)
+def test_projection_body_and_clauses_come_from_the_projection_only(select, expected):
+    assert _projection_body(_FORMATTED.format(select)) == (expected, select)
+
+
+def test_missing_projection_body_refused():
+    with pytest.raises(ValueError, match="projection body"):
+        _projection_body("SELECT 1")
+
+
+def test_ast_dump_normalizes_function_names():
+    context = _context()
+    context.connection.exec_driver_sql.return_value.fetchall.return_value = [
+        ("      Function SuM (alias total) (children 1)",),
+        ("       Function DaTe (children 1)",),
+        ("        Identifier SuM",),
+    ]
+    assert _ast_dump(context, "SELECT x", ({"date": "DATE"}, {"sum": "sum"})) == [
+        "      Function sum (alias total) (children 1)",
+        "       Function DATE (children 1)",
+        "        Identifier SuM",
+    ]
+    assert context.connection.exec_driver_sql.call_args.args[0] == "EXPLAIN AST SELECT x LIMIT 1 FORMAT TabSeparated"
+
+
+def test_empty_ast_dump_refused():
+    context = _context()
+    context.connection.exec_driver_sql.return_value.fetchall.return_value = []
+    with pytest.raises(ValueError, match="no projection syntax tree"):
+        _ast_dump(context, "SELECT x", ({}, {}))
+
+
+def _formatted_context(declared, reflected, dumps):
+    context = _context()
+    context._clickhouse_projection_comparison = SimpleNamespace(function_names=({}, {"sum": "sum"}))
+    context.connection.execute.return_value.fetchone.return_value = (_FORMATTED.format(declared), _FORMATTED.format(reflected))
+    context.connection.exec_driver_sql.return_value.fetchall.side_effect = [[(line,) for line in dump] for dump in dumps]
+    return context
+
+
+def test_grouping_parentheses_compare_by_syntax_tree():
+    dump = ["Function plus (alias extra) (children 1)", "Identifier value", "Literal UInt64_13"]
+    context = _formatted_context("SELECT (value + 13) AS extra", "SELECT value + 13 AS extra", [dump, dump])
+    assert _definitions_match(context, ClickHouseProjection("p", "SELECT (value + 13) AS extra"), ClickHouseProjection("p", "x"))
+    assert context.connection.exec_driver_sql.call_count == 2
+
+
+def test_different_syntax_trees_do_not_match():
+    context = _formatted_context("SELECT value + 13 AS extra", "SELECT value + 79 AS extra", [["Literal UInt64_13"], ["Literal UInt64_79"]])
+    assert not _definitions_match(context, ClickHouseProjection("p", "SELECT value + 13 AS extra"), ClickHouseProjection("p", "x"))
+
+
+def test_unlabeled_clause_slots_do_not_match():
+    context = _formatted_context("SELECT value WHERE value", "SELECT value ORDER BY value", [])
+    assert not _definitions_match(context, ClickHouseProjection("p", "SELECT value WHERE value"), ClickHouseProjection("p", "x"))
+    context.connection.exec_driver_sql.assert_not_called()
+
+
+def test_ast_dump_escapes_percent_signs_for_parameterless_driver_sql():
+    context = _context()
+    context.connection.exec_driver_sql.return_value.fetchall.return_value = [("Literal '100%%'",)]
+    _ast_dump(context, "SELECT value % 2, '100%%'", ({}, {}))
+    assert context.connection.exec_driver_sql.call_args.args[0] == "EXPLAIN AST SELECT value %% 2, '100%%%%' LIMIT 1 FORMAT TabSeparated"

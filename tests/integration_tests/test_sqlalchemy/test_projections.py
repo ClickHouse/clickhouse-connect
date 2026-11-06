@@ -223,7 +223,9 @@ def test_server_normalization_and_replay(run_sqlalchemy, test_db, ch_name, selec
         ("SELECT sumIf(value, value > 13) AS total GROUP BY label", "SELECT SumIf(value, value > 13) AS total GROUP BY label"),
         ("SELECT sumIf(value, value > 13) AS total GROUP BY label", "SELECT sumIf(value, value > 79) AS total GROUP BY label"),
         ("SELECT sum(value) AS total GROUP BY label", "SELECT sumDistinct(value) AS total GROUP BY label"),
-        ("SELECT plus(value, 13) AS extra ORDER BY extra", "SELECT value + 13 AS extra ORDER BY extra"),
+        ("SELECT concat(label, '100%') AS category ORDER BY category", "SELECT concat(label, '200%') AS category ORDER BY category"),
+        ("SELECT value % 2 AS parity ORDER BY parity", "SELECT value % 3 AS parity ORDER BY parity"),
+        ("SELECT (value + 1) * 2 AS extra ORDER BY extra", "SELECT value + 1 * 2 AS extra ORDER BY extra"),
     ],
 )
 def test_different_projection_definitions_generate_replacements(run_sqlalchemy, test_db, ch_name, before, after):
@@ -253,33 +255,35 @@ def test_different_projection_definitions_generate_replacements(run_sqlalchemy, 
 
 
 @pytest.mark.parametrize(
-    ("before", "after"),
+    ("declared", "stored"),
     [
         ("SELECT (value + 13) AS extra ORDER BY extra", "SELECT value + 13 AS extra ORDER BY extra"),
         ("SELECT value ORDER BY (value)", "SELECT value ORDER BY value"),
+        ("SELECT plus(value, 13) AS extra ORDER BY extra", "SELECT value + 13 AS extra ORDER BY extra"),
+        ("SELECT label, value ORDER BY (label, value)", "SELECT label, value ORDER BY label, value"),
+        ("SELECT (value % 2) AS parity ORDER BY (parity)", "SELECT value % 2 AS parity ORDER BY parity"),
+        ("SELECT concat(label, '100%%') AS category ORDER BY category", "SELECT concat(label, '100%') AS category ORDER BY category"),
+        (
+            "WITH (item -> item + 13) AS date SELECT date(value) AS extra ORDER BY extra",
+            "WITH item -> (item + 13) AS date SELECT date(value) AS extra ORDER BY extra",
+        ),
     ],
 )
-def test_redundant_parentheses_follow_server_formatting(run_sqlalchemy, test_db, ch_name, before, after):
-    table_name = ch_name("projection_parentheses")
-    initial = _metadata(table_name, test_db, ClickHouseProjection("p", before))
-    desired = _metadata(table_name, test_db, ClickHouseProjection("p", after))
+def test_equivalent_syntax_trees_need_no_replacement(run_sqlalchemy, test_db, ch_name, declared, stored):
+    # Cloud stores ALTER-added projections without grouping parentheses that CREATE keeps.
+    table_name = ch_name("projection_equivalence")
+    for created, other in ((declared, stored), (stored, declared)):
+        live = _metadata(table_name, test_db, ClickHouseProjection("p", created))
+        desired = _metadata(table_name, test_db, ClickHouseProjection("p", other))
 
-    def workflow(connection):
-        initial.create_all(connection)
-        stored = sa.inspect(connection).get_clickhouse_projections(table_name, test_db)[0].select
-        operations = [operation for group in _diff(connection, desired, table_name).upgrade_ops.ops for operation in group.ops]
-        if stored == after:
-            # Some servers drop redundant parentheses when formatting, so both spellings are one structure.
-            assert operations == []
-            return
-        assert stored == before
-        assert [type(operation) for operation in operations] == [_DropClickHouseProjectionOp, _AddClickHouseProjectionOp]
-        migration = Operations(MigrationContext.configure(connection))
-        for operation in operations:
-            migration.invoke(operation)
-        assert _diff(connection, desired, table_name).upgrade_ops.is_empty()
+        def workflow(connection, live=live, desired=desired):
+            live.create_all(connection)
+            try:
+                assert _diff(connection, desired, table_name).upgrade_ops.is_empty()
+            finally:
+                live.drop_all(connection)
 
-    run_sqlalchemy(workflow)
+        run_sqlalchemy(workflow)
 
 
 def test_aggregating_merge_tree_projection_lifecycle(run_sqlalchemy, test_db, ch_name):

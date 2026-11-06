@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field, replace
 from typing import cast
 
@@ -24,11 +25,21 @@ from clickhouse_connect.cc_sqlalchemy.inspector import (
 )
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
-from clickhouse_connect.driver.binding import _SQL_TOKEN_INVALID, _SQL_TOKEN_OPEN_PAREN, _SQL_TOKEN_TRIVIA, _SQL_TOKEN_WORD, _next_sql_token
+from clickhouse_connect.driver.binding import (
+    _SQL_TOKEN_CLOSE_PAREN,
+    _SQL_TOKEN_INVALID,
+    _SQL_TOKEN_OPEN_PAREN,
+    _SQL_TOKEN_TRIVIA,
+    _SQL_TOKEN_WORD,
+    _next_sql_token,
+)
 
 logger: logging.Logger = logging.getLogger("alembic.autogenerate.compare.clickhouse_projections")
 
 COMPARE_PROJECTIONS_OPT = "clickhousedb_compare_projections"
+
+_PROJECTION_CLAUSES = frozenset({"WITH", "SELECT", "WHERE", "GROUP", "ORDER"})
+_AST_FUNCTION = re.compile(r"^(\s*Function )(\S+)")
 
 
 @dataclass
@@ -166,7 +177,58 @@ def _normalize_function_names(query: str, names: tuple[dict[str, str], dict[str,
     return "".join(parts)
 
 
+def _projection_body(formatted: str) -> tuple[list[str], str]:
+    """Split the formatted CREATE's projection body and its clause keywords, which AST dumps do not label."""
+    keywords: list[str] = []
+    depth = 0
+    start = stop = None
+    index = 0
+    while index < len(formatted):
+        kind, end = _next_sql_token(formatted, index, {})
+        if kind == _SQL_TOKEN_INVALID:
+            raise ValueError("Cannot tokenize the server's formatted projection definition")
+        if kind == _SQL_TOKEN_OPEN_PAREN:
+            depth += 1
+            if depth == 2 and start is None:
+                start = end
+        elif kind == _SQL_TOKEN_CLOSE_PAREN:
+            if depth == 2 and stop is None:
+                stop = index
+            depth -= 1
+        elif kind == _SQL_TOKEN_WORD and depth == 2 and stop is None and formatted[index:end] in _PROJECTION_CLAUSES:
+            keywords.append(formatted[index:end])
+        index = end
+    if start is None or stop is None:
+        raise ValueError("Cannot locate the server's formatted projection body")
+    return keywords, formatted[start:stop]
+
+
+def _ast_dump(context: AutogenContext, body: str, names: tuple[dict[str, str], dict[str, str]]) -> list[str]:
+    """Dump the parsed AST, which omits grouping parentheses that servers store inconsistently."""
+    assert context.connection is not None
+    # The explicit LIMIT stops the client appending one, and the inner FORMAT leaves the appended output FORMAT to EXPLAIN.
+    # Parameterless driver SQL unescapes %%, so escape literal percent signs.
+    rows = context.connection.exec_driver_sql(
+        f"EXPLAIN AST {body.replace('%', '%%')} LIMIT 1 FORMAT TabSeparated",
+        execution_options=with_internal_query_formats(text("")).get_execution_options(),
+    ).fetchall()
+    if not rows:
+        raise ValueError("Server returned no projection syntax tree")
+    scalar, aggregate = names
+    lines = []
+    for (line,) in rows:
+        match = _AST_FUNCTION.match(line)
+        if match:
+            name = scalar.get(match.group(2).lower(), match.group(2))
+            name = aggregate.get(name.lower(), name)
+            line = f"{match.group(1)}{name}{line[match.end(2) :]}"
+        lines.append(line)
+    return lines
+
+
 def _definitions_match(context: AutogenContext, declared: ClickHouseProjection, reflected: ClickHouseProjection) -> bool:
+    # DDL runs as parameterless driver SQL, which unescapes %% before the server stores the definition.
+    declared = replace(declared, select=declared.select.replace("%%", "%"))
     if declared.select == reflected.select:
         return True
     queries = {}
@@ -184,7 +246,12 @@ def _definitions_match(context: AutogenContext, declared: ClickHouseProjection, 
     if row[0] == row[1]:
         return True
     names = _function_names(context)
-    return _normalize_function_names(row[0], names) == _normalize_function_names(row[1], names)
+    if _normalize_function_names(row[0], names) == _normalize_function_names(row[1], names):
+        return True
+    (declared_clauses, declared_body), (reflected_clauses, reflected_body) = _projection_body(row[0]), _projection_body(row[1])
+    if declared_clauses != reflected_clauses:
+        return False
+    return _ast_dump(context, declared_body, names) == _ast_dump(context, reflected_body, names)
 
 
 def _name_included(context: AutogenContext, name: str, schema: str | None, table_name: str) -> bool:
