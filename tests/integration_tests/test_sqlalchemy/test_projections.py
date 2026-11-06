@@ -211,8 +211,6 @@ def test_server_normalization_and_replay(run_sqlalchemy, test_db, ch_name, selec
         ("SELECT sumIf(value, value > 13) AS total GROUP BY label", "SELECT SumIf(value, value > 13) AS total GROUP BY label"),
         ("SELECT sumIf(value, value > 13) AS total GROUP BY label", "SELECT sumIf(value, value > 79) AS total GROUP BY label"),
         ("SELECT sum(value) AS total GROUP BY label", "SELECT sumDistinct(value) AS total GROUP BY label"),
-        ("SELECT (value + 13) AS extra ORDER BY extra", "SELECT value + 13 AS extra ORDER BY extra"),
-        ("SELECT value ORDER BY (value)", "SELECT value ORDER BY value"),
         ("SELECT plus(value, 13) AS extra ORDER BY extra", "SELECT value + 13 AS extra ORDER BY extra"),
     ],
 )
@@ -238,6 +236,36 @@ def test_different_projection_definitions_generate_replacements(run_sqlalchemy, 
                 migration.invoke(operation)
             assert _diff(connection, declared, table_name).upgrade_ops.is_empty()
         assert _diff(connection, initial, table_name).upgrade_ops.is_empty()
+
+    run_sqlalchemy(workflow)
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("SELECT (value + 13) AS extra ORDER BY extra", "SELECT value + 13 AS extra ORDER BY extra"),
+        ("SELECT value ORDER BY (value)", "SELECT value ORDER BY value"),
+    ],
+)
+def test_redundant_parentheses_follow_server_formatting(run_sqlalchemy, test_db, ch_name, before, after):
+    table_name = ch_name("projection_parentheses")
+    initial = _metadata(table_name, test_db, ClickHouseProjection("p", before))
+    desired = _metadata(table_name, test_db, ClickHouseProjection("p", after))
+
+    def workflow(connection):
+        initial.create_all(connection)
+        stored = sa.inspect(connection).get_clickhouse_projections(table_name, test_db)[0].select
+        operations = [operation for group in _diff(connection, desired, table_name).upgrade_ops.ops for operation in group.ops]
+        if stored == after:
+            # Some servers drop redundant parentheses when formatting, so both spellings are one structure.
+            assert operations == []
+            return
+        assert stored == before
+        assert [type(operation) for operation in operations] == [_DropClickHouseProjectionOp, _AddClickHouseProjectionOp]
+        migration = Operations(MigrationContext.configure(connection))
+        for operation in operations:
+            migration.invoke(operation)
+        assert _diff(connection, desired, table_name).upgrade_ops.is_empty()
 
     run_sqlalchemy(workflow)
 
