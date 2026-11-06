@@ -90,14 +90,20 @@ def write_array(code: str, column: Sequence, dest: MutableSequence, col_name: st
         buff = struct.Struct(f"<{len(column)}{code}")
         dest += buff.pack(*column)
     except (TypeError, OverflowError, struct.error) as ex:
-        col_msg = f" for column `{col_name}`" if col_name else ""
-        if isinstance(ex, OverflowError):
-            error_detail = "value out of range"
-        elif isinstance(ex, TypeError):
-            error_detail = "type mismatch (usually None in non-Nullable column)"
-        else:
-            error_detail = type(ex).__name__
-        raise DataError(f"Unable to create native array{col_msg}: {error_detail}") from ex
+        raise _native_array_error(ex, col_name) from ex
+
+
+def _native_array_error(ex: TypeError | OverflowError | struct.error, col_name: str | None) -> DataError:
+    col_msg = f" for column `{col_name}`" if col_name else ""
+    error_detail = str(ex)
+    if isinstance(ex, OverflowError) or (
+        isinstance(ex, struct.error)
+        and (error_detail == "argument out of range" or ("format requires " in error_detail and " <= number <= " in error_detail))
+    ):
+        error_detail = "value out of range"
+    elif isinstance(ex, TypeError) or error_detail == "required argument is not an integer":
+        error_detail = "type mismatch (usually None in non-Nullable column)"
+    return DataError(f"Unable to create native array{col_msg}: {error_detail}")
 
 
 def write_uint64(value: int, dest: MutableSequence):

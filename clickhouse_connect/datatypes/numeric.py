@@ -10,6 +10,7 @@ from clickhouse_connect.driver import ctypes as driver_ctypes
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.common import array_type, decimal_prec, decimal_size, first_value, write_array
 from clickhouse_connect.driver.ctypes import data_conv
+from clickhouse_connect.driver.exceptions import DataError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.parser import escape_enum_key
 from clickhouse_connect.driver.query import QueryContext
@@ -325,7 +326,7 @@ class Boolean(Bool):
 
 
 class Enum(ClickHouseType):
-    __slots__ = "_name_map", "_int_map"
+    __slots__ = "_name_map", "_int_map", "_write_name_map"
     _array_type = "b"
     valid_formats = "native", "int"
     python_type = str
@@ -335,6 +336,7 @@ class Enum(ClickHouseType):
         super().__init__(type_def)
         escaped_keys = [escape_enum_key(key) for key in type_def.keys]
         self._name_map = dict(zip(type_def.keys, type_def.values))
+        self._write_name_map = {None: 0, **self._name_map} if self.nullable else self._name_map
         self._int_map = dict(zip(type_def.values, type_def.keys))
         val_str = ", ".join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
         self._name_suffix = f"({val_str})"
@@ -347,14 +349,30 @@ class Enum(ClickHouseType):
         return [lookup(x, None) for x in column]
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
-        first = first_value(column, self.nullable)
-        if first is None or not isinstance(first, str):
-            if self.nullable:
-                column = [0 if not x else x for x in column]
-            write_array(self._array_type, column, dest, ctx.column_name)
+        lookup = self._name_map
+        nullable = self.nullable
+        if isinstance(first_value(column, nullable), str):
+            write_lookup = self._write_name_map
+            try:
+                values = [write_lookup[value] for value in column]
+            except (KeyError, TypeError):
+                pass
+            else:
+                write_array(self._array_type, values, dest, ctx.column_name)
+                return
         else:
-            lookup = self._name_map.get
-            write_array(self._array_type, [lookup(x, 0) for x in column], dest, ctx.column_name)
+            try:
+                if nullable:
+                    column = [0 if value is None else value for value in column]
+                write_array(self._array_type, column, dest, ctx.column_name)
+                return
+            except DataError:
+                pass
+        try:
+            column = [lookup[value] if isinstance(value, str) else 0 if value is None and nullable else value for value in column]
+        except KeyError as ex:
+            raise ctx.data_error(f"Enum label {ex.args[0]!r} is not defined in {self.name}") from None
+        write_array(self._array_type, column, dest, ctx.column_name)
 
 
 class Enum8(Enum):
