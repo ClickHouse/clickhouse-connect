@@ -14,11 +14,15 @@ from pytest import fixture
 
 from clickhouse_connect import common, get_async_client
 from clickhouse_connect.driver import AsyncClient, Client, create_client
+from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.common import coerce_bool
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from clickhouse_connect.driver.httpclient import HttpClient
 from clickhouse_connect.tools.testing import TableContext
 from tests.helpers import PROJECT_ROOT_DIR
+
+TEST_DATABASE_PREFIX = "ch_connect__"
+STALE_TEST_DATABASE_AGE_MS = 6 * 60 * 60 * 1000
 
 
 class TestConfig(NamedTuple):
@@ -101,7 +105,7 @@ def test_config_fixture() -> Iterator[TestConfig]:
     username = os.environ.get("CLICKHOUSE_CONNECT_TEST_USER", "default")
     password = os.environ.get("CLICKHOUSE_CONNECT_TEST_PASSWORD", "")
     test_database = os.environ.get(
-        "CLICKHOUSE_CONNECT_TEST_DATABASE", f"ch_connect__{random.randint(100000, 999999)}__{int(time.time() * 1000)}"
+        "CLICKHOUSE_CONNECT_TEST_DATABASE", f"{TEST_DATABASE_PREFIX}{random.randint(100000, 999999)}__{int(time.time() * 1000)}"
     )
     compress = os.environ.get("CLICKHOUSE_CONNECT_TEST_COMPRESS", "True")
     insert_quorum = int(os.environ.get("CLICKHOUSE_CONNECT_TEST_INSERT_QUORUM", "0"))
@@ -314,6 +318,9 @@ def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -
                 raise TestException("Failed to connect to ClickHouse server after 30 seconds") from ex
             time.sleep(3)
     client.command(f"CREATE DATABASE IF NOT EXISTS {test_config.test_database}", use_database=False)
+    # Only one xdist worker sweeps, so concurrent workers do not race on the same drops.
+    if os.environ.get("PYTEST_XDIST_WORKER", "gw0") == "gw0":
+        drop_stale_test_databases(client)
 
     # In cloud env, there seems to be some issues with creating a db and then immediately using it.
     # This ensures it's visible before yielding it back to the test.
@@ -327,6 +334,10 @@ def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -
     if not visible:
         raise TestException(f"Database {test_config.test_database} not visible after waiting")
     yield client
+
+    # Drop the database only when this session generated its name.
+    if "CLICKHOUSE_CONNECT_TEST_DATABASE" not in os.environ:
+        drop_test_database(client, test_config.test_database)
 
     if test_config.docker:
         down_result = run_cmd(["docker", "compose", "-f", compose_file, "down", "-v"])
@@ -378,6 +389,32 @@ def table_context_fixture(test_client: Client, test_table_engine: str):
         )
 
     yield context
+
+
+def drop_test_database(client: Client, database: str) -> None:
+    try:
+        client.command(f"DROP DATABASE IF EXISTS {quote_identifier(database)} SYNC", use_database=False)
+    except Exception as ex:  # noqa: BLE001
+        sys.stderr.write(f"Warning -- failed to drop test database {database}: {ex}\n")
+
+
+def drop_stale_test_databases(client: Client) -> None:
+    """Drop generated test databases left behind by sessions that never reached teardown."""
+    cutoff_ms = int(time.time() * 1000) - STALE_TEST_DATABASE_AGE_MS
+    try:
+        names = client.query(
+            "SELECT name FROM system.databases WHERE startsWith(name, {prefix:String})",
+            parameters={"prefix": TEST_DATABASE_PREFIX},
+        ).result_rows
+    except Exception as ex:  # noqa: BLE001
+        sys.stderr.write(f"Warning -- failed to list stale test databases: {ex}\n")
+        return
+    for (name,) in names:
+        parts = name.split("__")
+        if len(parts) != 3 or not parts[2].isdigit():
+            continue
+        if int(parts[2]) < cutoff_ms:
+            drop_test_database(client, name)
 
 
 def run_cmd(cmd):
