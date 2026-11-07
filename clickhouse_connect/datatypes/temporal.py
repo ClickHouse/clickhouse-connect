@@ -44,6 +44,14 @@ def _localized_timestamp(value: datetime, target_tz: tzinfo) -> float:
     return value.timestamp()
 
 
+def _local_timestamp(value: datetime) -> float:
+    try:
+        return value.timestamp()
+    except OSError:
+        # The Windows C runtime cannot convert local wall-clock values around the epoch.
+        return value.replace(tzinfo=tzutil.local_tz).timestamp()
+
+
 class Date(ClickHouseType):
     _array_type = "H"
     np_type = "datetime64[D]"
@@ -267,9 +275,9 @@ class DateTime(DateTimeBase):
                 column = [int(_localized_timestamp(x, active_tz)) for x in column]
         else:
             if self.nullable:
-                column = [int(x.timestamp()) if x else 0 for x in column]
+                column = [int(_local_timestamp(x)) if x else 0 for x in column]
             else:
-                column = [int(x.timestamp()) for x in column]
+                column = [int(_local_timestamp(x)) for x in column]
         write_array(self._array_type, column, dest, ctx.column_name)
 
 
@@ -334,7 +342,7 @@ class DateTime64(DateTimeBase):
         return data_conv.read_datetime64_naive_col(column, self.prec)
 
     def _datetime64_ticks(self, value: datetime, active_tz: tzinfo | None = None) -> int:
-        timestamp = _localized_timestamp(value, active_tz) if active_tz is not None else value.timestamp()
+        timestamp = _localized_timestamp(value, active_tz) if active_tz is not None else _local_timestamp(value)
         if type(value) is not datetime:
             # pandas.Timestamp carries nanoseconds, and its timestamp() rounds to microseconds,
             # which can carry into the next second

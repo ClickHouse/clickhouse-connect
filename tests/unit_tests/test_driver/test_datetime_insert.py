@@ -9,6 +9,7 @@ import pytest
 
 from clickhouse_connect import common
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 
@@ -211,3 +212,43 @@ def test_server_insert_uses_zoneinfo_gap_and_fold_defaults(type_name, value, res
     expected = value.replace(tzinfo=new_york)
 
     assert _serialize_datetime(type_name, value, new_york) == _expected_epoch(type_name, expected, "local")
+
+
+class EpochOSErrorDatetime(datetime):
+    """A naive datetime whose timestamp() fails the way the Windows C runtime fails near the epoch."""
+
+    def timestamp(self) -> float:
+        if self.utcoffset() is None:
+            raise OSError(22, "Invalid argument")
+        return super().timestamp()
+
+
+def test_naive_datetime_insert_local_epoch_conversion_error(monkeypatch, restore_insert_setting):
+    common.set_setting("naive_datetime_insert", "local")
+    monkeypatch.setattr(tzutil, "local_tz", timezone.utc)
+    value = EpochOSErrorDatetime(1970, 1, 1, 8, 0, 0)
+
+    # 1970-01-01 08:00:00 in UTC is epoch 28800. The Windows-style conversion
+    # failure forces the fallback, which must produce that exact value.
+    assert _serialize_datetime("DateTime", value) == 28_800
+
+
+def test_naive_datetime64_pre_epoch_local_insert(monkeypatch, restore_insert_setting):
+    common.set_setting("naive_datetime_insert", "local")
+    monkeypatch.setattr(tzutil, "local_tz", timezone.utc)
+    value = datetime(1960, 1, 1, 12, 0, 0, 250306)
+
+    # 1960-01-01 12:00:00.250306 in UTC is -315575999.749694 seconds, which is
+    # -315575999749694 ticks at microsecond precision.
+    assert _serialize_datetime("DateTime64(6)", value) == -315_575_999_749_694
+
+
+def test_naive_datetime_insert_local_path_matches_original_conversion(restore_insert_setting):
+    common.set_setting("naive_datetime_insert", "local")
+    value = datetime(2025, 1, 15, 12, 34, 56, 250306)
+    seconds = floor(value.timestamp())
+    expected_datetime = int(value.timestamp())
+    expected_datetime64 = ((seconds * 1_000_000 + value.microsecond) * 10**6) // 1_000_000
+
+    assert _serialize_datetime("DateTime", value) == expected_datetime
+    assert _serialize_datetime("DateTime64(6)", value) == expected_datetime64
