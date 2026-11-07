@@ -9,6 +9,7 @@ import pytest
 
 from clickhouse_connect import common
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver import tzutil
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 
@@ -211,3 +212,29 @@ def test_server_insert_uses_zoneinfo_gap_and_fold_defaults(type_name, value, res
     expected = value.replace(tzinfo=new_york)
 
     assert _serialize_datetime(type_name, value, new_york) == _expected_epoch(type_name, expected, "local")
+
+
+class EpochOSErrorDatetime(datetime):
+    """A naive datetime whose timestamp() fails the way the Windows C runtime fails near the epoch."""
+
+    def timestamp(self) -> float:
+        if self.utcoffset() is None:
+            raise OSError(22, "Invalid argument")
+        return super().timestamp()
+
+
+def test_naive_datetime_insert_local_epoch_conversion_error(restore_insert_setting):
+    common.set_setting("naive_datetime_insert", "local")
+    value = EpochOSErrorDatetime(1970, 1, 1, 8, 0, 0)
+    expected = int(value.replace(tzinfo=tzutil.local_tz).timestamp())
+
+    assert _serialize_datetime("DateTime", value) == expected
+
+
+def test_naive_datetime64_pre_epoch_local_insert(restore_insert_setting):
+    common.set_setting("naive_datetime_insert", "local")
+    value = datetime(1960, 1, 1, 12, 0, 0, 250306)
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    expected = (value.replace(tzinfo=tzutil.local_tz) - epoch) // timedelta(microseconds=1)
+
+    assert _serialize_datetime("DateTime64(6)", value) == expected
