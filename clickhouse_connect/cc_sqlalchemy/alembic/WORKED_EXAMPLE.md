@@ -674,6 +674,28 @@ op.reset_clickhouse_table_settings(
 
 `MODIFY SETTING` is its own statement and is never combined with schema alters, because replicated databases reject a statement that mixes settings changes with schema changes. Settings fixed at creation, such as `index_granularity` and `index_granularity_bytes`, are read-only on the server and cannot be modified. Autogenerate emits these helpers when the `settings` declared on the table engine differ from the server, and refuses read-only settings as unsupported changes. Settings omitted from the model, including settings removed after an earlier migration, stay unchanged because reflection cannot distinguish them from server-injected settings. Use an explicit reset operation to remove them.
 
+### Ordinary views and SQL functions
+
+Ordinary view helpers take a raw SQL SELECT body. SQL function helpers take a raw SQL lambda:
+
+```python
+op.create_clickhouse_view("events_view", "SELECT id FROM alembic_demo.events", schema="alembic_demo")
+op.create_clickhouse_view("events_view", "SELECT id FROM alembic_demo.events WHERE id > 13", schema="alembic_demo", or_replace=True)
+op.drop_clickhouse_view("events_view", schema="alembic_demo", if_exists=True)
+
+op.create_clickhouse_function("demo_increment_v1", "value -> value + 13")
+op.create_clickhouse_function("demo_increment_v1", "value -> value + 79", or_replace=True)
+op.drop_clickhouse_function("demo_increment_v1", if_exists=True)
+```
+
+Create helpers accept `if_not_exists` or `or_replace`, never both. Both default to `False`. Names are quoted; function names are single identifiers and have no database qualifier or `schema` argument. SQL UDFs are server-global, so give them unique or versioned names and coordinate changes across databases. Replacement requires both create and drop function privileges.
+
+`CREATE OR REPLACE VIEW` can replace a table or materialized view with the same name and discard its data. `DROP VIEW` also accepts materialized views. Review collisions before opting into replacement. `IF NOT EXISTS` preserves an existing definition without validating it. Guarded creates and replacements refuse automatic reversal because the old state is unknown. Write explicit downgrade operations with the old definitions for replacements and drops. They cannot recover discarded data.
+
+`inspect(connection).get_view_definition(name, schema=...)` returns a view's stored SELECT. `get_clickhouse_function_names()` lists SQL UDFs only, and `get_clickhouse_function_definition(name)` returns the full stored `CREATE FUNCTION` statement unchanged. Missing functions raise `sqlalchemy.exc.NoResultFound`. SQL functions have no schema parameter. The stored CREATE statement is for inspection or explicit replay; the create helper still expects only the lambda body.
+
+These helpers work online and offline, with sync connections and async `run_sync`. They do not add autogenerate comparison or dependency ordering. Render them with `render_as_batch=False` and order explicit revisions yourself.
+
 ### Materialized views
 
 Create and drop materialized views with an explicit target table. The `select` argument is raw SQL passthrough:
