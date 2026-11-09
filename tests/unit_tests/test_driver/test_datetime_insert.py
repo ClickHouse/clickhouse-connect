@@ -8,9 +8,10 @@ from unittest.mock import patch
 import pytest
 
 from clickhouse_connect import common
+from clickhouse_connect.datatypes import temporal
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import tzutil
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import DataError, ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 
 HAS_TZSET = hasattr(time, "tzset")
@@ -233,22 +234,67 @@ def test_naive_datetime_insert_local_epoch_conversion_error(monkeypatch, restore
     assert _serialize_datetime("DateTime", value) == 28_800
 
 
-def test_naive_datetime64_pre_epoch_local_insert(monkeypatch, restore_insert_setting):
+@pytest.mark.parametrize(
+    "type_name, column, expected",
+    [
+        (
+            "Nullable(DateTime)",
+            [None, EpochOSErrorDatetime(1970, 1, 1, 8, 0, 13)],
+            b"\x01\x00" + bytes(4) + (13).to_bytes(4, "little"),
+        ),
+        (
+            "DateTime64(6)",
+            [EpochOSErrorDatetime(1960, 1, 1, 12, 0, 0, 250306)],
+            (-315_604_799_749_694).to_bytes(8, "little", signed=True),
+        ),
+        (
+            "Nullable(DateTime64(6))",
+            [None, EpochOSErrorDatetime(1970, 1, 1, 7, 59, 59, 250000)],
+            b"\x01\x00" + bytes(8) + (-750_000).to_bytes(8, "little", signed=True),
+        ),
+        (
+            "Array(DateTime64(3))",
+            [[], [EpochOSErrorDatetime(1970, 1, 1, 7, 59, 59, 250000), EpochOSErrorDatetime(1970, 1, 1, 8, 0, 13, 250000)]],
+            bytes(8) + (2).to_bytes(8, "little") + (-750).to_bytes(8, "little", signed=True) + (13_250).to_bytes(8, "little", signed=True),
+        ),
+        (
+            "Tuple(DateTime64(6))",
+            [(EpochOSErrorDatetime(1970, 1, 1, 7, 59, 59, 250000),)],
+            (-750_000).to_bytes(8, "little", signed=True),
+        ),
+        (
+            "Array(Tuple(DateTime64(6)))",
+            [[(EpochOSErrorDatetime(1970, 1, 1, 7, 59, 59, 250000),)]],
+            (1).to_bytes(8, "little") + (-750_000).to_bytes(8, "little", signed=True),
+        ),
+        (
+            "DateTime",
+            [EpochOSErrorDatetime(1970, 1, 1, 7, 59, 59)],
+            None,
+        ),
+    ],
+    ids=[
+        "nullable_datetime",
+        "datetime64_pre_epoch",
+        "nullable_datetime64",
+        "array_datetime64",
+        "tuple_datetime64",
+        "array_tuple_datetime64",
+        "datetime_out_of_range",
+    ],
+)
+def test_naive_datetime_insert_local_fallback(type_name, column, expected, monkeypatch, restore_insert_setting):
+    monkeypatch.setattr(temporal, "datetime", EpochOSErrorDatetime)
     common.set_setting("naive_datetime_insert", "local")
-    monkeypatch.setattr(tzutil, "local_tz", timezone.utc)
-    value = datetime(1960, 1, 1, 12, 0, 0, 250306)
+    monkeypatch.setattr(tzutil, "local_tz", timezone(timedelta(hours=8)))
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("test_table", ["value"], [ch_type], server_tz=SERVER_TZ)
+    ctx.start_column("value")
+    dest = bytearray()
 
-    # 1960-01-01 12:00:00.250306 in UTC is -315575999.749694 seconds, which is
-    # -315575999749694 ticks at microsecond precision.
-    assert _serialize_datetime("DateTime64(6)", value) == -315_575_999_749_694
-
-
-def test_naive_datetime_insert_local_path_matches_original_conversion(restore_insert_setting):
-    common.set_setting("naive_datetime_insert", "local")
-    value = datetime(2025, 1, 15, 12, 34, 56, 250306)
-    seconds = floor(value.timestamp())
-    expected_datetime = int(value.timestamp())
-    expected_datetime64 = ((seconds * 1_000_000 + value.microsecond) * 10**6) // 1_000_000
-
-    assert _serialize_datetime("DateTime", value) == expected_datetime
-    assert _serialize_datetime("DateTime64(6)", value) == expected_datetime64
+    if expected is None:
+        with pytest.raises(DataError, match="out of range"):
+            ch_type.write_column(column, dest, ctx)
+    else:
+        ch_type.write_column(column, dest, ctx)
+        assert dest == expected

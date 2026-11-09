@@ -7,7 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
-- Native inserts of naive `datetime` values near and before the epoch no longer raise `OSError` on Windows. The local-time conversion falls back to the process timezone when the C runtime cannot represent the value. Closes [#1162](https://github.com/ClickHouse/clickhouse-connect/issues/1162).
+- With the Python codec, native inserts of naive `datetime` values near and before the epoch no longer raise `OSError` on Windows. The conversion falls back to the detected local timezone. Without `tzlocal` or a resolvable `TZ`, that timezone is a fixed offset and can differ from historical daylight saving time. Use `naive_datetime_insert="server"` for exact historical wall times. Addresses the Python codec part of [#1162](https://github.com/ClickHouse/clickhouse-connect/issues/1162).
 - Alembic version-table inserts now bypass insert deduplication. Downgrading and upgrading again no longer loses the recorded revision and replays already-applied migrations on tables with deduplication enabled, including ClickHouse Cloud.
 - The Python codec now rejects unknown Enum labels with `DataError` instead of silently inserting zero, including labels in arrays, tuples, and DataFrames. Valid mixed labels and integer codes also work in either order. Closes [#1156](https://github.com/ClickHouse/clickhouse-connect/issues/1156).
 - Python list inserts into a non-nullable Enum column now raise `DataError` for `None` instead of writing zero. `insert_df` still writes code 0 for missing values in a non-nullable Enum column. Use `Nullable(Enum8(...))` or `Nullable(Enum16(...))` for NULL values.

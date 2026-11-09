@@ -48,7 +48,7 @@ def _local_timestamp(value: datetime) -> float:
     try:
         return value.timestamp()
     except OSError:
-        # The Windows C runtime cannot convert local wall-clock values around the epoch.
+        # Bypass Windows C runtime limits near the epoch.
         return value.replace(tzinfo=tzutil.local_tz).timestamp()
 
 
