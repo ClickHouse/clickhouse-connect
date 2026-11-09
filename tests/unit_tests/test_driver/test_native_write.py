@@ -1,6 +1,6 @@
 import struct
 from datetime import date, datetime, timedelta, timezone, tzinfo
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 import pytest
 
@@ -187,6 +187,17 @@ def test_decimal_truncates_float_extra_digits(type_name):
     ch_type.write_column(values, dest, InsertContext("table", ["value"], [ch_type]))
     nulls = bytes(len(values)) if ch_type.nullable else b""
     assert dest == nulls + struct.pack("<4i", 199, 123456789, -123456789, 999999999)
+
+
+@pytest.mark.parametrize("type_name", ["Decimal(9, 2)", "Decimal(38, 2)", "Nullable(Decimal256(2))"])
+def test_decimal_write_clamped_context(type_name):
+    ch_type = get_from_name(type_name)
+    dest = bytearray()
+    with localcontext() as outer:
+        outer.clamp = 1
+        ch_type.write_column([Decimal("13.799")], dest, InsertContext("table", ["value"], [ch_type]))
+        assert outer.clamp == 1
+    assert int.from_bytes(dest[-ch_type.byte_size :], "little", signed=True) == 1379
 
 
 @pytest.mark.parametrize("type_name", ["FixedString(4)", "Nullable(FixedString(4))"])

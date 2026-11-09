@@ -426,6 +426,7 @@ class Decimal(ClickHouseType):
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         with decimal.localcontext() as dec_ctx:
             dec_ctx.prec = decimal.MAX_PREC
+            dec_ctx.clamp = 0
             dec = decimal.Decimal
             mult = self._mult
             if self.nullable:
@@ -465,6 +466,7 @@ class BigDecimal(Decimal, registered=False):
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, _ctx):
         with decimal.localcontext() as ctx:
             ctx.prec = decimal.MAX_PREC
+            ctx.clamp = 0
             mult = decimal.Decimal(f"{self._mult}.{'0' * self.scale}")
             sz = self.byte_size
             itb = int.to_bytes
