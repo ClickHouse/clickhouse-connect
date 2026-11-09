@@ -240,6 +240,8 @@ The global `naive_datetime_insert` setting controls native Python object inserts
 - `"local"` is the default in 1.x. Python interprets the value in the process timezone when `.timestamp()` is called. This preserves the existing behavior.
 - `"server"` interprets the value as wall time in the timezone declared by the `DateTime` or `DateTime64` column. If the column has no timezone, it uses the server timezone reported when the client connected.
 
+With the Python codec in `"local"` mode, if `.timestamp()` raises `OSError` near or before the epoch on Windows, the driver retries with its detected local timezone attached. Install `tzlocal` or set `TZ` to a resolvable IANA timezone name before importing the driver to provide historical timezone rules. Otherwise, the fallback can use a fixed offset that differs from historical daylight saving time.
+
 Set the option before an insert. It is read when each native insert column containing Python `datetime` objects or `DateTime64` ISO strings is serialized, so the change applies to existing clients and reusable insert contexts.
 
 ```python

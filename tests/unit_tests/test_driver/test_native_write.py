@@ -189,6 +189,16 @@ def test_decimal_truncates_float_extra_digits(type_name):
     assert dest == nulls + struct.pack("<4i", 199, 123456789, -123456789, 999999999)
 
 
+@pytest.mark.parametrize("type_name", ["FixedString(4)", "Nullable(FixedString(4))"])
+@pytest.mark.parametrize("encoding, value", [("utf-8", "ab\ud800"), ("latin-1", "ab\u20ac")])
+def test_fixed_string_rejects_unencodable_str(type_name, encoding, value):
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("table", ["value"], [ch_type])
+    ctx.encoding = encoding
+    with pytest.raises(UnicodeEncodeError):
+        ch_type.write_column(["ok", value], bytearray(), ctx)
+
+
 def test_low_card_map():
     data = [[{"key1": "1", "key2": "two"}], [{}]]
     names = ["MAP"]

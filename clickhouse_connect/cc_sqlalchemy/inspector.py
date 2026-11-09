@@ -1,6 +1,7 @@
 import ast
 import re
 from collections.abc import Collection
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlalchemy.schema as sa_schema
@@ -13,6 +14,7 @@ from sqlalchemy.sql.elements import TextClause
 from clickhouse_connect.cc_sqlalchemy._schema import COLUMN_OPTIONS, TABLE_OPTIONS, canonical_schema_kwargs
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex
+from clickhouse_connect.cc_sqlalchemy.ddl.projection import ClickHouseProjection
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import build_engine
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import (
@@ -104,6 +106,49 @@ def _get_clickhouse_index_catalog(connection: Connection, database: str, table_n
             raise InvalidRequestError(f"Unrecognized ClickHouse index creation classification {row.creation!r}")
         indexes.setdefault(row.table, []).append(ClickHouseIndex(row.name, f"tuple({row.expr})", row.type_full, row.granularity))
     return indexes
+
+
+@dataclass(frozen=True)
+class _ProjectionCatalogEntry(ClickHouseProjection):
+    unsupported_reason: str | None = field(default=None, kw_only=True, compare=False)
+
+
+def get_clickhouse_projections(connection: Connection, table_name: str, schema: str | None = None) -> list[ClickHouseProjection]:
+    """Reflect replayable SELECT projections, refusing definitions we cannot preserve."""
+    database = _database_name(connection, schema)
+    try:
+        get_table_metadata(connection, table_name, database)
+    except NoResultFound as ex:
+        raise _NoSuchTableError(str(ex)) from ex
+    projections = _get_clickhouse_projection_catalog(connection, database, table_name).get(table_name, [])
+    for projection in projections:
+        if projection.unsupported_reason:
+            raise InvalidRequestError(f"Cannot reflect ClickHouse projection {projection.name!r}: {projection.unsupported_reason}")
+    return [ClickHouseProjection(projection.name, projection.select) for projection in projections]
+
+
+def _get_clickhouse_projection_catalog(
+    connection: Connection, database: str, table_name: str | None = None
+) -> dict[str, list[_ProjectionCatalogEntry]]:
+    statement = text(
+        "SELECT table, name, toString(type) AS type, query, settings FROM system.projections "
+        "WHERE database = :database" + (" AND table = :table_name" if table_name is not None else "") + " ORDER BY table, name"
+    ).bindparams(bindparam("database", type_=String()))
+    parameters = {"database": database}
+    if table_name is not None:
+        statement = statement.bindparams(bindparam("table_name", type_=String()))
+        parameters["table_name"] = table_name
+    projections: dict[str, list[_ProjectionCatalogEntry]] = {}
+    for row in connection.execute(with_internal_query_formats(statement), parameters):
+        reason = None
+        if row.settings:
+            reason = "projection WITH SETTINGS is not supported; its settings cannot be preserved"
+        elif not row.query.startswith(("SELECT ", "WITH ")):
+            reason = "only SELECT projections can be reflected; index-based projection definitions are not supported"
+        elif row.type not in ("Normal", "Aggregate"):
+            reason = f"unsupported projection type {row.type!r}"
+        projections.setdefault(row.table, []).append(_ProjectionCatalogEntry(row.name, row.query, unsupported_reason=reason))
+    return projections
 
 
 def get_view_definition(connection, view_name: str, schema: str | None = None) -> str | None:
@@ -236,6 +281,11 @@ class ChInspector(Inspector):
         """Return explicit skip indexes. Generic get_indexes remains unchanged."""
         with self._operation_context() as connection:
             return cast("ClickHouseDialect", self.dialect).get_clickhouse_indexes(connection, table_name, schema, **kwargs)
+
+    def get_clickhouse_projections(self, table_name: str, schema: str | None = None, **kwargs: Any) -> list[ClickHouseProjection]:
+        """Return replayable SELECT projection definitions."""
+        with self._operation_context() as connection:
+            return cast("ClickHouseDialect", self.dialect).get_clickhouse_projections(connection, table_name, schema, **kwargs)
 
     def reflect_table(
         self,
