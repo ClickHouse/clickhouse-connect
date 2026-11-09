@@ -158,18 +158,35 @@ def test_long_str():
 @pytest.mark.parametrize(
     "type_name, values, expected",
     [
-        ("Decimal(9, 2)", ["1.999", "1234567.899", "-1234567.899"], [199, 123456789, -123456789]),
+        ("Decimal(9, 2)", ["1.999", "1234567.899", "-1234567.899", "9999999.999"], [199, 123456789, -123456789, 999999999]),
+        ("Decimal32(2)", ["9999999.999", "-9999999.999"], [999999999, -999999999]),
+        ("Decimal64(2)", ["1234567890123456.899"], [123456789012345689]),
         ("Nullable(Decimal(9, 2))", [None, "1234567.899"], [0, 123456789]),
         ("Decimal(38, 2)", ["1" * 36 + ".899"], [int("1" * 36 + "89")]),
+        ("Decimal128(2)", ["1" * 36 + ".899"], [int("1" * 36 + "89")]),
+        ("Nullable(Decimal128(2))", [None, "1" * 36 + ".899"], [0, int("1" * 36 + "89")]),
+        ("Decimal256(2)", ["-" + "1" * 74 + ".899"], [-int("1" * 74 + "89")]),
+        ("Nullable(Decimal256(2))", [None, "1" * 74 + ".899"], [0, int("1" * 74 + "89")]),
     ],
 )
-def test_decimal_truncates_extra_digits(type_name, values, expected):
+@pytest.mark.parametrize("input_type", [Decimal, str])
+def test_decimal_truncates_extra_digits(type_name, values, expected, input_type):
     ch_type = get_from_name(type_name)
     dest = bytearray()
-    ch_type.write_column([Decimal(v) if v else None for v in values], dest, InsertContext("table", ["value"], [ch_type]))
+    ch_type.write_column([input_type(v) if v is not None else None for v in values], dest, InsertContext("table", ["value"], [ch_type]))
     sz = ch_type.byte_size
     written = [int.from_bytes(dest[i : i + sz], "little", signed=True) for i in range(len(dest) - sz * len(values), len(dest), sz)]
     assert written == expected
+
+
+@pytest.mark.parametrize("type_name", ["Decimal(9, 2)", "Decimal32(2)", "Nullable(Decimal32(2))"])
+def test_decimal_truncates_float_extra_digits(type_name):
+    ch_type = get_from_name(type_name)
+    dest = bytearray()
+    values = [1.999, 1234567.899, -1234567.899, 9999999.999]
+    ch_type.write_column(values, dest, InsertContext("table", ["value"], [ch_type]))
+    nulls = bytes(len(values)) if ch_type.nullable else b""
+    assert dest == nulls + struct.pack("<4i", 199, 123456789, -123456789, 999999999)
 
 
 def test_low_card_map():
