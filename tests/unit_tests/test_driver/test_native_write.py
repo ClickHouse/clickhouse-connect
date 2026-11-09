@@ -1,5 +1,6 @@
 import struct
 from datetime import date, datetime, timedelta, timezone, tzinfo
+from decimal import Decimal
 
 import pytest
 
@@ -152,6 +153,23 @@ def test_long_str():
     types = [get_from_name("String")]
     output = native_insert_block(data, names, types)
     assert bytes(output) == b"\x01\x01\x05value\x06String\xe7\x03" + x.encode()
+
+
+@pytest.mark.parametrize(
+    "type_name, values, expected",
+    [
+        ("Decimal(9, 2)", ["1.999", "1234567.899", "-1234567.899"], [199, 123456789, -123456789]),
+        ("Nullable(Decimal(9, 2))", [None, "1234567.899"], [0, 123456789]),
+        ("Decimal(38, 2)", ["1" * 36 + ".899"], [int("1" * 36 + "89")]),
+    ],
+)
+def test_decimal_truncates_extra_digits(type_name, values, expected):
+    ch_type = get_from_name(type_name)
+    dest = bytearray()
+    ch_type.write_column([Decimal(v) if v else None for v in values], dest, InsertContext("table", ["value"], [ch_type]))
+    sz = ch_type.byte_size
+    written = [int.from_bytes(dest[i : i + sz], "little", signed=True) for i in range(len(dest) - sz * len(values), len(dest), sz)]
+    assert written == expected
 
 
 def test_low_card_map():

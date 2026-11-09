@@ -7,6 +7,8 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- Python codec `Decimal` inserts now always truncate digits beyond the column scale. Before, a value whose scaled form had more digits than the column precision was rounded instead, so `Decimal(9, 2)` stored `1234567.899` as `1234567.90` but `1.999` as `1.99`. The server and the Rust codec truncate both.
+
 - Alembic version-table inserts now bypass insert deduplication. Downgrading and upgrading again no longer loses the recorded revision and replays already-applied migrations on tables with deduplication enabled, including ClickHouse Cloud.
 - The Python codec now rejects unknown Enum labels with `DataError` instead of silently inserting zero, including labels in arrays, tuples, and DataFrames. Valid mixed labels and integer codes also work in either order. Closes [#1156](https://github.com/ClickHouse/clickhouse-connect/issues/1156).
 - Python list inserts into a non-nullable Enum column now raise `DataError` for `None` instead of writing zero. `insert_df` still writes code 0 for missing values in a non-nullable Enum column. Use `Nullable(Enum8(...))` or `Nullable(Enum16(...))` for NULL values.

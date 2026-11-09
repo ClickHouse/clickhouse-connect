@@ -424,8 +424,9 @@ class Decimal(ClickHouseType):
         return [dec(x).scaleb(-scale) for x in column]
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
+        # Exact scaling so int() truncates extra digits, like the server and the Rust codec
         with decimal.localcontext() as dec_ctx:
-            dec_ctx.prec = self.prec
+            dec_ctx.prec = decimal.MAX_PREC
             dec = decimal.Decimal
             mult = self._mult
             if self.nullable:
@@ -464,7 +465,7 @@ class BigDecimal(Decimal, registered=False):
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, _ctx):
         with decimal.localcontext() as ctx:
-            ctx.prec = self.prec
+            ctx.prec = decimal.MAX_PREC
             mult = decimal.Decimal(f"{self._mult}.{'0' * self.scale}")
             sz = self.byte_size
             itb = int.to_bytes
