@@ -1173,7 +1173,9 @@ def test_alembic_public_exports():
     assert set(ch_alembic.__all__) == {
         "COMPARE_TABLE_OPTIONS_OPT",
         "COMPARE_INDEXES_OPT",
+        "COMPARE_PROJECTIONS_OPT",
         "IndexComparisonError",
+        "ProjectionComparisonError",
         "patch_alembic_version",
         "clickhouse_writer",
         "include_object",

@@ -777,6 +777,22 @@ The intended user experience is:
 
 If you find yourself needing features or hitting bugs, find us on [GitHub](https://github.com/ClickHouse/clickhouse-connect).
 
+## Upgrade existing index and projection migrations
+
+Alembic compares explicit skip indexes and SELECT projections by default. Objects
+created only by earlier imperative migrations generate drops when absent from
+managed table metadata. Before upgrading, declare them with `ClickHouseIndex` or
+`ClickHouseProjection`, filter unmanaged objects with `include_name` or
+`include_object`, or pass `clickhousedb_compare_indexes=False` or
+`clickhousedb_compare_projections=False` to `context.configure()` for the relevant
+object type. Each opt-out skips its catalog reads and table-drop snapshots.
+
+Edits generate separate drop and add operations. Downgrade restores definitions,
+but neither direction restores prior materialization. Replacing a projection
+discards its existing projection parts. Review that rebuild cost and call
+`op.materialize_clickhouse_projection` explicitly when existing parts need the
+replacement immediately. Index materialization also remains explicit.
+
 ## Declarative skip indexes
 
 Use `ClickHouseIndex` table arguments to include indexes in generated `CREATE TABLE`
@@ -790,17 +806,17 @@ ClickHouseIndex("value_idx", "value", "minmax", granularity=4)
 ```
 
 Explicit indexes absent from managed table metadata generate drops by default.
-Before upgrading an environment that used only `op.add_clickhouse_index`, declare
-those indexes, protect unmanaged objects with `include_name` or `include_object`,
-or pass `clickhousedb_compare_indexes=False` to `context.configure()`. The opt-out
-runs before index catalog reads. Catalog classification and server normalization
+Catalog classification and server normalization
 must be available when comparison is enabled. Unavailable catalog access,
 expression resolution, or expected normalization output raises
 `IndexComparisonError` with structured definitions and a reason. Comparison uses
 the server's structural normal form. It does not prove arbitrary mathematical
-equivalence; different analyzed forms can produce replacement operations.
+equivalence. When normalization succeeds but the resulting forms differ,
+autogenerate generates replacement operations.
 
-Same-name edits generate separate drop and add operations. Their downgrades
+Same-name edits generate separate drop and add operations. Policy hooks should
+pair both index and projection edits by schema, table, and object name. Do not
+rely on adjacency. Their downgrades
 restore definitions, including indexes on a recreated dropped table, but do not
 restore old part materialization. Review the generated operations before running
 them and call `op.materialize_clickhouse_index` explicitly when required.
@@ -827,3 +843,24 @@ For physical batch recreation, pass a complete `copy_from` Table containing its
 catalog at execution time and refuses tables with explicit indexes before
 creating or dropping tables. Ordinary table autoload still omits skip indexes.
 The autogenerate comparison opt-out does not bypass this execution guard.
+
+## Declarative SELECT projections
+
+Use `ClickHouseProjection` table arguments to include projections in generated CREATE statements and compare existing tables:
+
+```python
+from clickhouse_connect.cc_sqlalchemy import ClickHouseProjection
+
+# Inside Table(...):
+ClickHouseProjection("by_label", "SELECT value, label ORDER BY label, value")
+```
+
+Declarations own the projection set on managed tables by default. An undeclared projection generates a drop. A changed SELECT generates a separate drop followed by an add. On each table, autogenerate orders projection drops, column additions and alterations, index operations, projection additions, then column drops. Alembic appends column drops after the table comparators finish. Other operations can appear between an edited projection's drop and add. Downgrade restores the previous definition. Table-drop downgrades also restore projection declarations. No `MATERIALIZE PROJECTION` is generated, so existing parts need explicit materialization if the projection must serve them immediately.
+
+For `AggregatingMergeTree` and other engines with nonstandard merge behavior, ClickHouse rejects `ADD PROJECTION` when `deduplicate_merge_projection_mode='throw'`. Set it explicitly to `drop` or `rebuild` before applying projection additions or replacements, including replacements of projections originally declared inline.
+
+Projection filters receive `type_="projection"`. Object filters expose the definition and `.table`, with the usual `reflected` and `compare_to` values. Inline CREATE declarations are filtered before policy hooks run.
+
+Comparison follows the server's projection grammar formatting and case-insensitive function-name normalization, preserving wildcards, aliases, GROUP BY, and ORDER BY. Case-sensitive names such as `sumIf` and `SumIf` remain distinct. When the formatted definitions differ, comparison also checks the parsed syntax tree, which ignores grouping parentheses. Redundant parentheses and operator and function spellings such as `value + 13` and `plus(value, 13)` compare equally, because servers store redundant parentheses inconsistently. Other structural differences generate a replacement. Comparison does not prove arbitrary SQL equivalence, analyze an ordinary SELECT, or validate column dependencies. Review changes involving columns and ALIAS definitions. Invalid DDL dependencies fail at execution. A failed add leaves the preceding drop applied. Catalog, formatter, or function-metadata failures raise `ProjectionComparisonError` with structured definitions and a reason instead of generating a replacement. Projection-level `WITH SETTINGS` and index-based forms also raise rather than lose information. Filter them or use explicit migrations. If `query_masking_rules` changes the SELECT text returned by the catalog, use explicit migrations, filters, or the comparison opt-out for affected projections.
+
+`inspect(connection).get_clickhouse_projections("events")` returns replayable SELECT definitions. Ordinary table autoload omits projections. For physical batch recreation, pass a complete `copy_from` Table with `clickhousedb_projections`, optionally populated from that inspection method. Automatic online recreation refuses tables with projections before DDL. Generate custom projection operations with `render_as_batch=False`. Inline CREATE and table-drop snapshots are supported.
