@@ -583,6 +583,40 @@ with Session(engine) as session:
     session.commit()
 ```
 
+## Views and SQL functions {#sqlalchemy-views-functions}
+
+Alembic provides explicit create, replace, and drop helpers for ordinary views and SQL user-defined functions:
+
+```python
+from alembic import op
+
+op.create_clickhouse_view("active_events", "SELECT id FROM analytics.events", schema="analytics")
+op.create_clickhouse_view("active_events", "SELECT id FROM analytics.events WHERE id > 13", schema="analytics", or_replace=True)
+op.drop_clickhouse_view("active_events", schema="analytics", if_exists=True)
+
+op.create_clickhouse_function("analytics_increment_v1", "(value) -> value + 13")
+op.create_clickhouse_function("analytics_increment_v1", "(value) -> value + 79", or_replace=True)
+op.drop_clickhouse_function("analytics_increment_v1", if_exists=True)
+```
+
+Both create helpers accept `if_not_exists=False` and `or_replace=False`. Passing both as `True` raises `ValueError`. The SQL bodies are strings passed through to ClickHouse. Names are quoted as identifiers unless already quoted; a function name is one identifier, even if it contains a dot. SQL functions are server-global, so the function helpers and inspection methods have no `schema` argument. Use globally unique or versioned function names across databases and migration streams. These operations support online execution and offline SQL rendering, including async SQLAlchemy connections through `run_sync`.
+
+`or_replace=True` explicitly requests replacement. ClickHouse can replace an existing table or materialized view with an ordinary view of the same name, discarding the prior object's data. `DROP VIEW` rejects base tables but can drop materialized views. `IF NOT EXISTS` leaves an existing definition unchanged and does not verify it. Replacement and guarded creation cannot infer a safe downgrade; write it explicitly using the previous definition. Drops also need explicit downgrade definitions. Restoring a definition does not restore discarded data. SQL function replacement requires both `CREATE FUNCTION` and `DROP FUNCTION` privileges.
+
+ClickHouse expands SQL UDF calls when storing a view definition. Replacing a SQL UDF does not update existing views that use it; recreate or explicitly alter those views to use the new definition.
+
+Inspect ordinary views with the existing `get_view_names(schema=...)` and `get_view_definition(name, schema=...)` methods. SQL function inspection is specific to the ClickHouse dialect:
+
+```python
+from sqlalchemy import inspect
+
+inspector = inspect(connection)
+names = inspector.get_clickhouse_function_names()
+create_sql = inspector.get_clickhouse_function_definition("analytics_increment_v1")
+```
+
+Function inspection includes only `SQLUserDefined` functions, excluding built-in and executable functions. Names are sorted. The definition is the full stored `CREATE FUNCTION` statement, not just its lambda body; missing names raise `sqlalchemy.exc.NoResultFound`. Catalog access errors propagate. Metadata inspection remains text even when user query formats request bytes. These helpers do not add declarative view or function entities, autogenerate comparison, or dependency ordering. Keep explicit migration operations in dependency order and use `render_as_batch=False` when rendering them.
+
 ## Data skipping indexes {#sqlalchemy-skip-indexes}
 
 Declare ClickHouse data skipping indexes as table arguments. This API requires SQLAlchemy, and works without Alembic:
@@ -692,7 +726,7 @@ Autogenerate compares the declared table engine with the server for tables prese
 
 Declared engine `settings` that differ from the server render as `op.modify_clickhouse_table_settings(...)`, with a downgrade that restores or resets each setting. Values and types from `system.merge_tree_settings` resolve defaults and equivalent boolean and numeric spellings; string settings keep their string meaning. Settings the model does not declare are preserved, including settings removed from the model after an earlier migration. Reflection cannot distinguish those settings from server-injected settings, so autogenerate never resets them automatically. Use `op.reset_clickhouse_table_settings(...)` explicitly when a reset is intended. Read-only settings such as `index_granularity` and `index_granularity_bytes` are compared and refused like keys. Pass `clickhousedb_compare_table_options=False` to `context.configure()` to skip the comparison.
 
-Reflected views and materialized views are not tables. `include_object` excludes them, so autogenerate never proposes `drop_table` for a view that is missing from the metadata. Manage views with the materialized view helpers or `op.execute`.
+Reflected views and materialized views are not tables. `include_object` excludes them, so autogenerate never proposes `drop_table` for a view that is missing from the metadata. Manage them with the ordinary view or materialized view helpers.
 
 `op.alter_column(..., server_default=None)` emits `MODIFY COLUMN ... REMOVE DEFAULT`, which is the only form the server honors. The server rejects the statement when the column has no `DEFAULT` or uses `MATERIALIZED` or `ALIAS`, so only request removal when a default exists. A type change alone keeps the existing default. The dialect column options follow the same rule: pass `clickhousedb_codec=None`, `clickhousedb_ttl=None`, `clickhousedb_alias=None`, or `clickhousedb_materialized=None` to remove the property, or a value to set it. Setting or removing these properties alone does not require `existing_type`. Use `text(...)` for TTL, alias, and materialized SQL expressions, for example `clickhousedb_ttl=text("ts + INTERVAL 7 DAY")`. Options that are not passed stay unchanged. Both `clickhousedb_` and legacy `clickhouse_` names are accepted; when both names are passed to `alter_column`, the explicit `clickhousedb_` value takes precedence, including `None`.
 
@@ -707,6 +741,7 @@ ClickHouse-specific `op.*` helpers cover:
 - Data skipping indexes, including add, materialize, and drop operations.
 - Projections, including add, materialize, and drop operations.
 - MergeTree table setting modification and reset.
+- Ordinary view and SQL function creation, replacement, and removal.
 - Materialized view creation and removal.
 - Dictionary creation, removal, and reload.
 

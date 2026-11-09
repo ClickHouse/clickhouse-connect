@@ -25,15 +25,20 @@ def run_sqlalchemy(client_mode, call, test_engine, test_config):
     """Run the same schema workflow through sync and async SQLAlchemy connections."""
     if client_mode == "sync":
 
-        def run(work):
-            with test_engine.begin() as connection:
-                return work(connection)
+        def run(work, *, database=None):
+            engine = test_engine if database is None else sa.create_engine(test_engine.url.set(database=database))
+            try:
+                with engine.begin() as connection:
+                    return work(connection)
+            finally:
+                if engine is not test_engine:
+                    engine.dispose()
 
         return run
     pytest.importorskip("sqlalchemy", minversion="2.0.44")
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    async def run_async(work):
+    async def run_async(work, *, database=None):
         query = {}
         if test_config.cloud:
             query["select_sequential_consistency"] = "1"
@@ -47,7 +52,7 @@ def run_sqlalchemy(client_mode, call, test_engine, test_config):
                 password=test_config.password,
                 host=test_config.host,
                 port=test_config.port,
-                database=test_config.test_database,
+                database=test_config.test_database if database is None else database,
                 query=query,
             )
         )
@@ -57,7 +62,7 @@ def run_sqlalchemy(client_mode, call, test_engine, test_config):
         finally:
             await engine.dispose()
 
-    return lambda work: call(run_async, work)
+    return lambda work, **kwargs: call(run_async, work, **kwargs)
 
 
 def _metadata(table_name, test_db, *indexes):
