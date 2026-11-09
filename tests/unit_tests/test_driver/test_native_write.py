@@ -154,6 +154,13 @@ def test_long_str():
     assert bytes(output) == b"\x01\x01\x05value\x06String\xe7\x03" + x.encode()
 
 
+@pytest.mark.parametrize("type_name", ["FixedString(4)", "Nullable(FixedString(4))"])
+def test_fixed_string_rejects_unencodable_str(type_name):
+    ch_type = get_from_name(type_name)
+    with pytest.raises(UnicodeEncodeError):
+        ch_type.write_column(["ok", "ab\ud800"], bytearray(), InsertContext("table", ["value"], [ch_type]))
+
+
 def test_low_card_map():
     data = [[{"key1": "1", "key2": "two"}], [{}]]
     names = ["MAP"]

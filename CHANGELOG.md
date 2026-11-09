@@ -7,6 +7,8 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- The Python codec no longer writes a `FixedString` value as all zero bytes when the string cannot be encoded, for example a lone surrogate or a character outside a non-UTF-8 `encoding`. It now raises `UnicodeEncodeError`, the same as `String` columns and the Rust codec.
+
 - Alembic version-table inserts now bypass insert deduplication. Downgrading and upgrading again no longer loses the recorded revision and replays already-applied migrations on tables with deduplication enabled, including ClickHouse Cloud.
 - The Python codec now rejects unknown Enum labels with `DataError` instead of silently inserting zero, including labels in arrays, tuples, and DataFrames. Valid mixed labels and integer codes also work in either order. Closes [#1156](https://github.com/ClickHouse/clickhouse-connect/issues/1156).
 - Python list inserts into a non-nullable Enum column now raise `DataError` for `None` instead of writing zero. `insert_df` still writes code 0 for missing values in a non-nullable Enum column. Use `Nullable(Enum8(...))` or `Nullable(Enum16(...))` for NULL values.
