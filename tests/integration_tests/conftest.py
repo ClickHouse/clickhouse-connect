@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import re
 import sys
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -23,6 +24,7 @@ from tests.helpers import PROJECT_ROOT_DIR
 
 TEST_DATABASE_PREFIX = "ch_connect__"
 STALE_TEST_DATABASE_AGE_MS = 6 * 60 * 60 * 1000
+GENERATED_TEST_DATABASE = re.compile(rf"{TEST_DATABASE_PREFIX}\d{{6}}__(\d+)")
 
 
 class TestConfig(NamedTuple):
@@ -320,7 +322,7 @@ def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -
     client.command(f"CREATE DATABASE IF NOT EXISTS {test_config.test_database}", use_database=False)
     # Only one xdist worker sweeps, so concurrent workers do not race on the same drops.
     if os.environ.get("PYTEST_XDIST_WORKER", "gw0") == "gw0":
-        drop_stale_test_databases(client)
+        drop_stale_test_databases(client, test_config.test_database)
 
     # In cloud env, there seems to be some issues with creating a db and then immediately using it.
     # This ensures it's visible before yielding it back to the test.
@@ -398,7 +400,7 @@ def drop_test_database(client: Client, database: str) -> None:
         sys.stderr.write(f"Warning -- failed to drop test database {database}: {ex}\n")
 
 
-def drop_stale_test_databases(client: Client) -> None:
+def drop_stale_test_databases(client: Client, keep: str) -> None:
     """Drop generated test databases left behind by sessions that never reached teardown."""
     cutoff_ms = int(time.time() * 1000) - STALE_TEST_DATABASE_AGE_MS
     try:
@@ -410,10 +412,8 @@ def drop_stale_test_databases(client: Client) -> None:
         sys.stderr.write(f"Warning -- failed to list stale test databases: {ex}\n")
         return
     for (name,) in names:
-        parts = name.split("__")
-        if len(parts) != 3 or not parts[2].isdigit():
-            continue
-        if int(parts[2]) < cutoff_ms:
+        match = GENERATED_TEST_DATABASE.fullmatch(name)
+        if match and name != keep and int(match.group(1)) < cutoff_ms:
             drop_test_database(client, name)
 
 
