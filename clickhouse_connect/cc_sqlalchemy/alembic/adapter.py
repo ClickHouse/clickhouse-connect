@@ -242,7 +242,12 @@ def _render_kwargs(kwargs: list[tuple[str, object]]) -> list[str]:
 
 def _render_op_call(autogen_context: AutogenContext, name: str, args: list[str], kwargs: list[tuple[str, object]]) -> str:
     if autogen_context._has_batch:
-        subject = "ClickHouse index operations" if "index" in name else "ClickHouse operations"
+        if "index" in name:
+            subject = "ClickHouse index operations"
+        elif "projection" in name:
+            subject = "ClickHouse projection operations"
+        else:
+            subject = "ClickHouse operations"
         raise CommandError(f"{subject} do not support batch rendering. Generate with render_as_batch=False.")
     prefix = render._alembic_autogenerate_prefix(autogen_context)
     params = args + _render_kwargs(kwargs)
@@ -270,6 +275,10 @@ def _render_table_option(autogen_context: AutogenContext, name: str, value: Any)
         if not value:
             return None
         return "(" + ", ".join(_render_clickhouse_index(autogen_context, index) for index in value) + ",)"
+    if name == "clickhousedb_projections":
+        if not value:
+            return None
+        return "(" + ", ".join(_render_clickhouse_projection(autogen_context, projection) for projection in value) + ",)"
     return repr(value)
 
 
