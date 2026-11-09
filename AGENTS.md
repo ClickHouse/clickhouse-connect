@@ -1,3 +1,7 @@
+# Communication style
+
+- Follow ASD-STE100
+
 # Agent Instructions
 
 `AGENTS.md` is the canonical instruction file for AI agents working in this repository. If another agent-facing file disagrees with this one, this file wins.
