@@ -1,5 +1,6 @@
 import struct
 from datetime import date, datetime, timedelta, timezone, tzinfo
+from uuid import UUID
 
 import pytest
 
@@ -376,3 +377,129 @@ def test_date_native_subclass_without_ordinal(type_name, code, error):
     ch_type.write_column([LegacyDate(1970, 1, 14)], dest, InsertContext("table", ["value"], [ch_type]))
 
     assert dest == struct.pack(f"<{code}", 13)
+
+
+UUID_VALUES = [
+    UUID("1d439f79-c57d-5f23-52c6-ffccca93e1a9"),
+    UUID("00000000-0000-0000-0000-000000000000"),
+    UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+    UUID("00000000-0000-0001-8000-000000000000"),
+]
+
+
+def _uuid_wire(value: UUID | None) -> bytes:
+    # ClickHouse stores a UUID as two little-endian UInt64 values, high half first
+    x = value.int if value is not None else 0
+    return struct.pack("<QQ", x >> 64, x & 0xFFFFFFFFFFFFFFFF)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        UUID_VALUES,
+        [str(u) for u in UUID_VALUES],
+        [str(u).upper() for u in UUID_VALUES],
+        [u.hex for u in UUID_VALUES],
+        [u.int for u in UUID_VALUES],
+    ],
+    ids=["uuid", "str", "str_upper", "str_no_dashes", "int"],
+)
+def test_uuid_native_write(values):
+    ch_type = get_from_name("UUID")
+    dest = bytearray()
+    ch_type.write_column(values, dest, InsertContext("table", ["value"], [ch_type]))
+
+    assert bytes(dest) == b"".join(_uuid_wire(u) for u in UUID_VALUES)
+    assert list(ch_type.read_column(bytes_source(bytes(dest)), len(values), QueryContext())) == UUID_VALUES
+
+
+@pytest.mark.parametrize("type_name", ["Nullable(UUID)", "LowCardinality(Nullable(UUID))"])
+@pytest.mark.parametrize(
+    "values, expected",
+    [
+        ([UUID_VALUES[0], None, UUID_VALUES[2]], [UUID_VALUES[0], None, UUID_VALUES[2]]),
+        ([None, str(UUID_VALUES[0]), None], [None, UUID_VALUES[0], None]),
+        ([None, UUID_VALUES[2].int], [None, UUID_VALUES[2]]),
+        ([None, None], [None, None]),
+    ],
+    ids=["uuid", "str_leading_none", "int_leading_none", "all_none"],
+)
+def test_uuid_native_write_nullable(type_name, values, expected):
+    ch_type = get_from_name(type_name)
+    dest = bytearray()
+    ch_type.write_column(values, dest, InsertContext("table", ["value"], [ch_type]))
+
+    read = ch_type.read_column(bytes_source(bytes(dest)), len(values), QueryContext())
+    assert list(read) == expected
+
+
+def test_uuid_native_write_nullable_wire():
+    ch_type = get_from_name("Nullable(UUID)")
+    dest = bytearray()
+    ch_type.write_column([UUID_VALUES[0], None, UUID_VALUES[2]], dest, InsertContext("table", ["value"], [ch_type]))
+
+    expected = b"\x00\x01\x00" + _uuid_wire(UUID_VALUES[0]) + _uuid_wire(None) + _uuid_wire(UUID_VALUES[2])
+    assert bytes(dest) == expected
+
+
+@pytest.mark.parametrize("convert", [lambda u: u, str, lambda u: u.int], ids=["uuid", "str", "int"])
+@pytest.mark.parametrize(
+    "type_name, build, expected",
+    [
+        ("Array(UUID)", lambda vals: [vals[:2], [], vals[2:]], [UUID_VALUES[:2], [], UUID_VALUES[2:]]),
+        ("Tuple(UUID, UUID)", lambda vals: [(vals[0], vals[1]), (vals[2], vals[3])], [UUID_VALUES[:2], UUID_VALUES[2:]]),
+        (
+            "Array(Tuple(UUID, String))",
+            lambda vals: [[(vals[0], "user_1"), (vals[1], "user_2")], []],
+            [[[UUID_VALUES[0], "user_1"], [UUID_VALUES[1], "user_2"]], []],
+        ),
+    ],
+    ids=["array", "tuple", "array_tuple"],
+)
+def test_uuid_native_write_composed(convert, type_name, build, expected):
+    ch_type = get_from_name(type_name)
+    column = build([convert(u) for u in UUID_VALUES])
+    dest = bytearray()
+    ch_type.write_column(column, dest, InsertContext("table", ["value"], [ch_type]))
+
+    read = ch_type.read_column(bytes_source(bytes(dest)), len(column), QueryContext())
+
+    def as_lists(value):
+        return [as_lists(v) for v in value] if isinstance(value, (list, tuple)) else value
+
+    assert as_lists(read) == expected
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("1234", struct.pack("<QQ", 0, 0x1234)),
+        ("0" + UUID_VALUES[0].hex, _uuid_wire(UUID_VALUES[0])),
+        (0, _uuid_wire(None)),
+        ("", _uuid_wire(None)),
+    ],
+    ids=["short_hex", "zero_prefixed_hex", "int_zero", "empty_str"],
+)
+def test_uuid_native_write_lenient_values(value, expected):
+    ch_type = get_from_name("UUID")
+    dest = bytearray()
+    ch_type.write_column([value], dest, InsertContext("table", ["value"], [ch_type]))
+
+    assert bytes(dest) == expected
+
+
+@pytest.mark.parametrize(
+    "column, error",
+    [
+        ([-1], OverflowError),
+        ([2**128], OverflowError),
+        (["not-a-uuid"], ValueError),
+        (["1" + "0" * 32], OverflowError),
+        ([13, "user_1"], TypeError),
+    ],
+    ids=["negative_int", "int_too_large", "non_hex_str", "hex_too_large", "int_then_str"],
+)
+def test_uuid_native_write_invalid_values(column, error):
+    ch_type = get_from_name("UUID")
+    with pytest.raises(error):
+        ch_type.write_column(column, bytearray(), InsertContext("table", ["value"], [ch_type]))
