@@ -415,3 +415,9 @@ def test_retry_classifier_skips_heredoc_scan_for_non_read_statements(monkeypatch
     assert not _query_is_read_only(query.encode() if as_bytes else query)
 
     scanner.finditer.assert_not_called()
+
+
+def test_escape_str_and_bytes():
+    assert binding.escape_str("a\\b'c`d\te\nf\r") == "a\\\\b\\'c\\`d\\\te\\\nf\r"
+    assert binding.escape_bytes(b"\x00\xffA") == "\\x00\\xff\\x41"
+    assert binding.escape_bytes(bytearray()) == ""
