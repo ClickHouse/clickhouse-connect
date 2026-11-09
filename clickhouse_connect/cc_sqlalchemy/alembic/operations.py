@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from alembic.operations import MigrateOperation, Operations
@@ -9,25 +8,12 @@ from alembic.operations.ops import ModifyTableOps
 from sqlalchemy import Column
 
 from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex, index_definition
+from clickhouse_connect.cc_sqlalchemy.ddl.projection import ClickHouseProjection, projection_definition
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import column_specification, render_settings
 from clickhouse_connect.driver.binding import format_str, quote_identifier
 
 __all__ = ["ClickHouseIndex", "ClickHouseProjection"]
-
-
-@dataclass(frozen=True)
-class ClickHouseProjection:
-    """A projection definition. select is the raw SQL body inside the parens."""
-
-    name: str
-    select: str
-    if_not_exists: bool = False
-    first: bool = False
-    after_projection: str | None = None
-
-    def __post_init__(self) -> None:
-        _validate_position(self.first, self.after_projection, "ClickHouseProjection")
 
 
 def _validate_position(first: bool, after_name: str | None, owner: str) -> None:
@@ -72,8 +58,7 @@ def _render_add_projection(projection: ClickHouseProjection) -> str:
     parts = ["ADD PROJECTION"]
     if projection.if_not_exists:
         parts.append("IF NOT EXISTS")
-    parts.append(quote_identifier(projection.name))
-    parts.append(f"({projection.select})")
+    parts.append(projection_definition(projection))
     if projection.first:
         parts.append("FIRST")
     elif projection.after_projection is not None:
@@ -472,6 +457,7 @@ class _AddClickHouseProjectionOp(MigrateOperation):
             if_exists=True,
             schema=self.schema,
             clickhouse_settings=self.clickhouse_settings,
+            existing_projection=ClickHouseProjection(self.name, self.select),
         )
 
 
@@ -560,12 +546,26 @@ class _DropClickHouseProjectionOp(MigrateOperation):
         if_exists: bool = False,
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
+        existing_projection: ClickHouseProjection | None = None,
     ) -> None:
         self.table_name = table_name
         self.name = name
         self.if_exists = if_exists
         self.schema = schema
         self.clickhouse_settings = clickhouse_settings
+        self.existing_projection = existing_projection
+
+    def reverse(self) -> MigrateOperation:
+        projection = self.existing_projection
+        if projection is None:
+            return super().reverse()
+        return _AddClickHouseProjectionOp(
+            self.table_name,
+            projection.name,
+            projection.select,
+            schema=self.schema,
+            clickhouse_settings=self.clickhouse_settings,
+        )
 
     @classmethod
     def drop_clickhouse_projection(
