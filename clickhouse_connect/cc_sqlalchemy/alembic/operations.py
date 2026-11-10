@@ -21,7 +21,7 @@ def _validate_position(first: bool, after_name: str | None, owner: str) -> None:
         raise ValueError(f"{owner} cannot specify both first and after placement")
 
 
-def _exec_sql(operations: Operations, sql: str) -> None:
+def _exec_sql(operations: Operations, sql: str, *, literal_sql: bool = False) -> None:
     impl = operations.get_context().impl
     if impl.as_sql:
         impl.static_output(sql.strip() + impl.command_terminator)
@@ -29,7 +29,8 @@ def _exec_sql(operations: Operations, sql: str) -> None:
 
     connection = impl.connection
     assert connection is not None
-    connection.exec_driver_sql(sql)
+    # DB-API pyformat processing otherwise collapses literal double percent signs.
+    connection.exec_driver_sql(sql.replace("%", "%%") if literal_sql else sql)
 
 
 def _settings_suffix(clickhouse_settings: Mapping[str, Any] | None) -> str:
@@ -830,6 +831,146 @@ def _reset_clickhouse_table_settings(operations: Operations, operation: _ResetCl
     names = ", ".join(operation.names)
     sql = f"ALTER TABLE {ft} RESET SETTING {names}{_settings_suffix(operation.clickhouse_settings)}"
     return _exec_sql(operations, sql)
+
+
+def _view_identifier(name: str, schema: str | None) -> str:
+    # full_table omits the schema for names starting with "(", which are valid view names.
+    identifier = quote_identifier(name)
+    return f"{quote_identifier(schema)}.{identifier}" if schema else identifier
+
+
+@Operations.register_operation("create_clickhouse_view")
+class _CreateClickHouseViewOp(MigrateOperation):
+    def __init__(
+        self,
+        name: str,
+        select: str,
+        *,
+        if_not_exists: bool = False,
+        or_replace: bool = False,
+        schema: str | None = None,
+    ) -> None:
+        if if_not_exists and or_replace:
+            raise ValueError("if_not_exists and or_replace are mutually exclusive")
+        self.name = name
+        self.select = select
+        self.if_not_exists = if_not_exists
+        self.or_replace = or_replace
+        self.schema = schema
+
+    @classmethod
+    def create_clickhouse_view(
+        cls,
+        operations: Operations,
+        name: str,
+        select: str,
+        if_not_exists: bool = False,
+        or_replace: bool = False,
+        schema: str | None = None,
+    ) -> Any:
+        """Create an ordinary view; select is raw SQL.
+
+        or_replace can replace a table or materialized view with the same name,
+        discarding its data. Guarded creation and replacement need explicit downgrades.
+        """
+        return operations.invoke(cls(name, select, if_not_exists=if_not_exists, or_replace=or_replace, schema=schema))
+
+    def reverse(self) -> MigrateOperation:
+        if self.or_replace or self.if_not_exists:
+            raise NotImplementedError("Guarded or replacement creation requires an explicit downgrade with the previous definition")
+        return _DropClickHouseViewOp(self.name, if_exists=True, schema=self.schema)
+
+
+@Operations.implementation_for(_CreateClickHouseViewOp)
+def _create_clickhouse_view(operations: Operations, operation: _CreateClickHouseViewOp) -> None:
+    replace = " OR REPLACE" if operation.or_replace else ""
+    exists = " IF NOT EXISTS" if operation.if_not_exists else ""
+    sql = f"CREATE{replace} VIEW{exists} {_view_identifier(operation.name, operation.schema)} AS {operation.select}"
+    _exec_sql(operations, sql, literal_sql=True)
+
+
+@Operations.register_operation("drop_clickhouse_view")
+class _DropClickHouseViewOp(MigrateOperation):
+    def __init__(self, name: str, *, if_exists: bool = False, schema: str | None = None) -> None:
+        self.name = name
+        self.if_exists = if_exists
+        self.schema = schema
+
+    @classmethod
+    def drop_clickhouse_view(cls, operations: Operations, name: str, if_exists: bool = False, schema: str | None = None) -> Any:
+        """Drop a view."""
+        return operations.invoke(cls(name, if_exists=if_exists, schema=schema))
+
+
+@Operations.implementation_for(_DropClickHouseViewOp)
+def _drop_clickhouse_view(operations: Operations, operation: _DropClickHouseViewOp) -> None:
+    exists = " IF EXISTS" if operation.if_exists else ""
+    _exec_sql(operations, f"DROP VIEW{exists} {_view_identifier(operation.name, operation.schema)}", literal_sql=True)
+
+
+@Operations.register_operation("create_clickhouse_function")
+class _CreateClickHouseFunctionOp(MigrateOperation):
+    def __init__(
+        self,
+        name: str,
+        expression: str,
+        *,
+        if_not_exists: bool = False,
+        or_replace: bool = False,
+    ) -> None:
+        if if_not_exists and or_replace:
+            raise ValueError("if_not_exists and or_replace are mutually exclusive")
+        self.name = name
+        self.expression = expression
+        self.if_not_exists = if_not_exists
+        self.or_replace = or_replace
+
+    @classmethod
+    def create_clickhouse_function(
+        cls,
+        operations: Operations,
+        name: str,
+        expression: str,
+        if_not_exists: bool = False,
+        or_replace: bool = False,
+    ) -> Any:
+        """Create a server-global SQL function; expression is a raw SQL lambda.
+
+        Function names are not database-scoped. Guarded creation and replacement
+        need explicit downgrades with the previous definition.
+        """
+        return operations.invoke(cls(name, expression, if_not_exists=if_not_exists, or_replace=or_replace))
+
+    def reverse(self) -> MigrateOperation:
+        if self.or_replace or self.if_not_exists:
+            raise NotImplementedError("Guarded or replacement creation requires an explicit downgrade with the previous definition")
+        return _DropClickHouseFunctionOp(self.name, if_exists=True)
+
+
+@Operations.implementation_for(_CreateClickHouseFunctionOp)
+def _create_clickhouse_function(operations: Operations, operation: _CreateClickHouseFunctionOp) -> None:
+    replace = " OR REPLACE" if operation.or_replace else ""
+    exists = " IF NOT EXISTS" if operation.if_not_exists else ""
+    sql = f"CREATE{replace} FUNCTION{exists} {quote_identifier(operation.name)} AS {operation.expression}"
+    _exec_sql(operations, sql, literal_sql=True)
+
+
+@Operations.register_operation("drop_clickhouse_function")
+class _DropClickHouseFunctionOp(MigrateOperation):
+    def __init__(self, name: str, *, if_exists: bool = False) -> None:
+        self.name = name
+        self.if_exists = if_exists
+
+    @classmethod
+    def drop_clickhouse_function(cls, operations: Operations, name: str, if_exists: bool = False) -> Any:
+        """Drop a server-global SQL function."""
+        return operations.invoke(cls(name, if_exists=if_exists))
+
+
+@Operations.implementation_for(_DropClickHouseFunctionOp)
+def _drop_clickhouse_function(operations: Operations, operation: _DropClickHouseFunctionOp) -> None:
+    exists = " IF EXISTS" if operation.if_exists else ""
+    _exec_sql(operations, f"DROP FUNCTION{exists} {quote_identifier(operation.name)}", literal_sql=True)
 
 
 @Operations.register_operation("create_clickhouse_materialized_view")
