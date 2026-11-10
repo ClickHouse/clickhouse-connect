@@ -19,6 +19,8 @@ from clickhouse_connect.json_impl import any_to_json
 
 BS = "\\"
 must_escape = (BS, "'", "`", "\t", "\n")
+_STR_ESCAPES = str.maketrans({c: BS + c for c in must_escape})
+_BYTE_ESCAPES = tuple(f"{BS}x{b:02x}" for b in range(256))
 # ClickHouse substitution names are ASCII BareWord tokens. Digit-led tokens promote to
 # a bareword only through ASCII letters, digits, and underscores and never absorb `$`.
 _BIND_NAME_PATTERN = r"(?:[A-Za-z_][A-Za-z0-9_$]*|\$[A-Za-z0-9_][A-Za-z0-9_$]*|[0-9]+[A-Za-z_][A-Za-z0-9_]*)"
@@ -1149,11 +1151,11 @@ def _decode_ch_string_literal(literal: str) -> str:
 
 
 def escape_str(value: str):
-    return "".join(f"{BS}{c}" if c in must_escape else c for c in value)
+    return value.translate(_STR_ESCAPES)
 
 
 def escape_bytes(value):
-    return "".join(f"{BS}x{b:02x}" for b in value)
+    return "".join([_BYTE_ESCAPES[b] for b in value])
 
 
 def format_query_value(value: Any, server_tz: tzinfo | None = timezone.utc):

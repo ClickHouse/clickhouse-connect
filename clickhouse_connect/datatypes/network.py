@@ -106,10 +106,14 @@ class IPv6(ClickHouseType):
                 dest += V6_NULL
                 continue
 
-            try:
-                addr = ip_address(value)
-            except ValueError as e:
-                raise ValueError(f"Failed to parse '{value}' as a valid IP address for column '{ctx.column_name}'") from e
+            # ip_address() re-parses address objects from their string form
+            if isinstance(value, (IPv6Address, IPv4Address)):
+                addr = value
+            else:
+                try:
+                    addr = ip_address(value)
+                except ValueError as e:
+                    raise ValueError(f"Failed to parse '{value}' as a valid IP address for column '{ctx.column_name}'") from e
 
             # Now handle parsed object
             if isinstance(addr, IPv6Address):
