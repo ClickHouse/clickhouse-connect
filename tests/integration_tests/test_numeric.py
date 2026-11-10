@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from decimal import Decimal
 
 import pytest
 
@@ -79,3 +80,25 @@ def test_interval_dataframe(param_client, call):
         "SELECT [CAST(NULL AS Nullable(IntervalHour)), toIntervalHour(79)] AS c",
     )
     assert list(nested["c"][0]) == [pd.NA, 79]
+
+
+@pytest.mark.parametrize(
+    "type_name, value, expected",
+    [
+        ("Decimal(9, 2)", Decimal("9999999.999"), Decimal("9999999.99")),
+        ("Decimal32(2)", "1234567.899", Decimal("1234567.89")),
+        ("Decimal64(2)", "1234567890123456.899", Decimal("1234567890123456.89")),
+        ("Decimal128(2)", "1" * 36 + ".899", Decimal("1" * 36 + ".89")),
+        ("Decimal256(2)", "-" + "1" * 74 + ".899", Decimal("-" + "1" * 74 + ".89")),
+        ("Nullable(Decimal(9, 2))", None, None),
+        ("Nullable(Decimal128(2))", "1" * 36 + ".899", Decimal("1" * 36 + ".89")),
+        ("Nullable(Decimal256(2))", "1" * 74 + ".899", Decimal("1" * 74 + ".89")),
+        ("Array(Decimal(9, 2))", [9999999.999, -1234567.899], [Decimal("9999999.99"), Decimal("-1234567.89")]),
+        ("Tuple(Decimal(9, 2))", (Decimal("1234567.899"),), (Decimal("1234567.89"),)),
+        ("Array(Tuple(Decimal(9, 2)))", [("1234567.899",)], [(Decimal("1234567.89"),)]),
+    ],
+)
+def test_decimal_truncates_extra_digits(param_client, call, table_context: Callable, type_name, value, expected):
+    with table_context("decimal_truncation", [f"value {type_name}"], order_by="tuple()"):
+        call(param_client.insert, "decimal_truncation", [[value]])
+        assert call(param_client.query, "SELECT value FROM decimal_truncation").result_rows == [(expected,)]

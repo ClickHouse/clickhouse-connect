@@ -7,6 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- Python codec `Decimal` inserts now consistently truncate digits beyond the column scale, as the server and Rust codec do. Previously, `Decimal(9, 2)` stored `1234567.899` as `1234567.90` and could round `9999999.999` up to `10000000.00` instead of truncating to `9999999.99`.
 - The Python codec no longer writes a `FixedString` value as all zero bytes when the string cannot be encoded, for example a lone surrogate or a character outside a non-UTF-8 `encoding`. It now raises `UnicodeEncodeError`, the same as `String` columns.
 - With the Python codec, native inserts of naive `datetime` values near and before the epoch no longer raise `OSError` on Windows. The conversion falls back to the detected local timezone. Without `tzlocal` or a resolvable `TZ`, that timezone is a fixed offset and can differ from historical daylight saving time. Use `naive_datetime_insert="server"` for exact historical wall times. Addresses the Python codec part of [#1162](https://github.com/ClickHouse/clickhouse-connect/issues/1162).
 - Alembic version-table inserts now bypass insert deduplication. Downgrading and upgrading again no longer loses the recorded revision and replays already-applied migrations on tables with deduplication enabled, including ClickHouse Cloud.

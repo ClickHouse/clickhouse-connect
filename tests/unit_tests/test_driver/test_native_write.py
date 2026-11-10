@@ -1,5 +1,6 @@
 import struct
 from datetime import date, datetime, timedelta, timezone, tzinfo
+from decimal import Decimal, localcontext
 
 import pytest
 
@@ -152,6 +153,51 @@ def test_long_str():
     types = [get_from_name("String")]
     output = native_insert_block(data, names, types)
     assert bytes(output) == b"\x01\x01\x05value\x06String\xe7\x03" + x.encode()
+
+
+@pytest.mark.parametrize(
+    "type_name, values, expected",
+    [
+        ("Decimal(9, 2)", ["1.999", "1234567.899", "-1234567.899", "9999999.999"], [199, 123456789, -123456789, 999999999]),
+        ("Decimal32(2)", ["9999999.999", "-9999999.999"], [999999999, -999999999]),
+        ("Decimal64(2)", ["1234567890123456.899"], [123456789012345689]),
+        ("Nullable(Decimal(9, 2))", [None, "1234567.899"], [0, 123456789]),
+        ("Decimal(38, 2)", ["1" * 36 + ".899"], [int("1" * 36 + "89")]),
+        ("Decimal128(2)", ["1" * 36 + ".899"], [int("1" * 36 + "89")]),
+        ("Nullable(Decimal128(2))", [None, "1" * 36 + ".899"], [0, int("1" * 36 + "89")]),
+        ("Decimal256(2)", ["-" + "1" * 74 + ".899"], [-int("1" * 74 + "89")]),
+        ("Nullable(Decimal256(2))", [None, "1" * 74 + ".899"], [0, int("1" * 74 + "89")]),
+    ],
+)
+@pytest.mark.parametrize("input_type", [Decimal, str])
+def test_decimal_truncates_extra_digits(type_name, values, expected, input_type):
+    ch_type = get_from_name(type_name)
+    dest = bytearray()
+    ch_type.write_column([input_type(v) if v is not None else None for v in values], dest, InsertContext("table", ["value"], [ch_type]))
+    sz = ch_type.byte_size
+    written = [int.from_bytes(dest[i : i + sz], "little", signed=True) for i in range(len(dest) - sz * len(values), len(dest), sz)]
+    assert written == expected
+
+
+@pytest.mark.parametrize("type_name", ["Decimal(9, 2)", "Decimal32(2)", "Nullable(Decimal32(2))"])
+def test_decimal_truncates_float_extra_digits(type_name):
+    ch_type = get_from_name(type_name)
+    dest = bytearray()
+    values = [1.999, 1234567.899, -1234567.899, 9999999.999]
+    ch_type.write_column(values, dest, InsertContext("table", ["value"], [ch_type]))
+    nulls = bytes(len(values)) if ch_type.nullable else b""
+    assert dest == nulls + struct.pack("<4i", 199, 123456789, -123456789, 999999999)
+
+
+@pytest.mark.parametrize("type_name", ["Decimal(9, 2)", "Decimal(38, 2)", "Nullable(Decimal256(2))"])
+def test_decimal_write_clamped_context(type_name):
+    ch_type = get_from_name(type_name)
+    dest = bytearray()
+    with localcontext() as outer:
+        outer.clamp = 1
+        ch_type.write_column([Decimal("13.799")], dest, InsertContext("table", ["value"], [ch_type]))
+        assert outer.clamp == 1
+    assert int.from_bytes(dest[-ch_type.byte_size :], "little", signed=True) == 1379
 
 
 @pytest.mark.parametrize("type_name", ["FixedString(4)", "Nullable(FixedString(4))"])
