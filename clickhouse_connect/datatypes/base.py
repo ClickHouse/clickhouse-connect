@@ -93,7 +93,27 @@ class ClickHouseType(ABC):  # noqa: B024
             type_map[cls.base_type] = cls
 
     @classmethod
+    def _validate_type_def(cls, type_def: TypeDef) -> None:
+        type_args = cls._type_args
+        positional_bounds = [bound for bound in type_args.integer_bounds if isinstance(bound[0], int)]
+        if not positional_bounds:
+            return
+        values = type_def.values
+        if len(values) < type_args.min_args or (type_args.max_args is not None and len(values) > type_args.max_args):
+            raise ValueError(f"Invalid argument count {len(values)} for {cls.__name__}")
+        for index, minimum, maximum in positional_bounds:
+            if index >= len(values):
+                continue
+            value = values[index]
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"Invalid argument {value!r} for {cls.__name__}; expected an integer")
+            if (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
+                bound_str = f"{minimum} to {maximum}" if maximum is not None else f">= {minimum}"
+                raise ValueError(f"{cls.__name__} argument {value} is out of range ({bound_str})")
+
+    @classmethod
     def build(cls: type["ClickHouseType"], type_def: TypeDef):
+        cls._validate_type_def(type_def)
         return cls(type_def)
 
     @classmethod

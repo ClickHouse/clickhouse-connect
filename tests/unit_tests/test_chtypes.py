@@ -131,3 +131,31 @@ def test_nullable_interval_finalizes_to_pandas_int64():
         result = gfn(f"Nullable({type_name})")._finalize_column([-13, None, 79], ctx)
         assert str(result.dtype) == "Int64"
         assert list(result) == [-13, pd.NA, 79]
+
+
+@pytest.mark.parametrize(
+    "type_name",
+    [
+        "DateTime64(10)",
+        "DateTime64(99)",
+        "DateTime64(-1)",
+        "DateTime64(3 4)",
+        "DateTime64()",
+        "Time64(10)",
+        "Time64(-1)",
+        "FixedString(0)",
+        "FixedString(-1)",
+        "Decimal(0, 0)",
+        "Decimal(80, 2)",
+        "Decimal(5, 10)",
+        "Decimal32(10)",
+        "Decimal32(-1)",
+        "Decimal64(19)",
+        "Decimal128(39)",
+        "Decimal256(77)",
+    ],
+)
+def test_get_from_name_rejects_invalid_integer_bounds(type_name: str):
+    with pytest.raises(ValueError):
+        gfn(type_name)
+

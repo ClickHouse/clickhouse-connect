@@ -361,10 +361,13 @@ class Decimal(ClickHouseType):
 
     @classmethod
     def build(cls: type["Decimal"], type_def: TypeDef):
+        cls._validate_type_def(type_def)
         size = cls.dec_size
         if size == 0:
             prec = type_def.values[0]
             scale = type_def.values[1]
+            if scale > prec:
+                raise ValueError(f"Decimal scale {scale} cannot exceed precision {prec}")
             size = decimal_size(prec)
         else:
             prec = decimal_prec[size]
