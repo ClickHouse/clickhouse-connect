@@ -18,13 +18,17 @@ from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
     _AddClickHouseProjectionOp,
     _AddClickHouseProjectionsOp,
     _CreateClickHouseDictionaryOp,
+    _CreateClickHouseFunctionOp,
     _CreateClickHouseMaterializedViewOp,
+    _CreateClickHouseViewOp,
     _DropClickHouseDictionaryOp,
+    _DropClickHouseFunctionOp,
     _DropClickHouseIndexesOp,
     _DropClickHouseIndexOp,
     _DropClickHouseMaterializedViewOp,
     _DropClickHouseProjectionOp,
     _DropClickHouseProjectionsOp,
+    _DropClickHouseViewOp,
     _MaterializeClickHouseIndexOp,
     _MaterializeClickHouseProjectionOp,
     _ModifyClickHouseTableSettingsOp,
@@ -443,6 +447,43 @@ def _render_reset_clickhouse_table_settings(autogen_context: AutogenContext, op:
         "reset_clickhouse_table_settings",
         [repr(op.table_name), repr(list(op.names))],
         _optional_kwargs(("schema", op.schema, None), ("clickhouse_settings", op.clickhouse_settings, None)),
+    )
+
+
+@render.renderers.dispatch_for(_CreateClickHouseViewOp)
+def _render_create_clickhouse_view(autogen_context: AutogenContext, op: _CreateClickHouseViewOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "create_clickhouse_view",
+        [repr(op.name), repr(op.select)],
+        _optional_kwargs(("if_not_exists", op.if_not_exists, False), ("or_replace", op.or_replace, False), ("schema", op.schema, None)),
+    )
+
+
+@render.renderers.dispatch_for(_DropClickHouseViewOp)
+def _render_drop_clickhouse_view(autogen_context: AutogenContext, op: _DropClickHouseViewOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "drop_clickhouse_view",
+        [repr(op.name)],
+        _optional_kwargs(("if_exists", op.if_exists, False), ("schema", op.schema, None)),
+    )
+
+
+@render.renderers.dispatch_for(_CreateClickHouseFunctionOp)
+def _render_create_clickhouse_function(autogen_context: AutogenContext, op: _CreateClickHouseFunctionOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "create_clickhouse_function",
+        [repr(op.name), repr(op.expression)],
+        _optional_kwargs(("if_not_exists", op.if_not_exists, False), ("or_replace", op.or_replace, False)),
+    )
+
+
+@render.renderers.dispatch_for(_DropClickHouseFunctionOp)
+def _render_drop_clickhouse_function(autogen_context: AutogenContext, op: _DropClickHouseFunctionOp) -> str:
+    return _render_op_call(
+        autogen_context, "drop_clickhouse_function", [repr(op.name)], _optional_kwargs(("if_exists", op.if_exists, False))
     )
 
 
