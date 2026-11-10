@@ -222,11 +222,18 @@ class InsertContext(BaseQueryContext):
 
     def _convert_numpy(self, np_array):
         if np_array.dtype.names is None:
-            if "date" in str(np_array.dtype):
-                for col_name, col_type in zip(self.column_names, self.column_types):
-                    if "date" in col_type.np_type:
-                        self.column_formats[col_name] = "int"
-                return np_array.astype("int").tolist()
+            if "date" in str(np_array.dtype) and np_array.size:
+                columns = np_array if self.column_oriented else np_array.T
+                if len(columns) != len(self.column_names):
+                    raise ProgrammingError("Insert data column count does not match column names")
+                ticks = options.np.stack(
+                    [
+                        self._datetime64_ticks(col, col_name, col_type)
+                        for col, col_name, col_type in zip(columns, self.column_names, self.column_types)
+                    ],
+                    axis=0 if self.column_oriented else 1,
+                )
+                return ticks.tolist()
             for col_type in self.column_types:
                 if col_type.byte_size == 0 or col_type.byte_size > np_array.dtype.itemsize:
                     return np_array.tolist()
@@ -240,12 +247,18 @@ class InsertContext(BaseQueryContext):
         for ix, (col_name, col_type) in enumerate(zip(self.column_names, self.column_types)):
             d_type = data[ix].dtype
             if "date" in str(d_type) and "date" in col_type.np_type:
-                self.column_formats[col_name] = "int"
-                data[ix] = data[ix].astype(int).tolist()
+                data[ix] = self._datetime64_ticks(data[ix], col_name, col_type).tolist()
             elif col_type.byte_size == 0 or col_type.byte_size > d_type.itemsize:
                 data[ix] = data[ix].tolist()
         self.column_oriented = True
         return data
+
+    def _datetime64_ticks(self, column, col_name: str, col_type: "ClickHouseType"):
+        if "date" in col_type.np_type:
+            # The ticks must be in the column unit, for example seconds for DateTime and days for Date
+            self.column_formats[col_name] = "int"
+            column = column.astype(col_type.np_type, copy=False)
+        return column.view("int64")
 
     def data_error(self, error_message: str) -> DataError:
         return DataError(f"Failed to write column '{self.column_name}': {error_message}")
