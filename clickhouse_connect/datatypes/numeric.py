@@ -44,14 +44,54 @@ class IntBase(ArrayType, registered=False):
             if isinstance(first, int):
                 column = [0 if x is None else x for x in column]
             elif isinstance(first, float):
-                column = [0 if x is None or isnan(x) or isinf(x) else int(x) for x in column]
+                column = self._float_column_to_int(column, ctx)
             else:
                 column = [int(x) if x else 0 for x in column]
         elif isinstance(column[0], float):
-            column = [0 if x is None or isnan(x) or isinf(x) else int(x) for x in column]
+            column = self._float_column_to_int(column, ctx)
         elif not isinstance(column[0], int):
             column = [int(x) for x in column]
         data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
+
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        if self.nullable:
+            column = _nan_to_none(column)
+        super().write_column_data(column, dest, ctx)
+
+    def _float_column_to_int(self, column: Sequence, ctx: InsertContext) -> list[int]:
+        try:
+            return [0 if x is None or isnan(x) else int(x) for x in column]
+        except OverflowError:
+            value = next((x for x in column if _is_inf(x)), None)
+            if value is None:
+                raise
+            # ClickHouse also rejects infinity in integer conversions (CANNOT_CONVERT_TYPE)
+            raise ctx.data_error(f"{self.name} value {float(value)} is not finite; pass an integer value") from None
+
+
+def _is_inf(value: Any) -> bool:
+    try:
+        return isinf(value)
+    except (TypeError, OverflowError):
+        return False
+
+
+def _nan_to_none(column: Sequence) -> Sequence:
+    """Replace float NaN with None, so a Nullable integer column stores NULL for it"""
+    np = options.np
+    if np is not None and isinstance(column, np.ndarray) and column.dtype.kind != "O":
+        if column.dtype.kind != "f":
+            return column
+        nan_mask = np.isnan(column)
+        if not nan_mask.any():
+            return column
+        values = column.astype(object)
+        values[nan_mask] = None
+        return values
+    float_types = (float, np.floating) if np is not None else (float,)
+    if not isinstance(first_value(column), float_types):
+        return column
+    return [None if isinstance(x, float_types) and isnan(x) else x for x in column]
 
 
 class Int8(IntBase):

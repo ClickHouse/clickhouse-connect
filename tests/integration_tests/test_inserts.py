@@ -579,6 +579,73 @@ def test_numeric_conversion(param_client: Client, call, table_context: Callable)
         assert result[2][2] == 5.32
 
 
+NAN = float("nan")
+INF = float("inf")
+
+
+@pytest.mark.parametrize(
+    "type_name, values, np_dtype, expected",
+    [
+        ("Nullable(Int32)", [13.0, NAN, None], None, [13, None, None]),
+        ("Nullable(UInt8)", [NAN, 13.0], None, [None, 13]),
+        ("Nullable(Int64)", [79.0, NAN, -13.0], "float64", [79, None, -13]),
+        ("Nullable(UInt64)", [NAN, 13.0], "float32", [None, 13]),
+        ("Nullable(Int32)", [13.0, None, NAN], "object", [13, None, None]),
+        ("LowCardinality(Nullable(Int64))", [79.0, NAN, 79.0], None, [79, None, 79]),
+        ("Array(Nullable(Int16))", [[13.0, NAN], [], [NAN]], None, [[13, None], [], [None]]),
+        ("Tuple(Nullable(Int32), String)", [(NAN, "user_1"), (13.0, "user_2")], None, [(None, "user_1"), (13, "user_2")]),
+        ("Array(Tuple(Nullable(Int32), String))", [[(NAN, "user_1"), (79.0, "user_2")]], None, [[(None, "user_1"), (79, "user_2")]]),
+        # Unchanged: NaN in a non-nullable integer column is written as 0, the same as insert_df
+        ("Int32", [13.0, NAN], None, [13, 0]),
+        ("UInt16", [NAN, 79.0], "float64", [0, 79]),
+    ],
+)
+def test_insert_float_nan_into_int(client_factory, call, client_mode, type_name, values, np_dtype, expected):
+    client = client_factory(native_codec="python", settings={"allow_suspicious_low_cardinality_types": 1})
+    if np_dtype:
+        np = pytest.importorskip("numpy")
+        values = np.array(values, dtype=np_dtype)
+    table = f"test_int_nan_{client_mode}_{uuid4().hex}"
+    call(client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(client.command, f"CREATE TABLE {table} (id UInt8, v {type_name}) ENGINE Memory")
+        ids = list(range(len(expected)))
+        call(client.insert, table, [ids, values], column_names=["id", "v"], column_oriented=True)
+        result = call(client.query, f"SELECT v FROM {table} ORDER BY id").result_rows
+        assert result == [(value,) for value in expected]
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize(
+    "type_name, values, np_dtype",
+    [
+        ("Int32", [13.0, INF], None),
+        ("UInt64", [INF], "float64"),
+        ("Int8", [-INF, NAN], "float64"),
+        ("Tuple(Int32, String)", [(INF, "user_1")], None),
+        ("Nullable(Int32)", [13.0, INF, None], None),
+        ("Nullable(Int32)", [NAN, -INF], "float64"),
+        ("LowCardinality(Int32)", [INF], None),
+        ("Array(Int32)", [[13.0, INF]], None),
+    ],
+)
+def test_insert_float_inf_into_int_raises(client_factory, call, client_mode, type_name, values, np_dtype):
+    client = client_factory(native_codec="python", settings={"allow_suspicious_low_cardinality_types": 1})
+    if np_dtype:
+        np = pytest.importorskip("numpy")
+        values = np.array(values, dtype=np_dtype)
+    table = f"test_int_inf_{client_mode}_{uuid4().hex}"
+    call(client.command, f"DROP TABLE IF EXISTS {table}")
+    try:
+        call(client.command, f"CREATE TABLE {table} (v {type_name}) ENGINE Memory")
+        with pytest.raises(DataError, match="inf is not finite"):
+            call(client.insert, table, [values], column_names=["v"], column_oriented=True)
+        assert call(client.command, f"SELECT count() FROM {table}") == 0
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
 def test_insert_table_name_with_unescaped_inner_backtick(param_client: Client, call, test_table_engine: str):
     # A table name wrapped in backticks but containing unescaped inner backticks must be re-escaped.
     raw_table = "`quote`insert`"
