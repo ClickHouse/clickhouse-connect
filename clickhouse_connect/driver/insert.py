@@ -184,6 +184,17 @@ class InsertContext(BaseQueryContext):
                 # Time64 scales with no NumPy equivalent insert through the object path
                 np_type = "O"
             if ch_type.python_type is int:
+                if not ch_type.nullable and ch_type.byte_size <= 8 and d_type_kind in ("f", "i", "u") and df_col.hasnans:
+                    df_col = df_col.fillna(0)
+                elif (
+                    not ch_type.nullable
+                    and ch_type.byte_size <= 8
+                    and d_type_kind == "O"
+                    and isinstance(df_col.iloc[0], float)
+                    and df_col.hasnans
+                ):
+                    data.append([0.0 if value is None or value != value else value for value in df_col])
+                    continue
                 if d_type_kind == "f":
                     df_col = df_col.round().astype(ch_type.base_type)
                 elif d_type_kind in ("i", "u") and not df_col.hasnans:
