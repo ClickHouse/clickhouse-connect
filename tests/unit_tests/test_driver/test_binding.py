@@ -1,3 +1,4 @@
+from itertools import product
 from unittest.mock import Mock
 
 import pytest
@@ -10,6 +11,7 @@ from clickhouse_connect.driver.binding import (
     _contains_insert_bareword,
     _query_is_insert,
     _query_is_read_only,
+    _sql_opaque_regions,
     _strip_trailing_semicolons,
     bind_query,
     finalize_query,
@@ -421,3 +423,40 @@ def test_escape_str_and_bytes():
     assert binding.escape_str("a\\b'c`d\te\nf\r") == "a\\\\b\\'c\\`d\\\te\\\nf\r"
     assert binding.escape_bytes(b"\x00\xffA") == "\\x00\\xff\\x41"
     assert binding.escape_bytes(bytearray()) == ""
+
+
+@pytest.mark.parametrize(
+    "sql, regions",
+    [
+        ("SELECT 1", []),
+        ("SELECT 1 -- c\nFROM t", ["-- c\n"]),
+        ("SELECT 1 // c", ["// c"]),
+        ("SELECT 1 # c\n", ["# c\n"]),
+        ("SELECT 1 #! c", ["#! c"]),
+        ("SELECT 1 #x", []),
+        ("SELECT /* a /* b */ c */ 1", ["/* a /* b */ c */"]),
+        ("SELECT 'a--b', \"c//d\", `e/*f*/`", ["'a--b'", '"c//d"', "`e/*f*/`"]),
+        ("SELECT 'it''s', 'a\\'b'", ["'it''s'", "'a\\'b'"]),
+        ("SELECT \u2018a'b\u2019, \u201cc\u201d", ["\u2018a'b\u2019", "\u201cc\u201d"]),
+        ("SELECT {p:Enum8('a' = 1)}, 'b'", ["'b'"]),
+        ("SELECT $$a'b$$, $t$ -- $t$", ["$$a'b$$", "$t$ -- $t$"]),
+        ("SELECT a$b$c, $x$, -- c", ["-- c"]),
+        ("SELECT 'a' -- 'b'\n, 'c'", ["'a'", "-- 'b'\n", "'c'"]),
+        ("SELECT 'a', 'unterminated", ["'a'"]),
+        ("SELECT 'a' /* unterminated 'b'", ["'a'"]),
+    ],
+)
+def test_sql_opaque_regions(sql, regions):
+    assert [sql[start:end] for start, end in _sql_opaque_regions(sql)] == regions
+
+
+def test_sql_opaque_regions_skipping_plain_text_matches_lexing_every_token():
+    # A query with "$" is lexed token by token, and any other query only visits the possible region starts.
+    # A leading "$ " switches the mode, and it does not change how the text after it is lexed.
+    fragments = ["SELECT", "x", "1", " ", "\n", "\u00a0", "'", '"', "`", "\u2018", "\u2019", "\\", "''"]
+    fragments += ["--", "-", "//", "/", "/*", "*/", "#", "# ", "#!", "{", "{p:Int32}", "}", ";", "(", ")"]
+    for length in (1, 2, 3):
+        for parts in product(fragments, repeat=length):
+            sql = "".join(parts)
+            lexed_all = [(start - 2, end - 2) for start, end in _sql_opaque_regions("$ " + sql)]
+            assert list(_sql_opaque_regions(sql)) == lexed_all, sql

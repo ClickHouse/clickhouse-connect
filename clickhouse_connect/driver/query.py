@@ -12,6 +12,8 @@ from clickhouse_connect.driver.binding import (
     _binding_keeps_query_structure,
     _needs_trailing_semicolon_lexer,
     _query_is_insert,
+    _sql_opaque_regions,
+    _sql_opaque_start_re,
     _strip_trailing_semicolons,
     bind_query,
 )
@@ -43,6 +45,9 @@ leading_select_re = re.compile(r"^\s*SELECT(?:\s|$)", re.IGNORECASE)
 insert_re = re.compile(r"(^|\s)INSERT\s*INTO", re.IGNORECASE)
 command_re = re.compile(r"(^\s*)(" + commands + r")\s", re.IGNORECASE)
 bare_row_policy_show_re = re.compile(r"^\s*SHOW\s+(ROW\s+)?POLICIES\s*(?:;\s*)*$", re.IGNORECASE)
+
+_SQL_COMMENT_MARKERS = ("--", "/*", "//", "# ", "#!")
+_SQL_COMMENT_START_CHARS = "-/#"
 
 
 class QueryContext(BaseQueryContext):
@@ -180,11 +185,11 @@ class QueryContext(BaseQueryContext):
 
     @property
     def is_select(self) -> bool:
-        return select_re.search(self.uncommented_query) is not None
+        return _matches_outside_quotes(select_re, self.uncommented_query)
 
     @property
     def has_limit(self) -> bool:
-        return limit_re.search(self.uncommented_query) is not None
+        return _matches_outside_quotes(limit_re, self.uncommented_query)
 
     @property
     def is_insert(self) -> bool:
@@ -467,7 +472,32 @@ class QueryResult(Closable):
                 block_gen.close()
 
 
-comment_re = re.compile(r"(\".*?\"|\'.*?\')|(/\*.*?\*/|(--)[^\n]*$)", re.MULTILINE | re.DOTALL)
+def _matches_outside_quotes(pattern: re.Pattern[str], sql: str) -> bool:
+    """
+    Return whether the pattern matches outside quoted strings, quoted identifiers and heredocs.  Quoted text
+    is not SQL, so a LIMIT or a SELECT in a string literal does not count.  Only the position of a match is
+    checked, so the pattern still decides what counts as a keyword.
+    :param pattern: Pattern to look for
+    :param sql: SQL query without comments
+    """
+    match = pattern.search(sql)
+    if match is None:
+        return False
+    position = match.start()
+    # A region cannot hide a match when nothing before the match can start a region.  This is the usual case
+    # for SELECT, so the query does not need to be lexed.
+    if _sql_opaque_start_re.search(sql, 0, position + 1) is None and sql.find("$", 0, position) == -1:
+        return True
+    regions = _sql_opaque_regions(sql)
+    region = next(regions, None)
+    while match is not None:
+        position = match.start()
+        while region is not None and region[1] <= position:
+            region = next(regions, None)
+        if region is None or position < region[0]:
+            return True
+        match = pattern.search(sql, region[1])
+    return False
 
 
 def remove_sql_comments(sql: str) -> str:
@@ -476,23 +506,35 @@ def remove_sql_comments(sql: str) -> str:
     don't fully trust it to correctly ignore weird quoted strings, and other edge cases, so we always pass the
     original SQL to ClickHouse (which uses a full-fledged AST/ token parser)
 
+    The comment forms are the ones of the server lexer: "--", "//", "# " and "#!" line comments, and nested
+    "/* */" block comments.  Quoted strings, quoted identifiers and heredocs are kept as they are.  An
+    unterminated quote or comment is kept too, together with the text after it.
+
     A block comment is replaced with a single space because the server lexer treats it as a token separator,
     so "SELECT/*c*/1" is two tokens for the server and has to stay two tokens here.  A line comment ends at
     its newline, which is kept, so it separates the tokens around it on its own.
     :param sql:  SQL query
     :return: SQL Query without SQL comments
     """
-
-    def replacer(match):
-        # if the 2nd group (capturing comments) is not None, it means we have captured a
-        # non-quoted, actual comment string, so replace it with its separator
-        if match.group(2):
-            # the 3rd group is only set for a line comment, whose terminating newline is not consumed
-            return "" if match.group(3) else " "
-        # Otherwise we've actually captured a quoted string, so return it
-        return match.group(1)
-
-    return comment_re.sub(replacer, sql)
+    last_marker = max(sql.rfind(marker) for marker in _SQL_COMMENT_MARKERS)
+    if last_marker == -1:
+        return sql
+    parts: list[str] = []
+    copied = 0
+    for start, end in _sql_opaque_regions(sql):
+        if sql[start] in _SQL_COMMENT_START_CHARS:
+            parts.append(sql[copied:start])
+            if sql.startswith("/*", start):
+                parts.append(" ")
+            elif sql[end - 1] == "\n":
+                parts.append("\n")
+            copied = end
+        if end > last_marker:
+            break
+    if not parts:
+        return sql
+    parts.append(sql[copied:])
+    return "".join(parts)
 
 
 def to_arrow(content: bytes):

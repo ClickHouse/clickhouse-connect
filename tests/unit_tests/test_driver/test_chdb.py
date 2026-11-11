@@ -289,6 +289,30 @@ class TestChdbQuery:
         assert result.column_types[0].name == expected_type
 
     @pytest.mark.parametrize(
+        "sql, expected",
+        [
+            ("SELECT number FROM numbers(9) // LIMIT 5", [(0,), (1,)]),
+            ("SELECT number FROM numbers(9) # LIMIT 5", [(0,), (1,)]),
+            ("SELECT number FROM numbers(9) #! LIMIT 5", [(0,), (1,)]),
+            ("SELECT number FROM numbers(9) // LIMIT 0", [(0,), (1,)]),
+            ("SELECT number FROM numbers(9) /* a /* b */ LIMIT 0 */", [(0,), (1,)]),
+            ("SELECT number AS `a--b` FROM numbers(9) LIMIT 1", [(0,)]),
+            ("SELECT number, $$--$$ AS tag FROM numbers(9) LIMIT 1", [(0, "--")]),
+            ("SELECT number FROM numbers(9) WHERE toString(number) != 'a\\'b-- LIMIT 0' LIMIT 1", [(0,)]),
+            ("SELECT number FROM numbers(9) WHERE toString(number) != ' LIMIT 1'", [(0,), (1,)]),
+            ("SELECT number AS `LIMIT 0--` FROM numbers(9)", [(0,), (1,)]),
+            ("SELECT number FROM numbers(9) LIMIT 1", [(0,)]),
+        ],
+    )
+    def test_query_limit_ignores_limit_in_comments_and_quotes(self, client, sql, expected):
+        old_limit = client.query_limit
+        client.query_limit = 2
+        try:
+            assert [tuple(row) for row in client.query(sql).result_rows] == expected
+        finally:
+            client.query_limit = old_limit
+
+    @pytest.mark.parametrize(
         "sql",
         [
             "SELECT 13 AS v UNION ALL SELECT 79 AS v LIMIT 0",
