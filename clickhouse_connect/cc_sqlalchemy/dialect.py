@@ -35,6 +35,8 @@ from clickhouse_connect.cc_sqlalchemy.inspector import (
     ChInspector,
     _database_name,
     _NoSuchTableError,
+    get_clickhouse_function_definition,
+    get_clickhouse_function_names,
     get_clickhouse_indexes,
     get_clickhouse_projections,
     get_columns,
@@ -560,6 +562,12 @@ class ClickHouseDialect(DefaultDialect):
 
     def get_indexes(self, connection, table_name, schema=None, **kw):
         return []
+
+    def get_clickhouse_function_names(self, connection: Connection) -> list[str]:
+        return get_clickhouse_function_names(connection)
+
+    def get_clickhouse_function_definition(self, connection: Connection, function_name: str) -> str:
+        return get_clickhouse_function_definition(connection, function_name)
 
     def get_clickhouse_indexes(
         self, connection: Connection, table_name: str, schema: str | None = None, **kwargs: Any

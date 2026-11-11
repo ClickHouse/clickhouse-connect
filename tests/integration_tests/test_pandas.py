@@ -82,6 +82,19 @@ def test_pandas_all_null_float(param_client: Client, call):
     assert df["flt"].dtype.name == "float64"
 
 
+@pytest.mark.parametrize("dtype", ["float32", "float64", "Float32", "Float64", "Int64", "object"])
+@pytest.mark.parametrize("nullable", [False, True])
+def test_pandas_integer_missing_defaults(param_client, call, table_context, dtype, nullable):
+    source = pd.DataFrame({"id": [0, 1, 2], "value": pd.Series([13.0, None, 79.0], dtype=dtype)})
+    original = source.copy(deep=True)
+    type_name = "Nullable(Int32)" if nullable else "Int32"
+    with table_context("test_pandas_integer_missing_defaults", ["id UInt8", f"value {type_name}"]):
+        call(param_client.insert_df, "test_pandas_integer_missing_defaults", source)
+        rows = call(param_client.query, "SELECT value FROM test_pandas_integer_missing_defaults ORDER BY id").result_rows
+        assert rows == [(13,), (None if nullable else 0,), (79,)]
+    pd.testing.assert_frame_equal(source, original)
+
+
 def test_pandas_csv(param_client: Client, call, table_context: Callable):
     csv = """
 key,num,flt,str,dt,d

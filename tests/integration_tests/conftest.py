@@ -24,6 +24,7 @@ from tests.helpers import PROJECT_ROOT_DIR
 
 TEST_DATABASE_PREFIX = "ch_connect__"
 STALE_TEST_DATABASE_AGE_MS = 6 * 60 * 60 * 1000
+GENERATED_TEST_FUNCTION = re.compile(rf"{TEST_DATABASE_PREFIX}udf__([0-9]{{13}})__[0-9a-f]{{32}}(?:__.+)?")
 GENERATED_TEST_DATABASE = re.compile(rf"{TEST_DATABASE_PREFIX}\d{{6}}__(\d+)")
 
 
@@ -323,6 +324,7 @@ def test_client_fixture(test_config: TestConfig, test_create_client: Callable) -
     # Only one xdist worker sweeps, so concurrent workers do not race on the same drops.
     if os.environ.get("PYTEST_XDIST_WORKER", "gw0") == "gw0":
         drop_stale_test_databases(client, test_config.test_database)
+        drop_stale_test_functions(client)
 
     # In cloud env, there seems to be some issues with creating a db and then immediately using it.
     # This ensures it's visible before yielding it back to the test.
@@ -415,6 +417,27 @@ def drop_stale_test_databases(client: Client, keep: str) -> None:
         match = GENERATED_TEST_DATABASE.fullmatch(name)
         if match and name != keep and int(match.group(1)) < cutoff_ms:
             drop_test_database(client, name)
+
+
+def drop_stale_test_functions(client: Client) -> None:
+    """Drop generated SQL UDFs left behind by sessions that never reached teardown."""
+    cutoff_ms = int(time.time() * 1000) - STALE_TEST_DATABASE_AGE_MS
+    try:
+        names = client.query(
+            "SELECT name FROM system.functions WHERE origin = 'SQLUserDefined' AND startsWith(name, {prefix:String})",
+            parameters={"prefix": TEST_DATABASE_PREFIX},
+            query_formats={"String": "string"},
+        ).result_rows
+    except Exception as ex:  # noqa: BLE001
+        sys.stderr.write(f"Warning -- failed to list stale test functions: {ex}\n")
+        return
+    for (name,) in names:
+        match = GENERATED_TEST_FUNCTION.fullmatch(name)
+        if match and int(match.group(1)) < cutoff_ms:
+            try:
+                client.command(f"DROP FUNCTION IF EXISTS {quote_identifier(name)}", use_database=False)
+            except Exception as ex:  # noqa: BLE001
+                sys.stderr.write(f"Warning -- failed to drop stale test function {name}: {ex}\n")
 
 
 def run_cmd(cmd):

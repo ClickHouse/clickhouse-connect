@@ -8,8 +8,29 @@ from clickhouse_connect.cc_sqlalchemy.alembic.compare import COMPARE_TABLE_OPTIO
 from clickhouse_connect.cc_sqlalchemy.alembic.impl import ClickHouseImpl
 from clickhouse_connect.cc_sqlalchemy.alembic.indexes import COMPARE_INDEXES_OPT, IndexComparisonError
 from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
+    AddClickHouseIndexesOp,
+    AddClickHouseIndexOp,
+    AddClickHouseProjectionOp,
+    AddClickHouseProjectionsOp,
     ClickHouseIndex,
     ClickHouseProjection,
+    CreateClickHouseDictionaryOp,
+    CreateClickHouseFunctionOp,
+    CreateClickHouseMaterializedViewOp,
+    CreateClickHouseViewOp,
+    DropClickHouseDictionaryOp,
+    DropClickHouseFunctionOp,
+    DropClickHouseIndexesOp,
+    DropClickHouseIndexOp,
+    DropClickHouseMaterializedViewOp,
+    DropClickHouseProjectionOp,
+    DropClickHouseProjectionsOp,
+    DropClickHouseViewOp,
+    MaterializeClickHouseIndexOp,
+    MaterializeClickHouseProjectionOp,
+    ModifyClickHouseTableSettingsOp,
+    ReloadClickHouseDictionaryOp,
+    ResetClickHouseTableSettingsOp,
 )
 from clickhouse_connect.cc_sqlalchemy.alembic.projections import COMPARE_PROJECTIONS_OPT, ProjectionComparisonError
 from clickhouse_connect.cc_sqlalchemy.alembic.utils import (
@@ -19,6 +40,27 @@ from clickhouse_connect.cc_sqlalchemy.alembic.utils import (
 )
 
 __all__ = [
+    "AddClickHouseIndexOp",
+    "AddClickHouseIndexesOp",
+    "DropClickHouseIndexOp",
+    "DropClickHouseIndexesOp",
+    "MaterializeClickHouseIndexOp",
+    "AddClickHouseProjectionOp",
+    "AddClickHouseProjectionsOp",
+    "DropClickHouseProjectionOp",
+    "DropClickHouseProjectionsOp",
+    "MaterializeClickHouseProjectionOp",
+    "ModifyClickHouseTableSettingsOp",
+    "ResetClickHouseTableSettingsOp",
+    "CreateClickHouseViewOp",
+    "DropClickHouseViewOp",
+    "CreateClickHouseFunctionOp",
+    "DropClickHouseFunctionOp",
+    "CreateClickHouseMaterializedViewOp",
+    "DropClickHouseMaterializedViewOp",
+    "CreateClickHouseDictionaryOp",
+    "DropClickHouseDictionaryOp",
+    "ReloadClickHouseDictionaryOp",
     "COMPARE_TABLE_OPTIONS_OPT",
     "COMPARE_INDEXES_OPT",
     "COMPARE_PROJECTIONS_OPT",

@@ -48,6 +48,8 @@ Write formats are implemented for a limited number of types. In most cases Click
 
 It is normally unnecessary to override a write format, but the methods in `clickhouse_connect.datatypes.format` can set one globally. Container wrappers such as `Array`, `Nullable`, and `LowCardinality` preserve the element type's formatting behavior.
 
+Direct inserts into 8-64-bit integer columns reject float NaN and infinity with `DataError`, including nullable columns and nested values. Use `None` for SQL NULL in a nullable integer column. A non-nullable integer column rejects `None`. `insert_df` writes missing values as NULL in a nullable integer column and as 0 in a non-nullable one, with either codec.
+
 #### Write format options {#write-format-options}
 
 | ClickHouse Type       | Native Python Type      | Write Formats     | Comments                                                                                                    |
