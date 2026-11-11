@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.exceptions import DataError
+from clickhouse_connect.driver.exceptions import DataError, ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.tools.datagen import fixed_len_ascii_str
 
@@ -121,3 +121,28 @@ def test_convert_pandas_object_integer_keeps_rejected_missing(values):
     with pytest.raises((DataError, TypeError)):
         ctx = InsertContext("fake_table", ["value"], [ch_type], source)
         ch_type.write_column(ctx._block_columns[0], bytearray(), ctx)
+
+
+@pytest.mark.parametrize("column_oriented", [False, True])
+def test_convert_numpy_datetime64_2d_keeps_orientation(column_oriented):
+    np = pytest.importorskip("numpy")
+    types = [get_from_name("Date"), get_from_name("DateTime64(3)")]
+    values = np.array(["2024-05-06T07:08:09.123456789", "1969-12-31T23:59:59.999999"], dtype="datetime64[ns]")
+    ctx = InsertContext("fake_table", ["d", "dt64"], types, column_oriented=column_oriented)
+    ctx.data = np.stack([values, values]) if column_oriented else np.stack([values, values], axis=1)
+    expected_columns = [[19849, -1], [1714979289123, -1]]
+    if column_oriented:
+        assert ctx._block_columns == expected_columns
+    else:
+        assert ctx._block_rows == [list(row) for row in zip(*expected_columns)]
+    assert ctx.column_oriented is column_oriented
+
+    with pytest.raises(ProgrammingError, match="column count"):
+        ctx.data = np.stack([values] * 3) if column_oriented else np.stack([values] * 3, axis=1)
+
+
+def test_convert_numpy_datetime64_3d_array_column():
+    np = pytest.importorskip("numpy")
+    values = np.array([[[0, 1, 2]], [[3, 4, 5]]], dtype="datetime64[s]")
+    ctx = InsertContext("fake_table", ["a"], [get_from_name("Array(DateTime)")], values)
+    assert ctx._block_rows == [[[0, 1, 2]], [[3, 4, 5]]]
