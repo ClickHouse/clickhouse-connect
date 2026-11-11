@@ -78,6 +78,23 @@ def get_engine(connection, table_name, schema=None):
     return build_engine(row.engine_full)
 
 
+def get_clickhouse_function_names(connection: Connection) -> list[str]:
+    """Return server-global SQL UDF names, excluding built-in and executable functions."""
+    statement = text("SELECT name FROM system.functions WHERE origin = 'SQLUserDefined' ORDER BY name")
+    return [row.name for row in connection.execute(with_internal_query_formats(statement))]
+
+
+def get_clickhouse_function_definition(connection: Connection, function_name: str) -> str:
+    """Return the complete stored CREATE FUNCTION statement."""
+    statement = text("SELECT create_query FROM system.functions WHERE origin = 'SQLUserDefined' AND name = :function_name").bindparams(
+        bindparam("function_name", type_=String())
+    )
+    row = connection.execute(with_internal_query_formats(statement), {"function_name": function_name}).first()
+    if row is None:
+        raise NoResultFound(f"SQL function {function_name!r} does not exist")
+    return str(row.create_query)
+
+
 def get_clickhouse_indexes(connection: Connection, table_name: str, schema: str | None = None) -> list[ClickHouseIndex]:
     """Reflect explicit, replayable index definitions without guessing implicit names."""
     database = _database_name(connection, schema)
@@ -277,6 +294,16 @@ def get_columns(connection, table_name: str, schema: str | None = None) -> list[
 
 
 class ChInspector(Inspector):
+    def get_clickhouse_function_names(self) -> list[str]:
+        """Return server-global SQL UDF names."""
+        with self._operation_context() as connection:
+            return cast("ClickHouseDialect", self.dialect).get_clickhouse_function_names(connection)
+
+    def get_clickhouse_function_definition(self, function_name: str) -> str:
+        """Return stored CREATE FUNCTION SQL; missing names raise NoResultFound."""
+        with self._operation_context() as connection:
+            return cast("ClickHouseDialect", self.dialect).get_clickhouse_function_definition(connection, function_name)
+
     def get_clickhouse_indexes(self, table_name: str, schema: str | None = None, **kwargs: Any) -> list[ClickHouseIndex]:
         """Return explicit skip indexes. Generic get_indexes remains unchanged."""
         with self._operation_context() as connection:
