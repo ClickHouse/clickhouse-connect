@@ -289,6 +289,8 @@ def test_dynamic_shared_scalar_column_timezone(param_client: Client, call, type_
         ("('x', ('macro', 20::UInt64))", ("x", ("macro", 20))),
         ("map('user_1', [13, 79])", {"user_1": [13, 79]}),
         ("13::UInt64", 13),
+        ("0::UInt64", 0),
+        ("false", False),
     ],
 )
 def test_dynamic_shared_values_dataframe(param_client: Client, call, use_extended_dtypes, expression, expected):
@@ -313,6 +315,29 @@ def test_json_shared_dynamic_compound_dataframe(param_client: Client, call):
     )
     assert frame.iloc[0, 1] == value
     assert frame.iloc[0, 0] == value
+
+
+@pytest.mark.parametrize(
+    "select, expected",
+    [
+        ("{value:String}::JSON(max_dynamic_paths=0)", lambda v: v),
+        ("[{value:String}::JSON(max_dynamic_paths=0)]", lambda v: [v]),
+        ("map('user_1', {value:String}::JSON(max_dynamic_paths=0))", lambda v: {"user_1": v}),
+        ("tuple({value:String}::JSON(max_dynamic_paths=0), 'user_2')", lambda v: (v, "user_2")),
+        ("[tuple({value:String}::JSON(max_dynamic_paths=0), 'user_2')]", lambda v: [(v, "user_2")]),
+    ],
+)
+@pytest.mark.parametrize("use_extended_dtypes, max_str_len", [(True, 0), (False, 0), (False, 20)])
+def test_json_shared_data_dataframe(param_client: Client, call, select, expected, use_extended_dtypes, max_str_len):
+    pytest.importorskip("pandas")
+    value = {"a": 13, "s": "user_1", "f": 1.5, "arr": [1, 2], "obj": {"k": "v"}, "zero": 0, "no": False, "empty": ""}
+    kwargs = {"parameters": {"value": json.dumps(value)}, "max_str_len": max_str_len}
+    query = f"SELECT {select} AS j"
+    assert call(param_client.query, query, **kwargs).first_row[0] == expected(value)
+    frame = call(param_client.query_df, query, use_extended_dtypes=use_extended_dtypes, **kwargs)
+    assert frame.iloc[0, 0] == expected(value)
+    np_result = call(param_client.query_np, query, **kwargs)
+    assert np_result[0][0] == expected(value)
 
 
 @pytest.mark.parametrize("json_type", ["JSON(max_dynamic_types=0)", "JSON(max_dynamic_paths=0)", "JSON"])

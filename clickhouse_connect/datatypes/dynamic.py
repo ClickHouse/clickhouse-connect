@@ -68,6 +68,10 @@ class SharedDataString(String):
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any):
         return source.read_str_col(num_rows, None)
 
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        # Keep the raw bytes for decode_shared_data_value, String would convert them to pandas or NumPy strings
+        return column
+
 
 TypedVariant = namedtuple("TypedVariant", "value type_name")
 
@@ -489,7 +493,8 @@ def _decode_variant(
         byte_source = ByteArraySource(binary_data[1:])
         read_state = value_type.read_column_prefix(byte_source, ctx)
         result = value_type.read_column_data(byte_source, 1, ctx, read_state)
-        return result[0] if result else None
+        # len(), because a one-value NumPy or pandas result is falsy for 0, False and empty strings
+        return result[0] if len(result) else None
 
     except Exception as e:
         logger.debug("Variant decode failed: %s", e)
