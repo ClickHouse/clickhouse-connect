@@ -11,6 +11,9 @@ from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.exceptions import DataError, ProgrammingError
 
 if TYPE_CHECKING:
+    from numpy import datetime64, int64
+    from numpy.typing import NDArray
+
     from clickhouse_connect.datatypes.base import ClickHouseType
 
 logger = logging.getLogger(__name__)
@@ -228,7 +231,7 @@ class InsertContext(BaseQueryContext):
                     raise ProgrammingError("Insert data column count does not match column names")
                 ticks = options.np.stack(
                     [
-                        self._datetime64_ticks(col, col_name, col_type)
+                        self._np_datetime_ticks(col, col_name, col_type)
                         for col, col_name, col_type in zip(columns, self.column_names, self.column_types)
                     ],
                     axis=0 if self.column_oriented else 1,
@@ -247,15 +250,14 @@ class InsertContext(BaseQueryContext):
         for ix, (col_name, col_type) in enumerate(zip(self.column_names, self.column_types)):
             d_type = data[ix].dtype
             if "date" in str(d_type) and "date" in col_type.np_type:
-                data[ix] = self._datetime64_ticks(data[ix], col_name, col_type).tolist()
+                data[ix] = self._np_datetime_ticks(data[ix], col_name, col_type).tolist()
             elif col_type.byte_size == 0 or col_type.byte_size > d_type.itemsize:
                 data[ix] = data[ix].tolist()
         self.column_oriented = True
         return data
 
-    def _datetime64_ticks(self, column, col_name: str, col_type: "ClickHouseType"):
+    def _np_datetime_ticks(self, column: "NDArray[datetime64]", col_name: str, col_type: "ClickHouseType") -> "NDArray[int64]":
         if "date" in col_type.np_type:
-            # The ticks must be in the column unit, for example seconds for DateTime and days for Date
             self.column_formats[col_name] = "int"
             column = column.astype(col_type.np_type, copy=False)
         return column.view("int64")
