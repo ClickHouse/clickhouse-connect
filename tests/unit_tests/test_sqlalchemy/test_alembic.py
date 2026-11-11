@@ -1171,6 +1171,27 @@ def test_alembic_public_exports():
     from clickhouse_connect.cc_sqlalchemy import alembic as ch_alembic
 
     assert set(ch_alembic.__all__) == {
+        "AddClickHouseIndexOp",
+        "AddClickHouseIndexesOp",
+        "DropClickHouseIndexOp",
+        "DropClickHouseIndexesOp",
+        "MaterializeClickHouseIndexOp",
+        "AddClickHouseProjectionOp",
+        "AddClickHouseProjectionsOp",
+        "DropClickHouseProjectionOp",
+        "DropClickHouseProjectionsOp",
+        "MaterializeClickHouseProjectionOp",
+        "ModifyClickHouseTableSettingsOp",
+        "ResetClickHouseTableSettingsOp",
+        "CreateClickHouseViewOp",
+        "DropClickHouseViewOp",
+        "CreateClickHouseFunctionOp",
+        "DropClickHouseFunctionOp",
+        "CreateClickHouseMaterializedViewOp",
+        "DropClickHouseMaterializedViewOp",
+        "CreateClickHouseDictionaryOp",
+        "DropClickHouseDictionaryOp",
+        "ReloadClickHouseDictionaryOp",
         "COMPARE_TABLE_OPTIONS_OPT",
         "COMPARE_INDEXES_OPT",
         "COMPARE_PROJECTIONS_OPT",
@@ -1188,7 +1209,7 @@ def test_alembic_public_exports():
         "TableOptionDrift",
         "UnsupportedTableChangeError",
     }
-    assert not any(name.endswith("Op") for name in ch_alembic.__all__)
+    assert len([name for name in ch_alembic.__all__ if name.endswith("Op")]) == 21
 
 
 def test_positional_engine_autogenerate_render():
