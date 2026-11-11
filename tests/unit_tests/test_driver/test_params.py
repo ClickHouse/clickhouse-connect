@@ -7,6 +7,7 @@ import zoneinfo
 from array import array
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from datetime import time as dt_time
+from enum import Enum
 from unittest.mock import Mock
 
 import numpy as np
@@ -106,6 +107,33 @@ def test_finalize():
 )
 def test_format_bind_value(value, expected):
     assert format_bind_value(value) == expected
+
+
+class BindEnum(Enum):
+    LABEL = "a'b"
+    CODE = 13
+    DAY = date(2023, 6, 1)
+    NESTED = ("user_1", None)
+    MISSING = None
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (BindEnum.LABEL, r"a\'b"),
+        (BindEnum.CODE, "13"),
+        (BindEnum.DAY, "2023-06-01"),
+        (BindEnum.NESTED, "('user_1', NULL)"),
+        (BindEnum.MISSING, "\\N"),
+        ([BindEnum.MISSING], "[NULL]"),
+        ([BindEnum.LABEL, BindEnum.CODE], r"['a\'b', 13]"),
+        ((BindEnum.DAY, "user_2"), "('2023-06-01', 'user_2')"),
+    ],
+)
+def test_format_bind_value_enum(value, expected):
+    # A top-level Enum binds like its value, without the quotes of a nested literal
+    assert format_bind_value(value) == expected
+    assert bind_query("SELECT {v:String}", {"v": value})[1] == {"param_v": expected}
 
 
 def test_format_bind_value_map_null():
