@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Generator, Sequence
+from collections.abc import AsyncGenerator, Generator, Mapping, Sequence
 from typing import Any
 
 import numpy
 import pandas
+from alembic.operations import MigrateOperation
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.engine.interfaces import DBAPIConnection, DBAPIModule
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from typing_extensions import assert_type
 
 import clickhouse_connect
+from clickhouse_connect.cc_sqlalchemy import alembic as ch_alembic
+from clickhouse_connect.cc_sqlalchemy.alembic.operations import AddClickHouseIndexOp
 from clickhouse_connect.cc_sqlalchemy.asyncio import ClickHouseAsyncDialect
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver import AsyncClient, Client, create_async_client, create_client
@@ -98,3 +101,26 @@ async def async_sqlalchemy_connection() -> None:
         assert_type(client, AsyncClient)
         assert_type(await client.command("SELECT 13"), str | int | Sequence[str] | QuerySummary)
         assert_type(await client.insert("events", [[13]], column_names=["value"]), QuerySummary)
+
+
+def alembic_operation_inspection() -> None:
+    operation: MigrateOperation = AddClickHouseIndexOp("events", "value_idx", "value", "minmax", granularity=1)
+    if isinstance(operation, ch_alembic.AddClickHouseIndexOp):
+        assert_type(operation.table_name, str)
+        assert_type(operation.schema, str | None)
+        assert_type(operation.expression, str)
+        assert_type(operation.type_, str)
+        assert_type(operation.granularity, int | None)
+        assert_type(operation.clickhouse_settings, Mapping[str, Any] | None)
+    grouped = ch_alembic.AddClickHouseIndexesOp("events", [ch_alembic.ClickHouseIndex("value_idx", "value", "minmax")])
+    assert_type(grouped.indexes, tuple[ch_alembic.ClickHouseIndex, ...])
+    projection = ch_alembic.DropClickHouseProjectionOp("events", "value_projection")
+    assert_type(projection.existing_projection, ch_alembic.ClickHouseProjection | None)
+    settings = ch_alembic.ModifyClickHouseTableSettingsOp("events", {"min_bytes_for_wide_part": 13})
+    assert_type(settings.settings, Mapping[str, Any])
+    assert_type(settings.existing_settings, Mapping[str, Any] | None)
+    view = ch_alembic.CreateClickHouseViewOp("value_view", "SELECT 13", or_replace=True)
+    assert_type(view.or_replace, bool)
+    assert_type(view.select, str)
+    function = ch_alembic.CreateClickHouseFunctionOp("value_function", "value -> value + 13")
+    assert_type(function.expression, str)

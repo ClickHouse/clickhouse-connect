@@ -2,7 +2,7 @@ import array
 import decimal
 import struct
 from collections.abc import MutableSequence, Sequence
-from math import isinf, isnan, nan
+from math import isfinite, nan
 from typing import Any
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef, _TypeArgs
@@ -39,18 +39,27 @@ class IntBase(ArrayType, registered=False):
         if np is not None and isinstance(column, np.ndarray) and column.dtype.kind in ("i", "u"):
             data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
             return
-        if self.nullable:
-            first = next((x for x in column if x is not None), None)
-            if isinstance(first, int):
-                column = [0 if x is None else x for x in column]
-            elif isinstance(first, float):
-                column = [0 if x is None or isnan(x) or isinf(x) else int(x) for x in column]
-            else:
-                column = [int(x) if x else 0 for x in column]
-        elif isinstance(column[0], float):
-            column = [0 if x is None or isnan(x) or isinf(x) else int(x) for x in column]
-        elif not isinstance(column[0], int):
-            column = [int(x) for x in column]
+        try:
+            if self.nullable:
+                first = next((x for x in column if x is not None), None)
+                if isinstance(first, int):
+                    column = [0 if x is None else x for x in column]
+                elif isinstance(first, float) or (np is not None and isinstance(first, np.floating)):
+                    column = [0 if x is None else int(x) for x in column]
+                else:
+                    column = [int(x) if x else 0 for x in column]
+            elif not isinstance(column[0], int):
+                column = [int(x) for x in column]
+        except (ValueError, OverflowError):
+            float_types = (float, np.floating) if np is not None else (float,)
+            value = next((x for x in column if isinstance(x, float_types) and not isfinite(x)), None)
+            if value is None:
+                raise
+            raise ctx.data_error(f"{self.name} value {float(value)} is not finite; pass an integer value") from None
+        except TypeError:
+            if not self.nullable and any(x is None for x in column):
+                raise ctx.data_error(f"None in non-Nullable {self.name} column") from None
+            raise
         data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
 
 
