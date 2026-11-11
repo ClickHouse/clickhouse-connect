@@ -886,3 +886,133 @@ Projection filters receive `type_="projection"`. Object filters expose the defin
 Comparison follows the server's projection grammar formatting and case-insensitive function-name normalization, preserving wildcards, aliases, GROUP BY, and ORDER BY. Case-sensitive names such as `sumIf` and `SumIf` remain distinct. When the formatted definitions differ, comparison also checks the parsed syntax tree, which ignores grouping parentheses. Redundant parentheses and operator and function spellings such as `value + 13` and `plus(value, 13)` compare equally, because servers store redundant parentheses inconsistently. Other structural differences generate a replacement. Comparison does not prove arbitrary SQL equivalence, analyze an ordinary SELECT, or validate column dependencies. Review changes involving columns and ALIAS definitions. Invalid DDL dependencies fail at execution. A failed add leaves the preceding drop applied. Catalog, formatter, or function-metadata failures raise `ProjectionComparisonError` with structured definitions and a reason instead of generating a replacement. Projection-level `WITH SETTINGS` and index-based forms also raise rather than lose information. Filter them or use explicit migrations. If `query_masking_rules` changes the SELECT text returned by the catalog, use explicit migrations, filters, or the comparison opt-out for affected projections.
 
 `inspect(connection).get_clickhouse_projections("events")` returns replayable SELECT definitions. Ordinary table autoload omits projections. For physical batch recreation, pass a complete `copy_from` Table with `clickhousedb_projections`, optionally populated from that inspection method. Automatic online recreation refuses tables with projections before DDL. Generate custom projection operations with `render_as_batch=False`. Inline CREATE and table-drop snapshots are supported.
+
+### Classify generated operations before rendering
+
+All 21 ClickHouse migration operation classes are public from
+`clickhouse_connect.cc_sqlalchemy.alembic` and its `operations` module. Use
+`isinstance` to inspect them in `process_revision_directives` or register them
+with Alembic's `Rewriter.rewrites`. The old underscore names remain aliases of
+the same classes, so existing registrations and imports keep working.
+
+The public inspection fields match constructor arguments. Table operations expose
+`table_name`, `schema`, and `clickhouse_settings`. Single index operations expose
+`name`. Additions also expose `expression`, `type_`, `granularity`, `if_not_exists`,
+`first`, and `after_index`. Projection additions expose `select` and
+`after_projection` instead of index expression, type, and granularity fields. Drops
+expose `if_exists` and, for single indexes or projections, `existing_index` or
+`existing_projection` when a prior definition is available. Materializations
+expose `if_exists` and `partition`. Grouped additions store `indexes` or
+`projections` as tuples of `ClickHouseIndex` or `ClickHouseProjection`. Grouped
+drops store `names` as a tuple. Inspect every member of a grouped operation.
+
+`ModifyClickHouseTableSettingsOp` exposes `settings` and optional
+`existing_settings`. `ResetClickHouseTableSettingsOp` exposes a tuple of `names`.
+These table settings differ from the query-level `clickhouse_settings` mapping.
+Create view and function operations expose `name`, `select` or `expression`,
+`if_not_exists`, and `or_replace`. Views also expose `schema`. Materialized-view
+creation exposes `name`, `schema`, `to_table`, `to_schema`, `select`, and
+`if_not_exists`. Dictionary creation exposes `name`, `schema`, a `columns` tuple,
+`primary_key`, `source`, `layout`, `lifetime`, `comment`, `if_not_exists`, and
+`clickhouse_settings`. View, function, materialized-view, and dictionary drops expose
+`name` and `if_exists`, plus `schema` and `clickhouse_settings` where accepted by
+the constructor. Dictionary reload exposes `name` and `schema`. SQL fragments
+remain strings. Mappings retain their supplied values. Reverse operations can
+require prior definitions or raise `NotImplementedError`. A reversible definition
+does not restore materialized data.
+
+This example is an application policy, not a driver safety guarantee. It permits
+only an explicitly chosen index shape or table setting, sends replacements and
+unknown operations for review, and rejects standalone index drops, standalone
+projection drops, and destructive built-in operations. Change these rules for your deployment. Even
+creation needs field inspection: `or_replace=True` on a view can discard a
+colliding table's data, and raw SQL bodies and dictionary sources need review.
+
+```python
+import logging
+
+from alembic.operations import ops
+from clickhouse_connect.cc_sqlalchemy import alembic as ch_alembic
+
+
+def leaves(operation):
+    if isinstance(operation, ops.OpContainer):
+        for child in operation.ops:
+            yield from leaves(child)
+    else:
+        yield operation
+
+
+def object_key(operation):
+    if isinstance(operation, (ch_alembic.AddClickHouseIndexOp,
+                              ch_alembic.DropClickHouseIndexOp)):
+        kind = "index"
+    elif isinstance(operation, (ch_alembic.AddClickHouseProjectionOp,
+                                ch_alembic.DropClickHouseProjectionOp)):
+        kind = "projection"
+    else:
+        return None
+    return kind, operation.schema, operation.table_name, operation.name
+
+
+def classify_tree(tree, direction):
+    operations = list(leaves(tree))
+    adds = {object_key(op) for op in operations if isinstance(
+        op, (ch_alembic.AddClickHouseIndexOp, ch_alembic.AddClickHouseProjectionOp))}
+    drops = {object_key(op) for op in operations if isinstance(
+        op, (ch_alembic.DropClickHouseIndexOp, ch_alembic.DropClickHouseProjectionOp))}
+    replacements = adds & drops
+    for operation in operations:
+        verdict, reason = "review", "operation needs explicit review"
+        if isinstance(operation, (ops.DropTableOp, ops.DropColumnOp, ops.ExecuteSQLOp)):
+            verdict, reason = "rejected", "destructive change or opaque SQL"
+        elif object_key(operation) in replacements:
+            reason = "replacement can discard existing materialization"
+        elif isinstance(operation, (ch_alembic.DropClickHouseIndexOp,
+                                    ch_alembic.DropClickHouseProjectionOp,
+                                    ch_alembic.DropClickHouseIndexesOp,
+                                    ch_alembic.DropClickHouseProjectionsOp)):
+            verdict, reason = "rejected", "removal requires a separate migration"
+        elif direction == "upgrade":
+            if isinstance(operation, ch_alembic.AddClickHouseIndexOp):
+                if (operation.type_ == "minmax" and operation.expression == "value"
+                        and operation.granularity == 1 and not operation.first
+                        and operation.after_index is None and not operation.clickhouse_settings):
+                    verdict, reason = "allowed", "approved index definition"
+            elif isinstance(operation, ch_alembic.ModifyClickHouseTableSettingsOp):
+                if (dict(operation.settings) == {"max_bytes_to_merge_at_max_space_in_pool": 107374182400}
+                        and not operation.clickhouse_settings):
+                    verdict, reason = "allowed", "approved table setting value"
+        yield direction, operation, verdict, reason
+
+
+def review_revision(context, revision, directives):
+    # Scope: a single-engine env.py. clickhouse_writer uses singular roots.
+    for script in directives:
+        if len(script.upgrade_ops_list) != 1 or len(script.downgrade_ops_list) != 1:
+            raise ValueError("This policy hook supports one operation stream only")
+        findings = [
+            *classify_tree(script.upgrade_ops_list[0], "upgrade"),
+            *classify_tree(script.downgrade_ops_list[0], "downgrade"),
+        ]
+        for direction, op, verdict, reason in findings:
+            logging.getLogger("alembic.policy").info(
+                "%s: %s: %s: %s", direction, type(op).__name__, verdict, reason)
+        blocked = [f"{direction}: {type(op).__name__}: {verdict}: {reason}"
+                   for direction, op, verdict, reason in findings
+                   if direction == "upgrade" and verdict != "allowed"]
+        if blocked:
+            raise ValueError("Migration requires review:\n" + "\n".join(blocked))
+    ch_alembic.clickhouse_writer(context, revision, directives)
+```
+
+Pass `process_revision_directives=review_revision` to `context.configure()` in
+place of `clickhouse_writer`. The hook logs findings for both directions and gates revision generation on
+upgrade findings. Downgrade findings require a separate review before executing
+a downgrade. They do not block writing an approved upgrade. The hook traverses nested containers and pairs replacements by
+kind, schema, table, and name, regardless of adjacency. Grouped additions and all
+unrecognized operations default to review. This recipe supports one engine and
+one operation stream per direction. Using list roots in the classifier does not
+make `clickhouse_writer` a multi-engine hook. An empty generated tree proves only
+that enabled, supported comparisons found no changes. Views, functions,
+dictionaries, and other unsupported comparisons still need explicit migrations.
