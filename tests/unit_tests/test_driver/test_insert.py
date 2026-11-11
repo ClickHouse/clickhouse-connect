@@ -139,3 +139,10 @@ def test_convert_numpy_datetime64_2d_keeps_orientation(column_oriented):
 
     with pytest.raises(ProgrammingError, match="column count"):
         ctx.data = np.stack([values] * 3) if column_oriented else np.stack([values] * 3, axis=1)
+
+
+def test_convert_numpy_datetime64_3d_array_column():
+    np = pytest.importorskip("numpy")
+    values = np.array([[[0, 1, 2]], [[3, 4, 5]]], dtype="datetime64[s]")
+    ctx = InsertContext("fake_table", ["a"], [get_from_name("Array(DateTime)")], values)
+    assert ctx._block_rows == [[[0, 1, 2]], [[3, 4, 5]]]

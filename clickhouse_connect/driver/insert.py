@@ -237,7 +237,7 @@ class InsertContext(BaseQueryContext):
     def _convert_numpy(self, np_array):
         if np_array.dtype.names is None:
             if "date" in str(np_array.dtype) and np_array.size:
-                columns = np_array if self.column_oriented else np_array.T
+                columns = np_array if self.column_oriented else np_array.swapaxes(0, 1)
                 if len(columns) != len(self.column_names):
                     raise ProgrammingError("Insert data column count does not match column names")
                 ticks = options.np.stack(
