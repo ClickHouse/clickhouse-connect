@@ -167,6 +167,13 @@ class BigInt(ClickHouseType, registered=False):
                 for x in column:
                     ext(x.to_bytes(sz, "little", signed=signed))
 
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if ctx.as_pandas and self.nullable:
+            # pandas infers float64 for ints with None, and pd.concat of int64 and uint64 blocks gives float64.
+            # Both lose precision above 2**53, so keep the Python ints in an object column.
+            return options.np.array(column, dtype=object)
+        return column
+
 
 class Int128(BigInt):
     byte_size = 16

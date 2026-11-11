@@ -167,6 +167,34 @@ def test_pandas_numeric_low_card(param_client: Client, call, consume_stream, row
     assert pd.concat(blocks, ignore_index=True)["v"].tolist() == expected
 
 
+@pytest.mark.parametrize(
+    "type_name, base, null_rows",
+    [
+        ("Nullable(Int128)", -(2**53) - 13, {1}),
+        ("Nullable(UInt128)", 2**53 + 1, {1, 12}),
+        ("Nullable(Int256)", 2**62 + 79, {0, 1, 2, 3}),
+        # No NULL values, but the first block fits int64 and the second only uint64
+        ("Nullable(UInt128)", 2**63 - 5, set()),
+        ("Nullable(UInt256)", 2**63 + 13, {5}),
+        ("LowCardinality(Nullable(Int128))", 2**53 + 1, {1}),
+    ],
+)
+@pytest.mark.parametrize("use_extended_dtypes", [True, False])
+def test_pandas_nullable_bigint_precision(param_client: Client, call, consume_stream, type_name, base, null_rows, use_extended_dtypes):
+    query = f"SELECT CAST(if(number IN {tuple(null_rows) or (99,)}, NULL, toString({base} + number)) AS {type_name}) AS v FROM numbers(13)"
+    expected = [None if x in null_rows else base + x for x in range(13)]
+    kwargs = {"settings": {"max_block_size": 4, "max_threads": 1}, "use_extended_dtypes": use_extended_dtypes}
+    df = call(param_client.query_df, query, **kwargs)
+    assert df["v"].dtype == object
+    assert df["v"].tolist() == expected
+
+    blocks = []
+    consume_stream(call(param_client.query_df_stream, query, **kwargs), blocks.append)
+    assert len(blocks) > 1
+    assert all(block["v"].dtype == object for block in blocks)
+    assert pd.concat(blocks, ignore_index=True)["v"].tolist() == expected
+
+
 def test_pandas_large_types(param_client: Client, call, table_context: Callable):
     columns = ["key String", "value Int256", "u_value UInt256"]
     key2_value = 30000000000000000000000000000000000
