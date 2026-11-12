@@ -579,6 +579,71 @@ def test_numeric_conversion(param_client: Client, call, table_context: Callable)
         assert result[2][2] == 5.32
 
 
+@pytest.mark.parametrize(
+    "type_name, values, expected",
+    [
+        ("Int32", [13.75, 79.25], [13, 79]),
+        ("Nullable(Int32)", [13.75, None, 79.25], [13, None, 79]),
+        ("LowCardinality(Nullable(Int64))", [79.25, None, 79.25], [79, None, 79]),
+        ("Array(Nullable(Int16))", [[13.75, None], [], [79.25]], [[13, None], [], [79]]),
+        ("Tuple(Nullable(Int32), String)", [(None, "user_1"), (13.75, "user_2")], [(None, "user_1"), (13, "user_2")]),
+        ("Array(Tuple(Nullable(Int32), String))", [[(None, "user_1"), (79.25, "user_2")]], [[(None, "user_1"), (79, "user_2")]]),
+    ],
+)
+def test_insert_finite_float_into_int(client_factory, call, client_mode, type_name, values, expected):
+    client = client_factory(native_codec="python", settings={"allow_suspicious_low_cardinality_types": 1})
+    table = f"test_int_finite_{client_mode}_{uuid4().hex}"
+    try:
+        call(client.command, f"CREATE TABLE {table} (id UInt8, v {type_name}) ENGINE Memory")
+        call(client.insert, table, [list(range(len(values))), values], column_names=["id", "v"], column_oriented=True)
+        result = call(client.query, f"SELECT v FROM {table} ORDER BY id").result_rows
+        assert result == [(value,) for value in expected]
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+@pytest.mark.parametrize(
+    "type_name",
+    [
+        "Int32",
+        "Nullable(Int32)",
+        "Array(Int32)",
+        "Array(Nullable(Int32))",
+        "Tuple(Int32, String)",
+        "Tuple(Nullable(Int32), String)",
+        "Array(Tuple(Nullable(Int32), String))",
+        "Map(String, Nullable(Int32))",
+        "LowCardinality(Nullable(Int32))",
+    ],
+)
+def test_insert_nonfinite_float_into_int_raises(client_factory, call, client_mode, type_name, value):
+    client = client_factory(native_codec="python", settings={"allow_suspicious_low_cardinality_types": 1})
+    value = float(value)
+    if "Tuple(" in type_name:
+        value = (value, "user_1")
+    if type_name.startswith("Array("):
+        value = [value]
+    elif type_name.startswith("Map("):
+        value = {"user_1": value}
+    table = f"test_int_nonfinite_{client_mode}_{uuid4().hex}"
+    try:
+        call(client.command, f"CREATE TABLE {table} (v {type_name}) ENGINE Memory")
+        with pytest.raises(DataError, match="is not finite"):
+            call(client.insert, table, [[value]], column_names=["v"])
+        assert call(client.command, f"SELECT count() FROM {table}") == 0
+    finally:
+        call(client.command, f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("values", [[13.0, None], [None, 13.0], [13, None]])
+def test_insert_nonnullable_integer_none_raises(param_client, call, table_context, values):
+    with table_context("test_nonnullable_integer_none", ["v Int32"]):
+        with pytest.raises(DataError):
+            call(param_client.insert, "test_nonnullable_integer_none", [values], column_oriented=True)
+        assert call(param_client.command, "SELECT count() FROM test_nonnullable_integer_none") == 0
+
+
 def test_insert_table_name_with_unescaped_inner_backtick(param_client: Client, call, test_table_engine: str):
     # A table name wrapped in backticks but containing unescaped inner backticks must be re-escaped.
     raw_table = "`quote`insert`"
