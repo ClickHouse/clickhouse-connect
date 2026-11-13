@@ -3,7 +3,7 @@ import ipaddress
 import re
 import uuid
 import zoneinfo
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from enum import Enum
 from functools import lru_cache
@@ -62,18 +62,20 @@ def _skip_quoted_token(query: str, index: int, quote: str) -> int:
 def _skip_block_comment(query: str, index: int) -> int:
     depth = 1
     index += 2
-    end = len(query)
-    while index < end:
-        if query.startswith("/*", index):
+    close = query.find("*/", index)
+    while close != -1:
+        opener = query.find("/*", index, close + 1)
+        if opener != -1:
             depth += 1
-            index += 2
-        elif query.startswith("*/", index):
+            index = opener + 2
+            if index > close:
+                close = query.find("*/", index)
+        else:
             depth -= 1
-            index += 2
+            index = close + 2
             if depth == 0:
                 return index
-        else:
-            index += 1
+            close = query.find("*/", index)
     return -1
 
 
@@ -168,6 +170,61 @@ def _next_sql_token(query: str, index: int, heredoc_ends: dict[str, int]) -> tup
     if "0" <= char <= "9":
         return _SQL_TOKEN_OTHER, _skip_ascii_bareword(query, index)
     return _SQL_TOKEN_OTHER, index + 1
+
+
+# Characters that start a token which hides other SQL text: quoted strings and identifiers, {name:Type}
+# placeholders and the comment forms of the server lexer. Only "$" can also continue a bareword.
+_sql_opaque_start_re = re.compile(r"""['"`\u2018\u201c{$]|--|//|/\*|#[ !]""")
+# The same starts. A quoted string without escapes is matched whole, because it ends at its first closing quote.
+_sql_opaque_token_re = re.compile(r"""'[^'\\]*'(?!')|"[^"\\]*"(?!")|`[^`\\]*`(?!`)|""" + _sql_opaque_start_re.pattern)
+
+
+def _sql_opaque_regions(query: str) -> Iterator[tuple[int, int]]:
+    """Yield the (start, end) of each comment, quoted string, quoted identifier and heredoc, in order.
+
+    Stops at the first unterminated token. Jumps between possible starts, reading a "$" from its
+    enclosing ASCII word boundary because it can continue a bareword or open a heredoc.
+    """
+    heredoc_ends: dict[str, int] = {}
+    heredocs_scanned = False
+    index = 0
+    end = len(query)
+    while index < end:
+        match = _sql_opaque_token_re.search(query, index)
+        if match is None:
+            return
+        start = match.start()
+        if match.end() - start > 1 and query[start] in _quote_closers:
+            yield start, match.end()
+            index = match.end()
+            continue
+        token_limit = match.end()
+        if query[start] == "$":
+            if not heredocs_scanned:
+                heredoc_ends = {match.group(1): match.start() for match in _heredoc_start_re.finditer(query)}
+                heredocs_scanned = True
+            while start > index and _is_ascii_bareword_char(query[start - 1]):
+                start -= 1
+        index = start
+        while index < token_limit:
+            token, token_end = _next_sql_token(query, index, heredoc_ends)
+            if token == _SQL_TOKEN_INVALID:
+                return
+            char = query[index]
+            if token == _SQL_TOKEN_TRIVIA:
+                is_opaque = char not in _SQL_WHITESPACE
+            elif token == _SQL_TOKEN_OTHER:
+                opener = _heredoc_re.match(query, index) if char == "$" else None
+                is_opaque = (
+                    char in _quote_closers
+                    or char in _curly_quote_closers
+                    or (opener is not None and heredoc_ends.get(opener.group(), -1) >= opener.end())
+                )
+            else:
+                is_opaque = False
+            if is_opaque:
+                yield index, token_end
+            index = token_end
 
 
 def _query_has_trailing_limit_zero(query: str) -> bool:
