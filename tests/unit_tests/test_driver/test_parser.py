@@ -76,6 +76,49 @@ def test_generic_enum_selects_server_storage_family(type_name, expected_name):
     assert get_from_name(type_name).name == expected_name
 
 
+@pytest.mark.parametrize(
+    "type_name, expected_name",
+    [
+        ("Enum8('a', 'b')", "Enum8('a' = 1, 'b' = 2)"),
+        ("Enum('a','b')", "Enum8('a' = 1, 'b' = 2)"),
+        ("Enum16('a', 'b')", "Enum16('a' = 1, 'b' = 2)"),
+        ("Enum8('a' = 5, 'b')", "Enum8('a' = 5, 'b' = 6)"),
+        ("Enum8('a' = -3, 'b', 'c')", "Enum8('a' = -3, 'b' = -2, 'c' = -1)"),
+        ("Enum8('a', 'b' = 7)", "Enum8('a' = 1, 'b' = 7)"),
+        ("Enum('a' = 127, 'b')", "Enum16('a' = 127, 'b' = 128)"),
+        ("Enum8('x=y', 'b')", "Enum8('x=y' = 1, 'b' = 2)"),
+        ("Enum8('user\\'1', 'user_2')", "Enum8('user\\'1' = 1, 'user_2' = 2)"),
+        ("Nullable(Enum8('a', 'b'))", "Nullable(Enum8('a' = 1, 'b' = 2))"),
+        ("Array(Enum8('a','b'))", "Array(Enum8('a' = 1, 'b' = 2))"),
+    ],
+)
+def test_enum_assigns_omitted_values_like_server(type_name, expected_name):
+    assert get_from_name(type_name).name == expected_name
+
+
+def test_enum_omitted_values_inside_tuple_and_map():
+    tuple_type = get_from_name("Tuple(Enum8('a', 'b'), UInt8)")
+    map_type = get_from_name("Map(String, Enum8('a','b'))")
+    assert tuple_type.element_types[0].name == "Enum8('a' = 1, 'b' = 2)"
+    assert map_type.value_type.name == "Enum8('a' = 1, 'b' = 2)"
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "Enum8('a' = 5, 'b', 'c' = 10, 'd')",
+        "Enum8('a', 'b' = 2, 'c')",
+        "Enum8('a' =, 'b')",
+        "Enum8('a' 'b')",
+        "Enum8('a' 'b', 'c')",
+        "Enum8('a',, 'b')",
+    ],
+)
+def test_parse_enum_rejects_invalid_omitted_values(expr):
+    with pytest.raises(ValueError):
+        parse_enum(expr)
+
+
 ESCAPED_ENUM = "Enum8('user\\'1' = 1, 'user_2' = 2)"
 REPEATED_NON_FIRST_ENUM = "Enum16('user_1' = 1, 'user\\'2\\'3' = 2)"
 # Server-emitted enum names escape a backslash as \\ (v26.6.1.1193, DataTypeEnum
