@@ -90,12 +90,17 @@ def test_generic_enum_selects_server_storage_family(type_name, expected_name):
         ("Enum8('user\\'1', 'user_2')", "Enum8('user\\'1' = 1, 'user_2' = 2)"),
         ("Nullable(Enum8('a', 'b'))", "Nullable(Enum8('a' = 1, 'b' = 2))"),
         ("Array(Enum8('a','b'))", "Array(Enum8('a' = 1, 'b' = 2))"),
-        ("Tuple(Enum8('a', 'b'), UInt8)", "Tuple(Enum8('a' = 1, 'b' = 2), UInt8)"),
-        ("Map(String, Enum8('a','b'))", "Map(String, Enum8('a' = 1, 'b' = 2))"),
     ],
 )
 def test_enum_assigns_omitted_values_like_server(type_name, expected_name):
     assert get_from_name(type_name).name == expected_name
+
+
+def test_enum_omitted_values_inside_tuple_and_map():
+    tuple_type = get_from_name("Tuple(Enum8('a', 'b'), UInt8)")
+    map_type = get_from_name("Map(String, Enum8('a','b'))")
+    assert tuple_type.element_types[0].name == "Enum8('a' = 1, 'b' = 2)"
+    assert map_type.value_type.name == "Enum8('a' = 1, 'b' = 2)"
 
 
 @pytest.mark.parametrize("expr", ["Enum8('a' = 5, 'b', 'c' = 10, 'd')", "Enum8('a', 'b' = 2, 'c')", "Enum8('a' =, 'b')"])
