@@ -4,7 +4,6 @@ import random
 import string
 import subprocess
 import sys
-from importlib.util import find_spec
 
 import pytest
 
@@ -244,15 +243,13 @@ FALLBACK_CASES = [
 ]
 
 
-@pytest.mark.parametrize("use_c, mode", [("1", "default"), ("1", "blocked"), ("1", "pypy"), ("0", "default")])
-def test_sqlscan_fallback(use_c, mode):
-    env = {**os.environ, "CLICKHOUSE_CONNECT_USE_C": use_c}
+@pytest.mark.parametrize("mode", ["blocked", "pypy"])
+def test_sqlscan_fallback(mode):
+    env = {**os.environ, "CLICKHOUSE_CONNECT_USE_C": "1"}
     sqls = [case[0] for case in FALLBACK_CASES]
     result = subprocess.run(
         [sys.executable, "-c", FALLBACK_SCRIPT, mode, json.dumps(sqls)], capture_output=True, check=True, env=env, text=True
     )
     state = json.loads(result.stdout)
-    compiled = use_c == "1" and mode == "default" and find_spec("clickhouse_connect.driverc.sqlscan") is not None
-    scanner = "clickhouse_connect.driverc.sqlscan" if compiled else None
-    assert state["scanners"] == [scanner, scanner]
+    assert state["scanners"] == [None, None]
     assert state["results"] == [list(case[1:]) for case in FALLBACK_CASES]

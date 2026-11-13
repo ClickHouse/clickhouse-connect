@@ -48,6 +48,7 @@ command_re = re.compile(r"(^\s*)(" + commands + r")\s", re.IGNORECASE)
 bare_row_policy_show_re = re.compile(r"^\s*SHOW\s+(ROW\s+)?POLICIES\s*(?:;\s*)*$", re.IGNORECASE)
 comment_re = re.compile(r"(\".*?\"|\'.*?\')|(/\*.*?\*/|(--)[^\n]*$)", re.MULTILINE | re.DOTALL)  # compatibility export
 
+# Mirrored in clickhouse_connect/driverc/sqlscan.pyx.
 _SQL_COMMENT_MARKERS = ("--", "/*", "//", "# ", "#!")
 _SQL_COMMENT_START_CHARS = "-/#"
 
