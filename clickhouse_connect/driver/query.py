@@ -19,6 +19,7 @@ from clickhouse_connect.driver.binding import (
 )
 from clickhouse_connect.driver.common import ShowClickHouseErrors, StreamContext, _close_async, dict_copy, empty_gen, get_rename_method
 from clickhouse_connect.driver.context import BaseQueryContext
+from clickhouse_connect.driver.ctypes import sql_scan as _c_sqlscan
 from clickhouse_connect.driver.exceptions import ProgrammingError, StreamClosedError
 from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.options import check_arrow
@@ -489,6 +490,10 @@ def _matches_outside_quotes(pattern: re.Pattern[str], sql: str) -> bool:
     # for SELECT, so the query does not need to be lexed.
     if _sql_opaque_start_re.search(sql, 0, position + 1) is None:
         return True
+    if _c_sqlscan is not None and type(sql) is str:
+        matched = _c_sqlscan.matches_outside_quotes(pattern, sql, position)
+        if matched is not None:
+            return matched
     regions = _sql_opaque_regions(sql)
     region = next(regions, None)
     while match is not None:
@@ -517,6 +522,10 @@ def remove_sql_comments(sql: str) -> str:
     :param sql:  SQL query
     :return: SQL Query without SQL comments
     """
+    if _c_sqlscan is not None and type(sql) is str:
+        uncommented = _c_sqlscan.remove_sql_comments(sql)
+        if uncommented is not None:
+            return uncommented
     last_marker = max(sql.rfind(marker) for marker in _SQL_COMMENT_MARKERS)
     if last_marker == -1:
         return sql

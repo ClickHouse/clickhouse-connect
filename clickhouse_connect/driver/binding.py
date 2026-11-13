@@ -107,6 +107,7 @@ def _skip_ascii_bareword(query: str, index: int) -> int:
     return index
 
 
+# clickhouse_connect/driverc/sqlscan.pyx mirrors this lexer and _sql_opaque_regions. Keep them in sync.
 def _next_sql_token(query: str, index: int, heredoc_ends: dict[str, int]) -> tuple[int, int]:
     """Return the next SQL token kind and its exclusive end offset."""
     end = len(query)
