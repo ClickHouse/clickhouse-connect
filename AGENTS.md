@@ -75,7 +75,8 @@ A shallow clone of the ClickHouse server source should live at `.server-src/`, p
 
 Server investigation work is much higher quality with the actual server source available locally. If you need it and it is missing, try to set it up before continuing.
 
-- If `.server-src/` or `.server-ref` is missing, tell the user that server investigation is best done against the real server source and that you recommend setting it up. Then try to create them. If the user has not specified a version, default to the most recent stable ClickHouse release tag. Write that tag to `.server-ref` and do a shallow clone of `https://github.com/ClickHouse/ClickHouse` at that tag into `.server-src/`. Example: `git clone --depth 1 --branch <tag> https://github.com/ClickHouse/ClickHouse.git .server-src` followed by writing `<tag>` to `.server-ref`.
+- In a linked git worktree, check the primary checkout first. It is the first `worktree` entry in `git worktree list --porcelain`. If it has `.server-src/` and `.server-ref`, symlink both into this worktree instead of cloning: `ln -s <primary>/.server-src .server-src` and `ln -s <primary>/.server-ref .server-ref`. The checkout is then shared, so switching tags from any worktree switches it for all of them. Tell the user before switching.
+- If `.server-src/` or `.server-ref` is still missing, tell the user that server investigation is best done against the real server source and that you recommend setting it up. Then try to create them. If the user has not specified a version, default to the most recent stable ClickHouse release tag. Write that tag to `.server-ref` and do a shallow clone of `https://github.com/ClickHouse/ClickHouse` at that tag into `.server-src/`. Example: `git clone --depth 1 --branch <tag> https://github.com/ClickHouse/ClickHouse.git .server-src` followed by writing `<tag>` to `.server-ref`.
 - If you cannot set them up for any reason, tell the user plainly. You may continue without the local source, but flag in your answer that the investigation was done without it and the result is less reliable.
 - Do not silently re-clone an existing `.server-src/` and do not fall back to reading GitHub ad hoc when a local checkout is present.
 - If the user asks you to investigate against a different version, tell them the current `.server-ref` tag and ask whether to switch before proceeding. **Switch in place, do not blow away the existing checkout.** Inside `.server-src/`, run `git fetch --depth 1 origin tag <new-tag>` and then `git checkout <new-tag>`, and write `<new-tag>` to `.server-ref`. This reuses the existing `.git` directory and is much faster than re-cloning, especially when bouncing between tags.
@@ -92,7 +93,7 @@ If the map's pointers do not exist at the pinned tag, flag it plainly and tell t
 
 ClickHouse is a large C++ codebase. Reading it directly in the main conversation bloats context fast and crowds out the client-side code you are actually changing. Delegate it.
 
-The project ships a custom sub-agent definition at `.claude/agents/clickhouse-server-reader.md` that owns the discipline (citation rules, confirmed vs inferred, tag resolution, navigation via `.agents/server-map.md`). Use it for all server source reading.
+The project ships a custom sub-agent definition at `.claude/agents/clickhouse-server-reader.md`, with the Codex equivalent at `.codex/agents/clickhouse-server-reader.toml`, that owns the discipline (citation rules, confirmed vs inferred, tag resolution, navigation via `.agents/server-map.md`). Use it for all server source reading.
 
 Default workflow:
 
