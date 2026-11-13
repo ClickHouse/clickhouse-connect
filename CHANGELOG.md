@@ -7,6 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Bug Fixes
 
+- Enum type names that omit element numbers, such as `Enum8('a', 'b')` or `Enum8('a' = 5, 'b')`, now parse and get the numbers the server assigns. Before, `get_from_name` and inserts with `column_type_names` raised `ValueError`. Closes [#1189](https://github.com/ClickHouse/clickhouse-connect/issues/1189).
 - Python codec `Decimal` inserts now consistently truncate digits beyond the column scale, as the server and Rust codec do. Previously, `Decimal(9, 2)` stored `1234567.899` as `1234567.90` and could round `9999999.999` up to `10000000.00` instead of truncating to `9999999.99`.
 - `query_df` and `query_df_stream` no longer round `Nullable(Int128)`, `Nullable(UInt128)`, `Nullable(Int256)` and `Nullable(UInt256)` values with a magnitude above `2**53`, on both the Python and Rust codecs. Before, pandas made a block `float64` when it had NULL values and all values fit in 64 bits, or when an `int64` block and a `uint64` block were joined. These columns now have the `object` dtype, with Python `int` values and `None` for NULL. Before, a block without NULL values could have an `int64` or `uint64` dtype. Fixes [#1181](https://github.com/ClickHouse/clickhouse-connect/issues/1181).
 - The Python codec no longer writes a `FixedString` value as all zero bytes when the string cannot be encoded, for example a lone surrogate or a character outside a non-UTF-8 `encoding`. It now raises `UnicodeEncodeError`, the same as `String` columns.
