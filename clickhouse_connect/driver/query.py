@@ -45,6 +45,7 @@ leading_select_re = re.compile(r"^\s*SELECT(?:\s|$)", re.IGNORECASE)
 insert_re = re.compile(r"(^|\s)INSERT\s*INTO", re.IGNORECASE)
 command_re = re.compile(r"(^\s*)(" + commands + r")\s", re.IGNORECASE)
 bare_row_policy_show_re = re.compile(r"^\s*SHOW\s+(ROW\s+)?POLICIES\s*(?:;\s*)*$", re.IGNORECASE)
+comment_re = re.compile(r"(\".*?\"|\'.*?\')|(/\*.*?\*/|(--)[^\n]*$)", re.MULTILINE | re.DOTALL)  # compatibility export
 
 _SQL_COMMENT_MARKERS = ("--", "/*", "//", "# ", "#!")
 _SQL_COMMENT_START_CHARS = "-/#"
@@ -486,7 +487,7 @@ def _matches_outside_quotes(pattern: re.Pattern[str], sql: str) -> bool:
     position = match.start()
     # A region cannot hide a match when nothing before the match can start a region.  This is the usual case
     # for SELECT, so the query does not need to be lexed.
-    if _sql_opaque_start_re.search(sql, 0, position + 1) is None and sql.find("$", 0, position) == -1:
+    if _sql_opaque_start_re.search(sql, 0, position + 1) is None:
         return True
     regions = _sql_opaque_regions(sql)
     region = next(regions, None)

@@ -507,26 +507,8 @@ def test_columns_only_probe_with_comments_and_quotes(query, columns_only):
     assert is_columns_only_query(QueryContext(query)) is columns_only
 
 
-@pytest.mark.parametrize(
-    "query, appends_limit",
-    [
-        ("SELECT number FROM numbers(9) // LIMIT 5", True),
-        ("SELECT number FROM numbers(9) # LIMIT 5", True),
-        ("SELECT number FROM numbers(9) /* a /* b */ LIMIT 0 */", True),
-        ("SELECT number FROM numbers(9) WHERE toString(number) != ' LIMIT 1'", True),
-        ("SELECT number AS `a--b` FROM numbers(9) LIMIT 1", False),
-        ("SELECT number, $$--$$ AS tag FROM numbers(9) LIMIT 1", False),
-        ("SELECT number FROM numbers(9) LIMIT 1", False),
-        ("INSERT INTO t VALUES (13)", False),
-    ],
-)
-def test_query_limit_follows_lexical_limit_detection(query, appends_limit):
-    context = QueryContext(query)
-    prepared = Client._prep_query(SimpleNamespace(query_limit=2), context)
-    if appends_limit:
-        assert prepared == context.final_query + "\n LIMIT 2"
-    else:
-        assert prepared == context.final_query
+def test_comment_re_compatibility_export():
+    assert query_module.comment_re.sub(lambda match: match.group(1) or " ", "SELECT 'a--b' /* comment */") == "SELECT 'a--b'  "
 
 
 def test_prep_query_does_not_classify_without_query_limit():

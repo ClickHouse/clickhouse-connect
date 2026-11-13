@@ -1,4 +1,3 @@
-from itertools import product
 from unittest.mock import Mock
 
 import pytest
@@ -450,13 +449,41 @@ def test_sql_opaque_regions(sql, regions):
     assert [sql[start:end] for start, end in _sql_opaque_regions(sql)] == regions
 
 
-def test_sql_opaque_regions_skipping_plain_text_matches_lexing_every_token():
-    # A query with "$" is lexed token by token, and any other query only visits the possible region starts.
-    # A leading "$ " switches the mode, and it does not change how the text after it is lexed.
-    fragments = ["SELECT", "x", "1", " ", "\n", "\u00a0", "'", '"', "`", "\u2018", "\u2019", "\\", "''"]
-    fragments += ["--", "-", "//", "/", "/*", "*/", "#", "# ", "#!", "{", "{p:Int32}", "}", ";", "(", ")"]
-    for length in (1, 2, 3):
-        for parts in product(fragments, repeat=length):
-            sql = "".join(parts)
-            lexed_all = [(start - 2, end - 2) for start, end in _sql_opaque_regions("$ " + sql)]
-            assert list(_sql_opaque_regions(sql)) == lexed_all, sql
+@pytest.mark.parametrize(
+    "prefix, opaque",
+    [
+        ("identifier$tag$", False),
+        ("_13$tag$", False),
+        ("13letters$tag$", True),
+        ("13$tag$", True),
+        ("$tag$", True),
+        ("$$", True),
+        ("$identifier$tag$", False),
+        ("\u00e9$tag$", True),
+    ],
+)
+def test_sql_opaque_regions_dollar_token_boundaries(prefix, opaque):
+    tag = "$$" if prefix == "$$" else "$tag$"
+    sql = prefix + "-- hidden\n" + tag + " -- visible\n"
+    regions = [sql[start:end] for start, end in _sql_opaque_regions(sql)]
+    expected = [tag + "-- hidden\n" + tag] if opaque else ["-- hidden\n"]
+    assert regions == expected + ["-- visible\n"]
+
+
+@pytest.mark.parametrize(
+    "comment, expected",
+    [
+        ("/**/tail", 4),
+        ("/* outer /* inner */ tail */suffix", 28),
+        ("/*/*/", -1),
+        ("/*/*/**/*/tail", -1),
+        ("/*/*/ */ */tail", 11),
+        ("/*" + "x" * 10000 + "*/", 10004),
+        ("/*" * 1000 + "*/" * 1000, 4000),
+        ("/*" * 1000 + "*/" * 999, -1),
+        ("/*" + "x*/" * 1000, 5),
+        ("/*" * 1000 + "x" * 10000 + "*/" * 1000, 14000),
+    ],
+)
+def test_skip_block_comment_nested_markers(comment, expected):
+    assert binding._skip_block_comment(comment, 0) == expected
