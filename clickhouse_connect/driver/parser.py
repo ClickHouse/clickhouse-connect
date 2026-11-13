@@ -132,6 +132,8 @@ def parse_enum(expr) -> tuple[tuple[str, ...], tuple[int, ...]]:
                 in_key = True
             else:
                 value.append(char)
+    if len(keys) != len(values):
+        raise ValueError("Enum keys and values must have the same length")
     implicit = [number is None for number in values[1:]]
     if any(implicit) and not all(implicit):
         raise ValueError("Enum elements after the first must all have explicit values or all omit them")

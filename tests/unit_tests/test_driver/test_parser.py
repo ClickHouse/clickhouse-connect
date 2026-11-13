@@ -103,7 +103,17 @@ def test_enum_omitted_values_inside_tuple_and_map():
     assert map_type.value_type.name == "Enum8('a' = 1, 'b' = 2)"
 
 
-@pytest.mark.parametrize("expr", ["Enum8('a' = 5, 'b', 'c' = 10, 'd')", "Enum8('a', 'b' = 2, 'c')", "Enum8('a' =, 'b')"])
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "Enum8('a' = 5, 'b', 'c' = 10, 'd')",
+        "Enum8('a', 'b' = 2, 'c')",
+        "Enum8('a' =, 'b')",
+        "Enum8('a' 'b')",
+        "Enum8('a' 'b', 'c')",
+        "Enum8('a',, 'b')",
+    ],
+)
 def test_parse_enum_rejects_invalid_omitted_values(expr):
     with pytest.raises(ValueError):
         parse_enum(expr)
