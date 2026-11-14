@@ -65,7 +65,8 @@ class NumpyResult(Closable):
 
             def numpy_blocks():
                 for block in block_gen:
-                    np_array = options.np.empty(len(block[0]), dtype=self.np_types)
+                    # Every field is assigned below; np.zeros fills object fields much faster than np.empty does with None
+                    np_array = options.np.zeros(len(block[0]), dtype=self.np_types)
                     for col_name, data in zip(self.column_names, block):
                         np_array[col_name] = data
                     yield np_array
