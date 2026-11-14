@@ -73,8 +73,9 @@ def test_parse_enum_backslash_escapes(expr, expected):
         (r"Enum8('a\x41b' = 1, '\x7e\x7E' = 2)", (("aAb", "~~"), (1, 2))),
         (r"Enum8('\xD0\x96\xd1\x8f' = 1, 'user_\xe2\x82\xac' = 2)", (("Жя", "user_€"), (1, 2))),
         (r"Enum8('\xff' = 1, 'a\xc3' = 2)", (("\udcff", "a\udcc3"), (1, 2))),
-        (r"Enum8('\xZZ' = 1, 'a\xz4' = 2)", (("\udcff", "a\udcf4"), (1, 2))),
-        (r"Enum8('\x4z' = 1)", (("\udcff",), (1,))),
+        # unhex2 wraps the sum of digits where a non-hex character counts as 0xFF (26.3-26.9 servers)
+        (r"Enum8('\xZZ' = 1, 'a\xz4' = 2)", (("\udcef", "a\udcf4"), (1, 2))),
+        (r"Enum8('\x4z' = 1, '\x1g' = 2)", (("?", "\x0f"), (1, 2))),
         (r"Enum8('a\x4' = 1, '\x' = 2)", (("a\\x4", "\\x"), (1, 2))),
         (r"""Enum8('a\"b' = 1, 'a\`b' = 2, 'a\/b' = 3, 'a\=b' = 4)""", (('a"b', "a`b", "a/b", "a=b"), (1, 2, 3, 4))),
         (r"Enum8('a\Nb' = 1, '\N' = 2)", (("ab", ""), (1, 2))),
