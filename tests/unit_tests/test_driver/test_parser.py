@@ -64,6 +64,46 @@ def test_parse_enum_backslash_escapes(expr, expected):
     assert parse_enum(expr) == expected
 
 
+# Escapes the server parser also decodes in a type name written by the application
+# (readQuotedStringWithSQLStyle -> parseComplexEscapeSequence, v26.10.4.207-stable).
+@pytest.mark.parametrize(
+    "expr, expected",
+    [
+        (r"Enum8('a\ab' = 1, 'v\v' = 2, '\ee' = 3)", (("a\ab", "v\v", "\x1be"), (1, 2, 3))),
+        (r"Enum8('a\x41b' = 1, '\x7e\x7E' = 2)", (("aAb", "~~"), (1, 2))),
+        (r"Enum8('\xD0\x96\xd1\x8f' = 1, 'user_\xe2\x82\xac' = 2)", (("Жя", "user_€"), (1, 2))),
+        (r"Enum8('\xff' = 1, 'a\xc3' = 2)", (("\udcff", "a\udcc3"), (1, 2))),
+        # unhex2 wraps the sum of digits where a non-hex character counts as 0xFF (26.3-26.9 servers)
+        (r"Enum8('\xZZ' = 1, 'a\xz4' = 2)", (("\udcef", "a\udcf4"), (1, 2))),
+        (r"Enum8('\x4z' = 1, '\x1g' = 2)", (("?", "\x0f"), (1, 2))),
+        (r"Enum8('a\x4' = 1, '\x' = 2)", (("a\\x4", "\\x"), (1, 2))),
+        (r"""Enum8('a\"b' = 1, 'a\`b' = 2, 'a\/b' = 3, 'a\=b' = 4)""", (('a"b', "a`b", "a/b", "a=b"), (1, 2, 3, 4))),
+        (r"Enum8('a\Nb' = 1, '\N' = 2)", (("ab", ""), (1, 2))),
+        ("Enum8('a\\\x01b' = 1)", (("a\x01b",), (1,))),
+        (r"Enum8('a\zb' = 1, '\cA' = 2, 'a\012b' = 3)", (("a\\zb", "\\cA", "a\x0012b"), (1, 2, 3))),
+        (r"Enum8('it''s\x27' = 1, 'end\x5c' = 2, 'q\'\a' = 3)", (("it's'", "end\\", "q'\a"), (1, 2, 3))),
+    ],
+)
+def test_parse_enum_parser_escapes(expr, expected):
+    assert parse_enum(expr) == expected
+
+
+@pytest.mark.parametrize(
+    "type_name, expected_name",
+    [
+        (r"Enum8('a\ab' = 1, 'a\x41' = 2)", "Enum8('a\ab' = 1, 'aA' = 2)"),
+        (r"Enum8('\xD0\x96' = 1)", "Enum8('Ж' = 1)"),
+        (r"Enum8('\xff' = 1, 'a\xc3' = 2)", r"Enum8('\xff' = 1, 'a\xc3' = 2)"),
+        (r"Nullable(Enum16('a\eb' = 300))", "Nullable(Enum16('a\x1bb' = 300))"),
+        (r"Array(Nullable(Enum8('a\x27\x5c' = 1)))", r"Array(Nullable(Enum8('a\'\\' = 1)))"),
+    ],
+)
+def test_get_from_name_decodes_parser_escapes_in_enum(type_name, expected_name):
+    ch_type = get_from_name(type_name)
+    assert ch_type.name == expected_name
+    assert get_from_name(ch_type.name).name == expected_name
+
+
 @pytest.mark.parametrize(
     "type_name, expected_name",
     [

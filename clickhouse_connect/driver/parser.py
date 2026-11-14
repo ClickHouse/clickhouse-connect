@@ -79,11 +79,28 @@ def parse_callable(expr) -> tuple[str, tuple[str | int, ...], str]:
 
 # Escapes the server writes in enum key names (writeQuotedString), other than the quote itself
 _ENUM_KEY_UNESCAPES = {"\\": "\\", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "0": "\0"}
-_ENUM_KEY_ESCAPES = str.maketrans({char: f"\\{code}" for code, char in _ENUM_KEY_UNESCAPES.items()} | {"'": "\\'"})
+# A \xHH byte that is not valid UTF-8 is kept as a surrogateescape character, written back as \xHH
+_ENUM_KEY_ESCAPES = str.maketrans(
+    {char: f"\\{code}" for code, char in _ENUM_KEY_UNESCAPES.items()}
+    | {"'": "\\'"}
+    | {chr(0xDC00 + byte): f"\\x{byte:02x}" for byte in range(0x80, 0x100)}
+)
+# Other escapes the server parser decodes in a quoted string (parseComplexEscapeSequence)
+_ENUM_KEY_PARSE_UNESCAPES = _ENUM_KEY_UNESCAPES | {"a": "\a", "v": "\v", "e": "\x1b", "N": ""}
+_HEX_DIGITS = {char: int(char, 16) for char in "0123456789abcdefABCDEF"}
 
 
 def escape_enum_key(key: str) -> str:
     return key.translate(_ENUM_KEY_ESCAPES)
+
+
+def _unescape_enum_char(char: str) -> str:
+    """Decode the character after a backslash like the server parser (parseComplexEscapeSequence)"""
+    decoded = _ENUM_KEY_PARSE_UNESCAPES.get(char, char)
+    # The server keeps the backslash of an unknown escape, such as \z, unless it decodes to a control character
+    if decoded and decoded not in "'\"`/=\\" and ord(decoded) > 31:
+        return "\\" + decoded
+    return decoded
 
 
 def parse_enum(expr) -> tuple[tuple[str, ...], tuple[int, ...]]:
@@ -98,6 +115,7 @@ def parse_enum(expr) -> tuple[tuple[str, ...], tuple[int, ...]]:
     in_key = False
     key: list[str] = []
     value: list[str] = []
+    hex_escape = False
     while True:
         char = expr[pos]
         pos += 1
@@ -107,14 +125,26 @@ def parse_enum(expr) -> tuple[tuple[str, ...], tuple[int, ...]]:
                     key.append("'")
                     pos += 1
                 else:
-                    keys.append("".join(key))
+                    label = "".join(key)
+                    if hex_escape:
+                        # Join the \xHH bytes of a multibyte UTF-8 character
+                        label = label.encode("utf-8", "surrogateescape").decode("utf-8", "surrogateescape")
+                        hex_escape = False
+                    keys.append(label)
                     key = []
                     in_key = False
             elif char == "\\" and expr[pos] == "'" and expr[pos : pos + 4] != "' = " and expr[pos:] != "')":
                 key.append(expr[pos])
                 pos += 1
-            elif char == "\\" and expr[pos] in _ENUM_KEY_UNESCAPES:
-                key.append(_ENUM_KEY_UNESCAPES[expr[pos]])
+            elif char == "\\" and expr[pos] == "x" and len(hex_code := expr[pos + 1 : pos + 3]) == 2 and "'" not in hex_code:
+                # Like unhex2 on 26.3-26.9 servers, a character that is not a hex digit counts as 0xFF
+                # and the sum wraps to a byte (26.10 ORs the digits instead)
+                byte = (_HEX_DIGITS.get(hex_code[0], 0xFF) * 16 + _HEX_DIGITS.get(hex_code[1], 0xFF)) & 0xFF
+                key.append(chr(byte if byte < 0x80 else 0xDC00 + byte))
+                hex_escape = True
+                pos += 3
+            elif char == "\\" and expr[pos] not in "x'":
+                key.append(_unescape_enum_char(expr[pos]))
                 pos += 1
             else:
                 key.append(char)
