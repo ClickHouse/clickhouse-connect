@@ -5,8 +5,10 @@ import uuid
 import zoneinfo
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from decimal import Decimal
 from enum import Enum
 from functools import lru_cache
+from numbers import Number
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -1189,6 +1191,25 @@ def format_str(value: str):
     return f"'{escape_str(value)}'"
 
 
+# Only numeric literals may remain unquoted in SQL. Validate once and use the
+# validated string for non-builtin numeric types: their __str__ may change
+# between calls (or return arbitrary SQL).
+_SAFE_NUMBER_RE = re.compile(
+    r"[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|nan|inf(?:inity)?)\Z",
+    re.IGNORECASE,
+)
+
+
+def _safe_number_literal(value: Any) -> str | None:
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (Number, Decimal)):
+        literal = str(value)
+        if _SAFE_NUMBER_RE.fullmatch(literal):
+            return literal
+    return None
+
+
 _CH_STRING_ESCAPES = {"\\": "\\", "'": "'", '"': '"', "`": "`", "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f", "0": "\0"}
 
 
@@ -1254,7 +1275,11 @@ def format_query_value(value: Any, server_tz: tzinfo | None = timezone.utc):
         return format_query_value(value.value, server_tz)
     if isinstance(value, (uuid.UUID, ipaddress.IPv4Address, ipaddress.IPv6Address)):
         return f"'{value}'"
-    return value
+    literal = _safe_number_literal(value)
+    if literal is not None:
+        # Keep native numeric types for %-style numeric specifiers such as %d.
+        return value if type(value) in (int, float, bool, Decimal) else literal
+    raise ProgrammingError(f"Unsupported query parameter type: {type(value).__name__}")
 
 
 def str_query_value(value: Any, server_tz: tzinfo | None = timezone.utc):
@@ -1319,4 +1344,7 @@ def format_bind_value(value: Any, server_tz: tzinfo | None = timezone.utc, top_l
         if top_level:
             return str(value)
         return f"'{value}'"
-    return str(value)
+    literal = _safe_number_literal(value)
+    if literal is not None:
+        return literal
+    raise ProgrammingError(f"Unsupported query parameter type: {type(value).__name__}")
