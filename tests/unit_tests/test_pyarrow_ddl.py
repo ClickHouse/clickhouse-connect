@@ -157,3 +157,52 @@ def test_create_table_from_arrow_schema_matches_manual_create_table():
     )
 
     assert ddl_manual == ddl_wrapper
+
+
+def test_arrow_field_names_that_are_not_plain_identifiers_are_quoted():
+    schema = pa.schema(
+        [
+            ("id", pa.int64()),
+            ("unit price", pa.float64()),
+            ("order-id", pa.int32()),
+            ("a.b", pa.string()),
+            ("2nd", pa.int8()),
+            ("naïve", pa.string()),
+            ("back`tick", pa.string()),
+            ("_ok9", pa.string()),
+        ]
+    )
+
+    col_defs = arrow_schema_to_column_defs(schema)
+
+    assert [c.name for c in col_defs] == [
+        "id",
+        "`unit price`",
+        "`order-id`",
+        "`a.b`",
+        "`2nd`",
+        "`naïve`",
+        "`back\`tick`",
+        "_ok9",
+    ]
+
+    ddl = create_table_from_arrow_schema(
+        table_name="arrow_quoted_test",
+        schema=schema,
+        engine="MergeTree",
+        engine_params={"ORDER BY": "id"},
+    )
+
+    assert ddl == (
+        "CREATE TABLE arrow_quoted_test (id Int64, `unit price` Float64, `order-id` Int32, `a.b` String, "
+        "`2nd` Int8, `naïve` String, `back\`tick` String, _ok9 String) ENGINE MergeTree  ORDER BY id"
+    )
+
+
+def test_arrow_field_name_with_backticks_is_taken_literally():
+    # The Arrow name is the literal column name, so surrounding backticks are part of it and get escaped.
+    schema = pa.schema([("`quoted`", pa.int64())])
+
+    col_defs = arrow_schema_to_column_defs(schema)
+
+    assert col_defs[0].name == "`\`quoted\``"

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, NamedTuple, Protocol
 
+from clickhouse_connect.driver.binding import _format_identifier
 from clickhouse_connect.driver.options import check_arrow
 
 if TYPE_CHECKING:
     import pyarrow
+
+_PLAIN_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 class _NamedType(Protocol):
@@ -128,6 +132,17 @@ class _DDLType:
         self.name = name
 
 
+def _arrow_field_to_column_name(name: str) -> str:
+    """
+    Arrow field names are literal, so quote any that is not a plain identifier. Without the quotes a name such as
+    ``"unit price"``, ``"order-id"`` or ``"a.b"`` produces DDL the server rejects or reads as a Nested column.
+    Plain names are returned unchanged.
+    """
+    if _PLAIN_IDENTIFIER_RE.match(name):
+        return name
+    return _format_identifier(name)
+
+
 def arrow_schema_to_column_defs(schema: pyarrow.Schema) -> list[TableColumnDef]:
     """
     Convert a PyArrow Schema into a list of TableColumnDef objects.
@@ -151,7 +166,7 @@ def arrow_schema_to_column_defs(schema: pyarrow.Schema) -> list[TableColumnDef]:
         ch_type_name = _arrow_type_to_ch(field.type)
         col_defs.append(
             TableColumnDef(
-                name=field.name,
+                name=_arrow_field_to_column_name(field.name),
                 ch_type=_DDLType(ch_type_name),
             )
         )
