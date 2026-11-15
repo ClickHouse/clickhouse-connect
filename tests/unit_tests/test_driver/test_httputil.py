@@ -102,6 +102,28 @@ def restore_default_pool_manager(restore_manager_registries):
     httputil._inherited_managers[:] = inherited
 
 
+@pytest.mark.parametrize(
+    ("proxy_args", "scheme", "host", "port"),
+    [
+        ({"http_proxy": "proxy.test:8080"}, "http", "proxy.test", 8080),
+        ({"http_proxy": "httpproxy.test:8080"}, "http", "httpproxy.test", 8080),
+        ({"http_proxy": "http-proxy.test:8080"}, "http", "http-proxy.test", 8080),
+        ({"http_proxy": "HTTP://proxy.test:8080"}, "http", "proxy.test", 8080),
+        ({"http_proxy": "https://proxy.test:8443"}, "https", "proxy.test", 8443),
+        ({"https_proxy": "proxy.test:8443"}, "https", "proxy.test", 8443),
+        ({"https_proxy": "httpsproxy.test:8443"}, "https", "httpsproxy.test", 8443),
+        ({"https_proxy": "http-proxy.test:8443"}, "https", "http-proxy.test", 8443),
+        ({"https_proxy": "http://proxy.test:8080"}, "http", "proxy.test", 8080),
+    ],
+)
+def test_proxy_scheme_is_only_defaulted_when_missing(restore_manager_registries, proxy_args, scheme, host, port):
+    manager = httputil.get_pool_manager(**proxy_args)
+    try:
+        assert (manager.proxy.scheme, manager.proxy.host, manager.proxy.port) == (scheme, host, port)
+    finally:
+        manager.clear()
+
+
 def test_default_socket_options():
     options = httputil.get_pool_manager_options(keep_interval=13, keep_count=7, keep_idle=79)["socket_options"]
 
