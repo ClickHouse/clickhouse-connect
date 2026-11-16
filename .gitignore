@@ -38,4 +38,10 @@ rust/target/
 *.so
 *.dylib
 /.cargo/config.toml
-.claude
+
+# Agent definitions and skills are shared. Everything else stays local.
+/.claude/*
+!/.claude/agents/
+!/.claude/skills/
+/.codex/*
+!/.codex/agents/

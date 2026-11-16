@@ -76,6 +76,49 @@ def test_generic_enum_selects_server_storage_family(type_name, expected_name):
     assert get_from_name(type_name).name == expected_name
 
 
+@pytest.mark.parametrize(
+    "type_name, expected_name",
+    [
+        ("Enum8('a', 'b')", "Enum8('a' = 1, 'b' = 2)"),
+        ("Enum('a','b')", "Enum8('a' = 1, 'b' = 2)"),
+        ("Enum16('a', 'b')", "Enum16('a' = 1, 'b' = 2)"),
+        ("Enum8('a' = 5, 'b')", "Enum8('a' = 5, 'b' = 6)"),
+        ("Enum8('a' = -3, 'b', 'c')", "Enum8('a' = -3, 'b' = -2, 'c' = -1)"),
+        ("Enum8('a', 'b' = 7)", "Enum8('a' = 1, 'b' = 7)"),
+        ("Enum('a' = 127, 'b')", "Enum16('a' = 127, 'b' = 128)"),
+        ("Enum8('x=y', 'b')", "Enum8('x=y' = 1, 'b' = 2)"),
+        ("Enum8('user\\'1', 'user_2')", "Enum8('user\\'1' = 1, 'user_2' = 2)"),
+        ("Nullable(Enum8('a', 'b'))", "Nullable(Enum8('a' = 1, 'b' = 2))"),
+        ("Array(Enum8('a','b'))", "Array(Enum8('a' = 1, 'b' = 2))"),
+    ],
+)
+def test_enum_assigns_omitted_values_like_server(type_name, expected_name):
+    assert get_from_name(type_name).name == expected_name
+
+
+def test_enum_omitted_values_inside_tuple_and_map():
+    tuple_type = get_from_name("Tuple(Enum8('a', 'b'), UInt8)")
+    map_type = get_from_name("Map(String, Enum8('a','b'))")
+    assert tuple_type.element_types[0].name == "Enum8('a' = 1, 'b' = 2)"
+    assert map_type.value_type.name == "Enum8('a' = 1, 'b' = 2)"
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "Enum8('a' = 5, 'b', 'c' = 10, 'd')",
+        "Enum8('a', 'b' = 2, 'c')",
+        "Enum8('a' =, 'b')",
+        "Enum8('a' 'b')",
+        "Enum8('a' 'b', 'c')",
+        "Enum8('a',, 'b')",
+    ],
+)
+def test_parse_enum_rejects_invalid_omitted_values(expr):
+    with pytest.raises(ValueError):
+        parse_enum(expr)
+
+
 ESCAPED_ENUM = "Enum8('user\\'1' = 1, 'user_2' = 2)"
 REPEATED_NON_FIRST_ENUM = "Enum16('user_1' = 1, 'user\\'2\\'3' = 2)"
 # Server-emitted enum names escape a backslash as \\ (v26.6.1.1193, DataTypeEnum
@@ -501,4 +544,54 @@ def test_remove_comments_no_space_after_dashes():
     ],
 )
 def test_remove_comments_separates_tokens(sql: str, expected: str):
+    assert remove_sql_comments(sql) == expected
+
+
+@pytest.mark.parametrize(
+    "sql, expected",
+    [
+        # line comments of the server lexer
+        ("SELECT 1 // LIMIT 5", "SELECT 1 "),
+        ("SELECT 1 // LIMIT 5\n", "SELECT 1 \n"),
+        ("SELECT 1 //LIMIT 5", "SELECT 1 "),
+        ("SELECT 1 # LIMIT 5", "SELECT 1 "),
+        ("SELECT 1 #! LIMIT 5", "SELECT 1 "),
+        ("SELECT 1 #!LIMIT 5", "SELECT 1 "),
+        ("// leading\nSELECT 1", "\nSELECT 1"),
+        ("# leading\nSELECT 1", "\nSELECT 1"),
+        ("#!leading\nSELECT 1", "\nSELECT 1"),
+        ("SELECT 1 --done", "SELECT 1 "),
+        # a hash is a comment only before a space or "!"
+        ("SELECT 1 #LIMIT 5", "SELECT 1 #LIMIT 5"),
+        ("SELECT 1 #\tLIMIT 5", "SELECT 1 #\tLIMIT 5"),
+        ("SELECT 1 #", "SELECT 1 #"),
+        # block comments nest
+        ("SELECT number FROM numbers(5) /* a /* b */ LIMIT 0 */", "SELECT number FROM numbers(5)  "),
+        ("SELECT number FROM numbers(5) /* a /* LIMIT 0 */ b */ LIMIT 1", "SELECT number FROM numbers(5)   LIMIT 1"),
+        # quoted identifiers, strings and heredocs keep their text
+        ("SELECT number AS `a--b` FROM numbers(9) LIMIT 1", "SELECT number AS `a--b` FROM numbers(9) LIMIT 1"),
+        ("SELECT number AS `a/*b*/c` FROM numbers(9)", "SELECT number AS `a/*b*/c` FROM numbers(9)"),
+        ("SELECT number AS `a//b` FROM numbers(9)", "SELECT number AS `a//b` FROM numbers(9)"),
+        ("SELECT number AS `a# b` FROM numbers(9) LIMIT 1", "SELECT number AS `a# b` FROM numbers(9) LIMIT 1"),
+        ("SELECT '// LIMIT 0'", "SELECT '// LIMIT 0'"),
+        ("SELECT '# LIMIT 0'", "SELECT '# LIMIT 0'"),
+        ("SELECT 'a\\'b-- LIMIT 0'", "SELECT 'a\\'b-- LIMIT 0'"),
+        ('SELECT "a\\"b-- LIMIT 0"', 'SELECT "a\\"b-- LIMIT 0"'),
+        ("SELECT 'a''b--c'", "SELECT 'a''b--c'"),
+        ("SELECT `a``b--c`", "SELECT `a``b--c`"),
+        ("SELECT number, $$--$$ AS tag FROM numbers(9) LIMIT 1", "SELECT number, $$--$$ AS tag FROM numbers(9) LIMIT 1"),
+        (
+            "SELECT number, $doc$/* LIMIT 0 */$doc$ AS tag FROM numbers(9) LIMIT 1",
+            "SELECT number, $doc$/* LIMIT 0 */$doc$ AS tag FROM numbers(9) LIMIT 1",
+        ),
+        # a dollar sign inside a bareword does not open a heredoc
+        ("SELECT 13 AS a$b$c -- x", "SELECT 13 AS a$b$c "),
+        ("SELECT 13 $notatag$ -- x", "SELECT 13 $notatag$ "),
+        # an unterminated quote or comment stays as it is, and so does the text after it
+        ("SELECT 'a--b", "SELECT 'a--b"),
+        ("SELECT /* unterminated", "SELECT /* unterminated"),
+        ("SELECT 1 -- c\nSELECT 'a", "SELECT 1 \nSELECT 'a"),
+    ],
+)
+def test_remove_comments_lexer_forms(sql: str, expected: str):
     assert remove_sql_comments(sql) == expected

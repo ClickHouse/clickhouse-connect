@@ -288,6 +288,15 @@ class TestChdbQuery:
         assert result.column_names == (expected_name,)
         assert result.column_types[0].name == expected_type
 
+    def test_query_limit_ignores_limit_in_comments_and_quotes(self, client, query_limit_comment_case):
+        sql, expected = query_limit_comment_case
+        old_limit = client.query_limit
+        client.query_limit = 2
+        try:
+            assert [tuple(row) for row in client.query(sql).result_rows] == expected
+        finally:
+            client.query_limit = old_limit
+
     @pytest.mark.parametrize(
         "sql",
         [

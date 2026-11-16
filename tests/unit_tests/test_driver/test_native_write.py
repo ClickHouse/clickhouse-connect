@@ -1,5 +1,6 @@
 import struct
 from datetime import date, datetime, timedelta, timezone, tzinfo
+from decimal import Decimal, localcontext
 from uuid import UUID
 
 import pytest
@@ -153,6 +154,61 @@ def test_long_str():
     types = [get_from_name("String")]
     output = native_insert_block(data, names, types)
     assert bytes(output) == b"\x01\x01\x05value\x06String\xe7\x03" + x.encode()
+
+
+@pytest.mark.parametrize(
+    "type_name, values, expected",
+    [
+        ("Decimal(9, 2)", ["1.999", "1234567.899", "-1234567.899", "9999999.999"], [199, 123456789, -123456789, 999999999]),
+        ("Decimal32(2)", ["9999999.999", "-9999999.999"], [999999999, -999999999]),
+        ("Decimal64(2)", ["1234567890123456.899"], [123456789012345689]),
+        ("Nullable(Decimal(9, 2))", [None, "1234567.899"], [0, 123456789]),
+        ("Decimal(38, 2)", ["1" * 36 + ".899"], [int("1" * 36 + "89")]),
+        ("Decimal128(2)", ["1" * 36 + ".899"], [int("1" * 36 + "89")]),
+        ("Nullable(Decimal128(2))", [None, "1" * 36 + ".899"], [0, int("1" * 36 + "89")]),
+        ("Decimal256(2)", ["-" + "1" * 74 + ".899"], [-int("1" * 74 + "89")]),
+        ("Nullable(Decimal256(2))", [None, "1" * 74 + ".899"], [0, int("1" * 74 + "89")]),
+    ],
+)
+@pytest.mark.parametrize("input_type", [Decimal, str])
+def test_decimal_truncates_extra_digits(type_name, values, expected, input_type):
+    ch_type = get_from_name(type_name)
+    dest = bytearray()
+    ch_type.write_column([input_type(v) if v is not None else None for v in values], dest, InsertContext("table", ["value"], [ch_type]))
+    sz = ch_type.byte_size
+    written = [int.from_bytes(dest[i : i + sz], "little", signed=True) for i in range(len(dest) - sz * len(values), len(dest), sz)]
+    assert written == expected
+
+
+@pytest.mark.parametrize("type_name", ["Decimal(9, 2)", "Decimal32(2)", "Nullable(Decimal32(2))"])
+def test_decimal_truncates_float_extra_digits(type_name):
+    ch_type = get_from_name(type_name)
+    dest = bytearray()
+    values = [1.999, 1234567.899, -1234567.899, 9999999.999]
+    ch_type.write_column(values, dest, InsertContext("table", ["value"], [ch_type]))
+    nulls = bytes(len(values)) if ch_type.nullable else b""
+    assert dest == nulls + struct.pack("<4i", 199, 123456789, -123456789, 999999999)
+
+
+@pytest.mark.parametrize("type_name", ["Decimal(9, 2)", "Decimal(38, 2)", "Nullable(Decimal256(2))"])
+def test_decimal_write_clamped_context(type_name):
+    ch_type = get_from_name(type_name)
+    dest = bytearray()
+    with localcontext() as outer:
+        outer.clamp = 1
+        ch_type.write_column([Decimal("13.799")], dest, InsertContext("table", ["value"], [ch_type]))
+        assert outer.clamp == 1
+    assert int.from_bytes(dest[-ch_type.byte_size :], "little", signed=True) == 1379
+
+
+@pytest.mark.parametrize("type_name", ["FixedString(4)", "Nullable(FixedString(4))"])
+@pytest.mark.parametrize("encoding, value", [("utf-8", "ab\ud800"), ("latin-1", "ab\u20ac")])
+def test_fixed_string_rejects_unencodable_str(type_name, encoding, value):
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("table", ["value"], [ch_type])
+    ctx.encoding = encoding
+    with pytest.raises(UnicodeEncodeError):
+        ch_type.write_column(["ok", value], bytearray(), ctx)
 
 
 def test_low_card_map():
@@ -377,6 +433,121 @@ def test_date_native_subclass_without_ordinal(type_name, code, error):
     ch_type.write_column([LegacyDate(1970, 1, 14)], dest, InsertContext("table", ["value"], [ch_type]))
 
     assert dest == struct.pack(f"<{code}", 13)
+
+
+@pytest.mark.parametrize(
+    "type_name, code",
+    [("Int8", "b"), ("UInt8", "B"), ("Int16", "h"), ("UInt16", "H"), ("Int32", "i"), ("UInt32", "I"), ("Int64", "q"), ("UInt64", "Q")],
+)
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize(
+    "representation",
+    ["python", "float16-list", "float32-list", "float64-list", "float16-array", "float32-array", "float64-array", "object-array"],
+)
+def test_integer_float_native_bytes(type_name, code, nullable, representation):
+    values = [13.75, 79.25]
+    if representation != "python":
+        np = pytest.importorskip("numpy")
+        dtype, container = representation.split("-")
+        values = np.array(values, dtype=dtype)
+        if container == "list":
+            values = list(values)
+    if nullable:
+        type_name = f"Nullable({type_name})"
+        if representation.endswith("-array"):
+            values = pytest.importorskip("numpy").array([None, *values, None], dtype=object)
+        else:
+            values = [None, *values, None]
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("table", ["value"], [ch_type])
+    dest = bytearray()
+    ch_type.write_column(values, dest, ctx)
+
+    expected = [0, 13, 79, 0] if nullable else [13, 79]
+    nulls = b"\x01\x00\x00\x01" if nullable else b""
+    assert dest == nulls + struct.pack(f"<{len(expected)}{code}", *expected)
+
+
+@pytest.mark.parametrize("type_name", ["Int8", "UInt8", "Int16", "UInt16", "Int32", "UInt32", "Int64", "UInt64"])
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+@pytest.mark.parametrize(
+    "representation",
+    ["python", "float16-list", "float32-list", "float64-list", "float16-array", "float32-array", "float64-array", "object-array"],
+)
+def test_integer_native_rejects_nonfinite(type_name, nullable, value, representation):
+    values = [13.0, float(value)]
+    if representation != "python":
+        np = pytest.importorskip("numpy")
+        dtype, container = representation.split("-")
+        values = np.array(values, dtype=dtype)
+        if container == "list":
+            values = list(values)
+    if nullable:
+        type_name = f"Nullable({type_name})"
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("table", ["value"], [ch_type])
+    ctx.column_name = "value"
+    with pytest.raises(DataError, match=f"value.*{value} is not finite"):
+        ch_type.write_column(values, bytearray(), ctx)
+
+
+@pytest.mark.parametrize(
+    "type_name",
+    [
+        "Int32",
+        "Nullable(Int32)",
+        "Array(Int32)",
+        "Array(Nullable(Int32))",
+        "Tuple(Int32, String)",
+        "Tuple(Nullable(Int32), String)",
+        "Array(Tuple(Int32, String))",
+        "Array(Tuple(Nullable(Int32), String))",
+        "Map(String, Int32)",
+        "Map(String, Nullable(Int32))",
+        "LowCardinality(Int32)",
+        "LowCardinality(Nullable(Int32))",
+        "SimpleAggregateFunction(sum, Nullable(Int32))",
+        "IntervalSecond",
+    ],
+)
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_integer_native_rejects_nested_nonfinite(type_name, value):
+    value = float(value)
+    if "Tuple(" in type_name:
+        value = (value, "user_1")
+    if type_name.startswith("Array("):
+        value = [value]
+    elif type_name.startswith("Map("):
+        value = {"user_1": value}
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("table", ["value"], [ch_type])
+    with pytest.raises(DataError):
+        ch_type.write_column([value], bytearray(), ctx)
+
+
+@pytest.mark.parametrize("values", [[13.0, None], [None, 13.0], [13, None], [None], ["13", None]])
+def test_nonnullable_integer_native_rejects_none(values):
+    ch_type = get_from_name("Int32")
+    with pytest.raises(DataError):
+        ch_type.write_column(values, bytearray(), InsertContext("table", ["value"], [ch_type]))
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+def test_integer_float_conversion_preserves_other_errors(nullable):
+    ch_type = get_from_name("Nullable(Int32)" if nullable else "Int32")
+    ctx = InsertContext("table", ["value"], [ch_type])
+    with pytest.raises(DataError, match="out of range"):
+        ch_type.write_column([13.0, 10**400], bytearray(), ctx)
+    with pytest.raises(TypeError):
+        ch_type.write_column([13.0, object()], bytearray(), ctx)
+
+
+@pytest.mark.parametrize("value", ["", [], {}])
+def test_nullable_integer_float_column_rejects_falsy_values(value):
+    ch_type = get_from_name("Nullable(Int32)")
+    with pytest.raises((TypeError, ValueError)):
+        ch_type.write_column([13.0, value], bytearray(), InsertContext("table", ["value"], [ch_type]))
 
 
 UUID_VALUES = [

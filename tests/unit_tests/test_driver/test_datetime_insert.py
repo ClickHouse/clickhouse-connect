@@ -8,8 +8,10 @@ from unittest.mock import patch
 import pytest
 
 from clickhouse_connect import common
+from clickhouse_connect.datatypes import temporal
 from clickhouse_connect.datatypes.registry import get_from_name
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver import tzutil
+from clickhouse_connect.driver.exceptions import DataError, ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 
 HAS_TZSET = hasattr(time, "tzset")
@@ -211,3 +213,88 @@ def test_server_insert_uses_zoneinfo_gap_and_fold_defaults(type_name, value, res
     expected = value.replace(tzinfo=new_york)
 
     assert _serialize_datetime(type_name, value, new_york) == _expected_epoch(type_name, expected, "local")
+
+
+class EpochOSErrorDatetime(datetime):
+    """A naive datetime whose timestamp() fails the way the Windows C runtime fails near the epoch."""
+
+    def timestamp(self) -> float:
+        if self.utcoffset() is None:
+            raise OSError(22, "Invalid argument")
+        return super().timestamp()
+
+
+def test_naive_datetime_insert_local_epoch_conversion_error(monkeypatch, restore_insert_setting):
+    common.set_setting("naive_datetime_insert", "local")
+    monkeypatch.setattr(tzutil, "local_tz", timezone.utc)
+    value = EpochOSErrorDatetime(1970, 1, 1, 8, 0, 0)
+
+    # 1970-01-01 08:00:00 in UTC is epoch 28800. The Windows-style conversion
+    # failure forces the fallback, which must produce that exact value.
+    assert _serialize_datetime("DateTime", value) == 28_800
+
+
+@pytest.mark.parametrize(
+    "type_name, column, expected",
+    [
+        (
+            "Nullable(DateTime)",
+            [None, EpochOSErrorDatetime(1970, 1, 1, 8, 0, 13)],
+            b"\x01\x00" + bytes(4) + (13).to_bytes(4, "little"),
+        ),
+        (
+            "DateTime64(6)",
+            [EpochOSErrorDatetime(1960, 1, 1, 12, 0, 0, 250306)],
+            (-315_604_799_749_694).to_bytes(8, "little", signed=True),
+        ),
+        (
+            "Nullable(DateTime64(6))",
+            [None, EpochOSErrorDatetime(1970, 1, 1, 7, 59, 59, 250000)],
+            b"\x01\x00" + bytes(8) + (-750_000).to_bytes(8, "little", signed=True),
+        ),
+        (
+            "Array(DateTime64(3))",
+            [[], [EpochOSErrorDatetime(1970, 1, 1, 7, 59, 59, 250000), EpochOSErrorDatetime(1970, 1, 1, 8, 0, 13, 250000)]],
+            bytes(8) + (2).to_bytes(8, "little") + (-750).to_bytes(8, "little", signed=True) + (13_250).to_bytes(8, "little", signed=True),
+        ),
+        (
+            "Tuple(DateTime64(6))",
+            [(EpochOSErrorDatetime(1970, 1, 1, 7, 59, 59, 250000),)],
+            (-750_000).to_bytes(8, "little", signed=True),
+        ),
+        (
+            "Array(Tuple(DateTime64(6)))",
+            [[(EpochOSErrorDatetime(1970, 1, 1, 7, 59, 59, 250000),)]],
+            (1).to_bytes(8, "little") + (-750_000).to_bytes(8, "little", signed=True),
+        ),
+        (
+            "DateTime",
+            [EpochOSErrorDatetime(1970, 1, 1, 7, 59, 59)],
+            None,
+        ),
+    ],
+    ids=[
+        "nullable_datetime",
+        "datetime64_pre_epoch",
+        "nullable_datetime64",
+        "array_datetime64",
+        "tuple_datetime64",
+        "array_tuple_datetime64",
+        "datetime_out_of_range",
+    ],
+)
+def test_naive_datetime_insert_local_fallback(type_name, column, expected, monkeypatch, restore_insert_setting):
+    monkeypatch.setattr(temporal, "datetime", EpochOSErrorDatetime)
+    common.set_setting("naive_datetime_insert", "local")
+    monkeypatch.setattr(tzutil, "local_tz", timezone(timedelta(hours=8)))
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("test_table", ["value"], [ch_type], server_tz=SERVER_TZ)
+    ctx.start_column("value")
+    dest = bytearray()
+
+    if expected is None:
+        with pytest.raises(DataError, match="out of range"):
+            ch_type.write_column(column, dest, ctx)
+    else:
+        ch_type.write_column(column, dest, ctx)
+        assert dest == expected

@@ -112,20 +112,14 @@ class FixedString(ClickHouseType):
                     if x is None:
                         ext(empty)
                     else:
-                        try:
-                            b = str_enc(x, enc)
-                        except UnicodeEncodeError:
-                            b = empty
+                        b = str_enc(x, enc)
                         if len(b) > sz:
                             raise ctx.data_error(f"UTF-8 encoded FixedString value {b.hex(' ')} exceeds column size {sz}")
                         ext(b)
                         ext(empty[: sz - len(b)])
             else:
                 for x in column:
-                    try:
-                        b = str_enc(x, enc)
-                    except UnicodeEncodeError:
-                        b = empty
+                    b = str_enc(x, enc)
                     if len(b) > sz:
                         raise ctx.data_error(f"UTF-8 encoded FixedString value {b.hex(' ')} exceeds column size {sz}")
                     ext(b)

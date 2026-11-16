@@ -3,13 +3,15 @@ import sys
 import zoneinfo
 from datetime import timedelta, timezone, tzinfo
 from pathlib import Path
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pytest
 
 from clickhouse_connect.driver import query as query_module
 from clickhouse_connect.driver import tzutil
-from clickhouse_connect.driver.client import _strip_utc_timezone_from_arrow
+from clickhouse_connect.driver._backend.httpcommon import is_columns_only_query
+from clickhouse_connect.driver.client import Client, _strip_utc_timezone_from_arrow
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.httpclient import HttpClient
 from clickhouse_connect.driver.query import QueryContext
@@ -412,6 +414,116 @@ def test_other_show_queries_are_not_commands(query):
 )
 def test_leading_no_space_comment_is_command(query):
     assert QueryContext(query).is_command is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "//sql\nDROP TABLE x",
+        "# sql\nDROP TABLE x",
+        "#!sql\nDROP TABLE x",
+        "/* outer /* inner */ still comment */CREATE TABLE x (a String) ENGINE=Memory",
+    ],
+)
+def test_server_line_and_nested_comments_before_a_command(query):
+    assert QueryContext(query).is_command is True
+
+
+@pytest.mark.parametrize(
+    "query, is_select, has_limit",
+    [
+        # comments of the server lexer do not hide a LIMIT, and do not leave one behind
+        ("SELECT number FROM numbers(5) // LIMIT 5", True, False),
+        ("SELECT number FROM numbers(5) # LIMIT 5", True, False),
+        ("SELECT number FROM numbers(5) #! LIMIT 5", True, False),
+        ("SELECT number FROM numbers(5) // LIMIT 0", True, False),
+        ("SELECT number FROM numbers(5) /* a /* b */ LIMIT 0 */", True, False),
+        ("SELECT number FROM numbers(5) /* a /* LIMIT 0 */ b */ LIMIT 1", True, True),
+        # quoted text is not SQL
+        ("SELECT number AS `a--b` FROM numbers(9) LIMIT 1", True, True),
+        ("SELECT number AS `a# b` FROM numbers(9) LIMIT 1", True, True),
+        ("SELECT number AS `LIMIT 0--` FROM numbers(9)", True, False),
+        ("SELECT '// LIMIT 0'", True, False),
+        ("SELECT '# LIMIT 0'", True, False),
+        ("SELECT number, $$--$$ AS tag FROM numbers(9) LIMIT 1", True, True),
+        ("SELECT number, $doc$-- LIMIT 0$doc$ AS tag FROM numbers(9) LIMIT 1", True, True),
+        ("SELECT number FROM numbers(9) WHERE toString(number) != 'a\\'b-- LIMIT 0' LIMIT 1", True, True),
+        ("SELECT number FROM numbers(9) WHERE toString(number) != ' LIMIT 1'", True, False),
+        ('SELECT number FROM numbers(9) WHERE toString(number) != "\\" LIMIT 1"', True, False),
+        ("INSERT INTO t VALUES (' SELECT 1')", False, False),
+        ("INSERT INTO t VALUES ('a LIMIT 1')", False, False),
+        # block comments separate tokens
+        ("SELECT/*c*/number FROM numbers(9)", True, False),
+        ("SELECT number FROM numbers(9)/*c*/LIMIT 1", True, True),
+        # a quote that never closes hides nothing, as before
+        ("SELECT number FROM numbers(9) LIMIT 1 -- it's", True, True),
+        ("SELECT 'a LIMIT 1", True, True),
+    ],
+)
+def test_query_classification_follows_server_lexer(query, is_select, has_limit):
+    context = QueryContext(query)
+    assert context.is_select is is_select
+    assert context.has_limit is has_limit
+
+
+@pytest.mark.parametrize(
+    "query, is_select, has_limit, is_command",
+    [
+        # Only comments and quoted text are lexed. The keyword rules for the other text did not change,
+        # so query_limit still does not reach these statements.
+        ("DESCRIBE (SELECT 13)", False, False, False),
+        ("EXPLAIN (SELECT 13)", False, False, False),
+        ("ALTER TABLE t ADD PROJECTION p (SELECT a)", False, False, True),
+        ("WITH x AS (SELECT 13) SELECT * FROM x", True, False, False),
+        ("SELECT a FROM t WHERE b IN (SELECT c FROM u LIMIT 5)", True, True, False),
+        ("CREATE TABLE x (a String) ENGINE=Memory", False, False, True),
+        ("SHOW ROW POLICIES;", False, False, True),
+    ],
+)
+def test_query_classification_outside_quotes_keeps_keyword_rules(query, is_select, has_limit, is_command):
+    context = QueryContext(query)
+    assert context.is_select is is_select
+    assert context.has_limit is has_limit
+    assert context.is_command is is_command
+
+
+@pytest.mark.parametrize(
+    "query, columns_only",
+    [
+        ("SELECT number FROM numbers(9) // LIMIT 0", False),
+        ("SELECT number AS `LIMIT 0--` FROM numbers(9)", False),
+        ("SELECT 'foo\\' LIMIT 0--bar' AS value", False),
+        ("SELECT '// LIMIT 0'", False),
+        ("SELECT '# LIMIT 0'", False),
+        ("SELECT number FROM numbers(9) /* a /* b */ LIMIT 0 */", False),
+        ("SELECT number FROM numbers(9) WHERE toString(number) != ' LIMIT 0'", False),
+        ("SELECT number FROM numbers(9) LIMIT 0", True),
+        ("SELECT name, database FROM system.tables LIMIT/*c*/0", True),
+        ("SELECT name, database FROM system.tables LIMIT 0/*c*/", True),
+        ("SELECT number FROM numbers(9) LIMIT 0 // trailing", True),
+    ],
+)
+def test_columns_only_probe_with_comments_and_quotes(query, columns_only):
+    assert is_columns_only_query(QueryContext(query)) is columns_only
+
+
+def test_comment_re_compatibility_export():
+    assert query_module.comment_re.sub(lambda match: match.group(1) or " ", "SELECT 'a--b' /* comment */") == "SELECT 'a--b'  "
+
+
+def test_prep_query_does_not_classify_without_query_limit():
+    class Unclassified:
+        final_query = "SELECT 13 FROM t"
+
+        @property
+        def is_select(self):
+            raise AssertionError("is_select was read")
+
+        @property
+        def has_limit(self):
+            raise AssertionError("has_limit was read")
+
+    assert Client._prep_query(SimpleNamespace(query_limit=0), Unclassified()) == "SELECT 13 FROM t"
 
 
 def test_active_tz_utc_defaults_to_naive():

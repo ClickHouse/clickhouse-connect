@@ -1,47 +1,43 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from alembic.operations import MigrateOperation, Operations
+from alembic.operations.ops import ModifyTableOps
 from sqlalchemy import Column
 
+from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex, index_definition
+from clickhouse_connect.cc_sqlalchemy.ddl.projection import ClickHouseProjection, projection_definition
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import column_specification, render_settings
 from clickhouse_connect.driver.binding import format_str, quote_identifier
 
-__all__ = ["ClickHouseIndex", "ClickHouseProjection"]
-
-
-@dataclass(frozen=True)
-class ClickHouseIndex:
-    """A data skipping index definition. expression and type_ are raw SQL passthrough."""
-
-    name: str
-    expression: str
-    type_: str
-    granularity: int | None = None
-    if_not_exists: bool = False
-    first: bool = False
-    after_index: str | None = None
-
-    def __post_init__(self) -> None:
-        _validate_position(self.first, self.after_index, "ClickHouseIndex")
-
-
-@dataclass(frozen=True)
-class ClickHouseProjection:
-    """A projection definition. select is the raw SQL body inside the parens."""
-
-    name: str
-    select: str
-    if_not_exists: bool = False
-    first: bool = False
-    after_projection: str | None = None
-
-    def __post_init__(self) -> None:
-        _validate_position(self.first, self.after_projection, "ClickHouseProjection")
+__all__ = [
+    "AddClickHouseIndexOp",
+    "AddClickHouseIndexesOp",
+    "DropClickHouseIndexOp",
+    "DropClickHouseIndexesOp",
+    "MaterializeClickHouseIndexOp",
+    "AddClickHouseProjectionOp",
+    "AddClickHouseProjectionsOp",
+    "DropClickHouseProjectionOp",
+    "DropClickHouseProjectionsOp",
+    "MaterializeClickHouseProjectionOp",
+    "ModifyClickHouseTableSettingsOp",
+    "ResetClickHouseTableSettingsOp",
+    "CreateClickHouseViewOp",
+    "DropClickHouseViewOp",
+    "CreateClickHouseFunctionOp",
+    "DropClickHouseFunctionOp",
+    "CreateClickHouseMaterializedViewOp",
+    "DropClickHouseMaterializedViewOp",
+    "CreateClickHouseDictionaryOp",
+    "DropClickHouseDictionaryOp",
+    "ReloadClickHouseDictionaryOp",
+    "ClickHouseIndex",
+    "ClickHouseProjection",
+]
 
 
 def _validate_position(first: bool, after_name: str | None, owner: str) -> None:
@@ -49,7 +45,7 @@ def _validate_position(first: bool, after_name: str | None, owner: str) -> None:
         raise ValueError(f"{owner} cannot specify both first and after placement")
 
 
-def _exec_sql(operations: Operations, sql: str) -> None:
+def _exec_sql(operations: Operations, sql: str, *, literal_sql: bool = False) -> None:
     impl = operations.get_context().impl
     if impl.as_sql:
         impl.static_output(sql.strip() + impl.command_terminator)
@@ -57,7 +53,8 @@ def _exec_sql(operations: Operations, sql: str) -> None:
 
     connection = impl.connection
     assert connection is not None
-    connection.exec_driver_sql(sql)
+    # DB-API pyformat processing otherwise collapses literal double percent signs.
+    connection.exec_driver_sql(sql.replace("%", "%%") if literal_sql else sql)
 
 
 def _settings_suffix(clickhouse_settings: Mapping[str, Any] | None) -> str:
@@ -65,7 +62,7 @@ def _settings_suffix(clickhouse_settings: Mapping[str, Any] | None) -> str:
     return f" SETTINGS {rendered}" if rendered else ""
 
 
-def _render_column_list(operations: Operations, columns: Sequence[Column]) -> str:
+def _render_column_list(operations: Operations, columns: Sequence[Column[Any]]) -> str:
     dialect = operations.get_context().dialect
     return ", ".join(column_specification(dialect, column) for column in columns)
 
@@ -74,12 +71,7 @@ def _render_add_index(index: ClickHouseIndex) -> str:
     parts = ["ADD INDEX"]
     if index.if_not_exists:
         parts.append("IF NOT EXISTS")
-    parts.append(quote_identifier(index.name))
-    parts.append(index.expression)
-    parts.append("TYPE")
-    parts.append(index.type_)
-    if index.granularity is not None:
-        parts.append(f"GRANULARITY {index.granularity}")
+    parts.append(index_definition(index))
     if index.first:
         parts.append("FIRST")
     elif index.after_index is not None:
@@ -91,8 +83,7 @@ def _render_add_projection(projection: ClickHouseProjection) -> str:
     parts = ["ADD PROJECTION"]
     if projection.if_not_exists:
         parts.append("IF NOT EXISTS")
-    parts.append(quote_identifier(projection.name))
-    parts.append(f"({projection.select})")
+    parts.append(projection_definition(projection))
     if projection.first:
         parts.append("FIRST")
     elif projection.after_projection is not None:
@@ -101,7 +92,7 @@ def _render_add_projection(projection: ClickHouseProjection) -> str:
 
 
 @Operations.register_operation("add_clickhouse_index")
-class _AddClickHouseIndexOp(MigrateOperation):
+class AddClickHouseIndexOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -116,17 +107,17 @@ class _AddClickHouseIndexOp(MigrateOperation):
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
     ) -> None:
-        _validate_position(first, after_index, self.__class__.__name__)
-        self.table_name = table_name
-        self.name = name
-        self.expression = expression
-        self.type_ = type_
-        self.granularity = granularity
-        self.if_not_exists = if_not_exists
-        self.first = first
-        self.after_index = after_index
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        _validate_position(first, after_index, "_AddClickHouseIndexOp")
+        self.table_name: str = table_name
+        self.name: str = name
+        self.expression: str = expression
+        self.type_: str = type_
+        self.granularity: int | None = granularity
+        self.if_not_exists: bool = if_not_exists
+        self.first: bool = first
+        self.after_index: str | None = after_index
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def add_clickhouse_index(
@@ -165,17 +156,18 @@ class _AddClickHouseIndexOp(MigrateOperation):
         )
 
     def reverse(self) -> MigrateOperation:
-        return _DropClickHouseIndexOp(
+        return DropClickHouseIndexOp(
             self.table_name,
             self.name,
             if_exists=True,
             schema=self.schema,
             clickhouse_settings=self.clickhouse_settings,
+            existing_index=ClickHouseIndex(self.name, self.expression, self.type_, self.granularity),
         )
 
 
-@Operations.implementation_for(_AddClickHouseIndexOp)
-def _add_clickhouse_index(operations: Operations, operation: _AddClickHouseIndexOp) -> Any:
+@Operations.implementation_for(AddClickHouseIndexOp)
+def _add_clickhouse_index(operations: Operations, operation: AddClickHouseIndexOp) -> Any:
     index = ClickHouseIndex(
         name=operation.name,
         expression=operation.expression,
@@ -191,7 +183,7 @@ def _add_clickhouse_index(operations: Operations, operation: _AddClickHouseIndex
 
 
 @Operations.register_operation("add_clickhouse_indexes")
-class _AddClickHouseIndexesOp(MigrateOperation):
+class AddClickHouseIndexesOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -200,12 +192,12 @@ class _AddClickHouseIndexesOp(MigrateOperation):
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
     ) -> None:
-        self.table_name = table_name
-        self.indexes = tuple(indexes)
+        self.table_name: str = table_name
+        self.indexes: tuple[ClickHouseIndex, ...] = tuple(indexes)
         if not self.indexes:
             raise ValueError("add_clickhouse_indexes requires at least one index")
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def add_clickhouse_indexes(
@@ -234,7 +226,7 @@ class _AddClickHouseIndexesOp(MigrateOperation):
         )
 
     def reverse(self) -> MigrateOperation:
-        return _DropClickHouseIndexesOp(
+        return DropClickHouseIndexesOp(
             self.table_name,
             [index.name for index in self.indexes],
             if_exists=True,
@@ -243,8 +235,8 @@ class _AddClickHouseIndexesOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_AddClickHouseIndexesOp)
-def _add_clickhouse_indexes(operations: Operations, operation: _AddClickHouseIndexesOp) -> Any:
+@Operations.implementation_for(AddClickHouseIndexesOp)
+def _add_clickhouse_indexes(operations: Operations, operation: AddClickHouseIndexesOp) -> Any:
     ft = full_table(operation.table_name, operation.schema)
     subcommands = ", ".join(_render_add_index(index) for index in operation.indexes)
     sql = f"ALTER TABLE {ft} {subcommands}{_settings_suffix(operation.clickhouse_settings)}"
@@ -252,7 +244,7 @@ def _add_clickhouse_indexes(operations: Operations, operation: _AddClickHouseInd
 
 
 @Operations.register_operation("drop_clickhouse_index")
-class _DropClickHouseIndexOp(MigrateOperation):
+class DropClickHouseIndexOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -261,12 +253,28 @@ class _DropClickHouseIndexOp(MigrateOperation):
         if_exists: bool = False,
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
+        existing_index: ClickHouseIndex | None = None,
     ) -> None:
-        self.table_name = table_name
-        self.name = name
-        self.if_exists = if_exists
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.table_name: str = table_name
+        self.name: str = name
+        self.if_exists: bool = if_exists
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
+        self.existing_index: ClickHouseIndex | None = existing_index
+
+    def reverse(self) -> MigrateOperation:
+        index = self.existing_index
+        if index is None:
+            return super().reverse()
+        return AddClickHouseIndexOp(
+            self.table_name,
+            index.name,
+            index.expression,
+            index.type_,
+            granularity=index.granularity,
+            schema=self.schema,
+            clickhouse_settings=self.clickhouse_settings,
+        )
 
     @classmethod
     def drop_clickhouse_index(
@@ -293,8 +301,8 @@ class _DropClickHouseIndexOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_DropClickHouseIndexOp)
-def _drop_clickhouse_index(operations: Operations, operation: _DropClickHouseIndexOp) -> Any:
+@Operations.implementation_for(DropClickHouseIndexOp)
+def _drop_clickhouse_index(operations: Operations, operation: DropClickHouseIndexOp) -> Any:
     ft = full_table(operation.table_name, operation.schema)
     exists = "IF EXISTS " if operation.if_exists else ""
     sql = f"ALTER TABLE {ft} DROP INDEX {exists}{quote_identifier(operation.name)}{_settings_suffix(operation.clickhouse_settings)}"
@@ -302,7 +310,7 @@ def _drop_clickhouse_index(operations: Operations, operation: _DropClickHouseInd
 
 
 @Operations.register_operation("drop_clickhouse_indexes")
-class _DropClickHouseIndexesOp(MigrateOperation):
+class DropClickHouseIndexesOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -312,13 +320,13 @@ class _DropClickHouseIndexesOp(MigrateOperation):
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
     ) -> None:
-        self.table_name = table_name
-        self.names = tuple(names)
+        self.table_name: str = table_name
+        self.names: tuple[str, ...] = tuple(names)
         if not self.names:
             raise ValueError("drop_clickhouse_indexes requires at least one index name")
-        self.if_exists = if_exists
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.if_exists: bool = if_exists
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def drop_clickhouse_indexes(
@@ -342,8 +350,8 @@ class _DropClickHouseIndexesOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_DropClickHouseIndexesOp)
-def _drop_clickhouse_indexes(operations: Operations, operation: _DropClickHouseIndexesOp) -> Any:
+@Operations.implementation_for(DropClickHouseIndexesOp)
+def _drop_clickhouse_indexes(operations: Operations, operation: DropClickHouseIndexesOp) -> Any:
     ft = full_table(operation.table_name, operation.schema)
     exists = "IF EXISTS " if operation.if_exists else ""
     subcommands = ", ".join(f"DROP INDEX {exists}{quote_identifier(name)}" for name in operation.names)
@@ -352,7 +360,7 @@ def _drop_clickhouse_indexes(operations: Operations, operation: _DropClickHouseI
 
 
 @Operations.register_operation("materialize_clickhouse_index")
-class _MaterializeClickHouseIndexOp(MigrateOperation):
+class MaterializeClickHouseIndexOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -363,12 +371,12 @@ class _MaterializeClickHouseIndexOp(MigrateOperation):
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
     ) -> None:
-        self.table_name = table_name
-        self.name = name
-        self.if_exists = if_exists
-        self.partition = partition
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.table_name: str = table_name
+        self.name: str = name
+        self.if_exists: bool = if_exists
+        self.partition: str | None = partition
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def materialize_clickhouse_index(
@@ -399,8 +407,8 @@ class _MaterializeClickHouseIndexOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_MaterializeClickHouseIndexOp)
-def _materialize_clickhouse_index(operations: Operations, operation: _MaterializeClickHouseIndexOp) -> Any:
+@Operations.implementation_for(MaterializeClickHouseIndexOp)
+def _materialize_clickhouse_index(operations: Operations, operation: MaterializeClickHouseIndexOp) -> Any:
     ft = full_table(operation.table_name, operation.schema)
     exists = "IF EXISTS " if operation.if_exists else ""
     partition = f" IN PARTITION {operation.partition}" if operation.partition is not None else ""
@@ -412,7 +420,7 @@ def _materialize_clickhouse_index(operations: Operations, operation: _Materializ
 
 
 @Operations.register_operation("add_clickhouse_projection")
-class _AddClickHouseProjectionOp(MigrateOperation):
+class AddClickHouseProjectionOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -425,15 +433,15 @@ class _AddClickHouseProjectionOp(MigrateOperation):
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
     ) -> None:
-        _validate_position(first, after_projection, self.__class__.__name__)
-        self.table_name = table_name
-        self.name = name
-        self.select = select
-        self.if_not_exists = if_not_exists
-        self.first = first
-        self.after_projection = after_projection
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        _validate_position(first, after_projection, "_AddClickHouseProjectionOp")
+        self.table_name: str = table_name
+        self.name: str = name
+        self.select: str = select
+        self.if_not_exists: bool = if_not_exists
+        self.first: bool = first
+        self.after_projection: str | None = after_projection
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def add_clickhouse_projection(
@@ -468,17 +476,18 @@ class _AddClickHouseProjectionOp(MigrateOperation):
         )
 
     def reverse(self) -> MigrateOperation:
-        return _DropClickHouseProjectionOp(
+        return DropClickHouseProjectionOp(
             self.table_name,
             self.name,
             if_exists=True,
             schema=self.schema,
             clickhouse_settings=self.clickhouse_settings,
+            existing_projection=ClickHouseProjection(self.name, self.select),
         )
 
 
-@Operations.implementation_for(_AddClickHouseProjectionOp)
-def _add_clickhouse_projection(operations: Operations, operation: _AddClickHouseProjectionOp) -> Any:
+@Operations.implementation_for(AddClickHouseProjectionOp)
+def _add_clickhouse_projection(operations: Operations, operation: AddClickHouseProjectionOp) -> Any:
     projection = ClickHouseProjection(
         name=operation.name,
         select=operation.select,
@@ -492,7 +501,7 @@ def _add_clickhouse_projection(operations: Operations, operation: _AddClickHouse
 
 
 @Operations.register_operation("add_clickhouse_projections")
-class _AddClickHouseProjectionsOp(MigrateOperation):
+class AddClickHouseProjectionsOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -501,12 +510,12 @@ class _AddClickHouseProjectionsOp(MigrateOperation):
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
     ) -> None:
-        self.table_name = table_name
-        self.projections = tuple(projections)
+        self.table_name: str = table_name
+        self.projections: tuple[ClickHouseProjection, ...] = tuple(projections)
         if not self.projections:
             raise ValueError("add_clickhouse_projections requires at least one projection")
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def add_clickhouse_projections(
@@ -535,7 +544,7 @@ class _AddClickHouseProjectionsOp(MigrateOperation):
         )
 
     def reverse(self) -> MigrateOperation:
-        return _DropClickHouseProjectionsOp(
+        return DropClickHouseProjectionsOp(
             self.table_name,
             [projection.name for projection in self.projections],
             if_exists=True,
@@ -544,8 +553,8 @@ class _AddClickHouseProjectionsOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_AddClickHouseProjectionsOp)
-def _add_clickhouse_projections(operations: Operations, operation: _AddClickHouseProjectionsOp) -> Any:
+@Operations.implementation_for(AddClickHouseProjectionsOp)
+def _add_clickhouse_projections(operations: Operations, operation: AddClickHouseProjectionsOp) -> Any:
     ft = full_table(operation.table_name, operation.schema)
     subcommands = ", ".join(_render_add_projection(projection) for projection in operation.projections)
     sql = f"ALTER TABLE {ft} {subcommands}{_settings_suffix(operation.clickhouse_settings)}"
@@ -553,7 +562,7 @@ def _add_clickhouse_projections(operations: Operations, operation: _AddClickHous
 
 
 @Operations.register_operation("drop_clickhouse_projection")
-class _DropClickHouseProjectionOp(MigrateOperation):
+class DropClickHouseProjectionOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -562,12 +571,26 @@ class _DropClickHouseProjectionOp(MigrateOperation):
         if_exists: bool = False,
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
+        existing_projection: ClickHouseProjection | None = None,
     ) -> None:
-        self.table_name = table_name
-        self.name = name
-        self.if_exists = if_exists
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.table_name: str = table_name
+        self.name: str = name
+        self.if_exists: bool = if_exists
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
+        self.existing_projection: ClickHouseProjection | None = existing_projection
+
+    def reverse(self) -> MigrateOperation:
+        projection = self.existing_projection
+        if projection is None:
+            return super().reverse()
+        return AddClickHouseProjectionOp(
+            self.table_name,
+            projection.name,
+            projection.select,
+            schema=self.schema,
+            clickhouse_settings=self.clickhouse_settings,
+        )
 
     @classmethod
     def drop_clickhouse_projection(
@@ -594,8 +617,8 @@ class _DropClickHouseProjectionOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_DropClickHouseProjectionOp)
-def _drop_clickhouse_projection(operations: Operations, operation: _DropClickHouseProjectionOp) -> Any:
+@Operations.implementation_for(DropClickHouseProjectionOp)
+def _drop_clickhouse_projection(operations: Operations, operation: DropClickHouseProjectionOp) -> Any:
     ft = full_table(operation.table_name, operation.schema)
     exists = "IF EXISTS " if operation.if_exists else ""
     sql = f"ALTER TABLE {ft} DROP PROJECTION {exists}{quote_identifier(operation.name)}{_settings_suffix(operation.clickhouse_settings)}"
@@ -603,7 +626,7 @@ def _drop_clickhouse_projection(operations: Operations, operation: _DropClickHou
 
 
 @Operations.register_operation("drop_clickhouse_projections")
-class _DropClickHouseProjectionsOp(MigrateOperation):
+class DropClickHouseProjectionsOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -613,13 +636,13 @@ class _DropClickHouseProjectionsOp(MigrateOperation):
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
     ) -> None:
-        self.table_name = table_name
-        self.names = tuple(names)
+        self.table_name: str = table_name
+        self.names: tuple[str, ...] = tuple(names)
         if not self.names:
             raise ValueError("drop_clickhouse_projections requires at least one projection name")
-        self.if_exists = if_exists
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.if_exists: bool = if_exists
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def drop_clickhouse_projections(
@@ -643,8 +666,8 @@ class _DropClickHouseProjectionsOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_DropClickHouseProjectionsOp)
-def _drop_clickhouse_projections(operations: Operations, operation: _DropClickHouseProjectionsOp) -> Any:
+@Operations.implementation_for(DropClickHouseProjectionsOp)
+def _drop_clickhouse_projections(operations: Operations, operation: DropClickHouseProjectionsOp) -> Any:
     ft = full_table(operation.table_name, operation.schema)
     exists = "IF EXISTS " if operation.if_exists else ""
     subcommands = ", ".join(f"DROP PROJECTION {exists}{quote_identifier(name)}" for name in operation.names)
@@ -653,7 +676,7 @@ def _drop_clickhouse_projections(operations: Operations, operation: _DropClickHo
 
 
 @Operations.register_operation("materialize_clickhouse_projection")
-class _MaterializeClickHouseProjectionOp(MigrateOperation):
+class MaterializeClickHouseProjectionOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -664,12 +687,12 @@ class _MaterializeClickHouseProjectionOp(MigrateOperation):
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
     ) -> None:
-        self.table_name = table_name
-        self.name = name
-        self.if_exists = if_exists
-        self.partition = partition
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.table_name: str = table_name
+        self.name: str = name
+        self.if_exists: bool = if_exists
+        self.partition: str | None = partition
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def materialize_clickhouse_projection(
@@ -700,8 +723,8 @@ class _MaterializeClickHouseProjectionOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_MaterializeClickHouseProjectionOp)
-def _materialize_clickhouse_projection(operations: Operations, operation: _MaterializeClickHouseProjectionOp) -> Any:
+@Operations.implementation_for(MaterializeClickHouseProjectionOp)
+def _materialize_clickhouse_projection(operations: Operations, operation: MaterializeClickHouseProjectionOp) -> Any:
     ft = full_table(operation.table_name, operation.schema)
     exists = "IF EXISTS " if operation.if_exists else ""
     partition = f" IN PARTITION {operation.partition}" if operation.partition is not None else ""
@@ -713,7 +736,7 @@ def _materialize_clickhouse_projection(operations: Operations, operation: _Mater
 
 
 @Operations.register_operation("modify_clickhouse_table_settings")
-class _ModifyClickHouseTableSettingsOp(MigrateOperation):
+class ModifyClickHouseTableSettingsOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -721,13 +744,37 @@ class _ModifyClickHouseTableSettingsOp(MigrateOperation):
         *,
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
+        existing_settings: Mapping[str, Any] | None = None,
     ) -> None:
         if not settings:
             raise ValueError("modify_clickhouse_table_settings requires at least one setting")
-        self.table_name = table_name
-        self.settings = settings
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.table_name: str = table_name
+        self.settings: Mapping[str, Any] = settings
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
+        # Previous values for autogenerate downgrades. None means the setting was not set.
+        self.existing_settings: Mapping[str, Any] | None = existing_settings
+
+    def reverse(self) -> MigrateOperation:
+        if self.existing_settings is None:
+            raise NotImplementedError("modify_clickhouse_table_settings needs existing_settings to reverse")
+        restore = {name: value for name, value in self.existing_settings.items() if value is not None}
+        reset = [name for name, value in self.existing_settings.items() if value is None]
+        reversed_ops: list[MigrateOperation] = []
+        if restore:
+            reversed_ops.append(
+                ModifyClickHouseTableSettingsOp(self.table_name, restore, schema=self.schema, clickhouse_settings=self.clickhouse_settings)
+            )
+        if reset:
+            reversed_ops.append(
+                ResetClickHouseTableSettingsOp(self.table_name, reset, schema=self.schema, clickhouse_settings=self.clickhouse_settings)
+            )
+        if len(reversed_ops) == 1:
+            return reversed_ops[0]
+        return ModifyTableOps(self.table_name, reversed_ops, schema=self.schema)
+
+    def to_diff_tuple(self) -> tuple[Any, ...]:
+        return ("modify_clickhouse_table_settings", self.schema, self.table_name, dict(self.settings), self.existing_settings)
 
     @classmethod
     def modify_clickhouse_table_settings(
@@ -754,15 +801,15 @@ class _ModifyClickHouseTableSettingsOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_ModifyClickHouseTableSettingsOp)
-def _modify_clickhouse_table_settings(operations: Operations, operation: _ModifyClickHouseTableSettingsOp) -> Any:
+@Operations.implementation_for(ModifyClickHouseTableSettingsOp)
+def _modify_clickhouse_table_settings(operations: Operations, operation: ModifyClickHouseTableSettingsOp) -> Any:
     ft = full_table(operation.table_name, operation.schema)
     sql = f"ALTER TABLE {ft} MODIFY SETTING {render_settings(operation.settings)}{_settings_suffix(operation.clickhouse_settings)}"
     return _exec_sql(operations, sql)
 
 
 @Operations.register_operation("reset_clickhouse_table_settings")
-class _ResetClickHouseTableSettingsOp(MigrateOperation):
+class ResetClickHouseTableSettingsOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
@@ -773,10 +820,10 @@ class _ResetClickHouseTableSettingsOp(MigrateOperation):
     ) -> None:
         if not names:
             raise ValueError("reset_clickhouse_table_settings requires at least one setting name")
-        self.table_name = table_name
-        self.names = tuple(names)
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.table_name: str = table_name
+        self.names: tuple[str, ...] = tuple(names)
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def reset_clickhouse_table_settings(
@@ -802,16 +849,156 @@ class _ResetClickHouseTableSettingsOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_ResetClickHouseTableSettingsOp)
-def _reset_clickhouse_table_settings(operations: Operations, operation: _ResetClickHouseTableSettingsOp) -> Any:
+@Operations.implementation_for(ResetClickHouseTableSettingsOp)
+def _reset_clickhouse_table_settings(operations: Operations, operation: ResetClickHouseTableSettingsOp) -> Any:
     ft = full_table(operation.table_name, operation.schema)
     names = ", ".join(operation.names)
     sql = f"ALTER TABLE {ft} RESET SETTING {names}{_settings_suffix(operation.clickhouse_settings)}"
     return _exec_sql(operations, sql)
 
 
+def _view_identifier(name: str, schema: str | None) -> str:
+    # full_table omits the schema for names starting with "(", which are valid view names.
+    identifier = quote_identifier(name)
+    return f"{quote_identifier(schema)}.{identifier}" if schema else identifier
+
+
+@Operations.register_operation("create_clickhouse_view")
+class CreateClickHouseViewOp(MigrateOperation):
+    def __init__(
+        self,
+        name: str,
+        select: str,
+        *,
+        if_not_exists: bool = False,
+        or_replace: bool = False,
+        schema: str | None = None,
+    ) -> None:
+        if if_not_exists and or_replace:
+            raise ValueError("if_not_exists and or_replace are mutually exclusive")
+        self.name: str = name
+        self.select: str = select
+        self.if_not_exists: bool = if_not_exists
+        self.or_replace: bool = or_replace
+        self.schema: str | None = schema
+
+    @classmethod
+    def create_clickhouse_view(
+        cls,
+        operations: Operations,
+        name: str,
+        select: str,
+        if_not_exists: bool = False,
+        or_replace: bool = False,
+        schema: str | None = None,
+    ) -> Any:
+        """Create an ordinary view; select is raw SQL.
+
+        or_replace can replace a table or materialized view with the same name,
+        discarding its data. Guarded creation and replacement need explicit downgrades.
+        """
+        return operations.invoke(cls(name, select, if_not_exists=if_not_exists, or_replace=or_replace, schema=schema))
+
+    def reverse(self) -> MigrateOperation:
+        if self.or_replace or self.if_not_exists:
+            raise NotImplementedError("Guarded or replacement creation requires an explicit downgrade with the previous definition")
+        return DropClickHouseViewOp(self.name, if_exists=True, schema=self.schema)
+
+
+@Operations.implementation_for(CreateClickHouseViewOp)
+def _create_clickhouse_view(operations: Operations, operation: CreateClickHouseViewOp) -> None:
+    replace = " OR REPLACE" if operation.or_replace else ""
+    exists = " IF NOT EXISTS" if operation.if_not_exists else ""
+    sql = f"CREATE{replace} VIEW{exists} {_view_identifier(operation.name, operation.schema)} AS {operation.select}"
+    _exec_sql(operations, sql, literal_sql=True)
+
+
+@Operations.register_operation("drop_clickhouse_view")
+class DropClickHouseViewOp(MigrateOperation):
+    def __init__(self, name: str, *, if_exists: bool = False, schema: str | None = None) -> None:
+        self.name: str = name
+        self.if_exists: bool = if_exists
+        self.schema: str | None = schema
+
+    @classmethod
+    def drop_clickhouse_view(cls, operations: Operations, name: str, if_exists: bool = False, schema: str | None = None) -> Any:
+        """Drop a view."""
+        return operations.invoke(cls(name, if_exists=if_exists, schema=schema))
+
+
+@Operations.implementation_for(DropClickHouseViewOp)
+def _drop_clickhouse_view(operations: Operations, operation: DropClickHouseViewOp) -> None:
+    exists = " IF EXISTS" if operation.if_exists else ""
+    _exec_sql(operations, f"DROP VIEW{exists} {_view_identifier(operation.name, operation.schema)}", literal_sql=True)
+
+
+@Operations.register_operation("create_clickhouse_function")
+class CreateClickHouseFunctionOp(MigrateOperation):
+    def __init__(
+        self,
+        name: str,
+        expression: str,
+        *,
+        if_not_exists: bool = False,
+        or_replace: bool = False,
+    ) -> None:
+        if if_not_exists and or_replace:
+            raise ValueError("if_not_exists and or_replace are mutually exclusive")
+        self.name: str = name
+        self.expression: str = expression
+        self.if_not_exists: bool = if_not_exists
+        self.or_replace: bool = or_replace
+
+    @classmethod
+    def create_clickhouse_function(
+        cls,
+        operations: Operations,
+        name: str,
+        expression: str,
+        if_not_exists: bool = False,
+        or_replace: bool = False,
+    ) -> Any:
+        """Create a server-global SQL function; expression is a raw SQL lambda.
+
+        Function names are not database-scoped. Guarded creation and replacement
+        need explicit downgrades with the previous definition.
+        """
+        return operations.invoke(cls(name, expression, if_not_exists=if_not_exists, or_replace=or_replace))
+
+    def reverse(self) -> MigrateOperation:
+        if self.or_replace or self.if_not_exists:
+            raise NotImplementedError("Guarded or replacement creation requires an explicit downgrade with the previous definition")
+        return DropClickHouseFunctionOp(self.name, if_exists=True)
+
+
+@Operations.implementation_for(CreateClickHouseFunctionOp)
+def _create_clickhouse_function(operations: Operations, operation: CreateClickHouseFunctionOp) -> None:
+    replace = " OR REPLACE" if operation.or_replace else ""
+    exists = " IF NOT EXISTS" if operation.if_not_exists else ""
+    sql = f"CREATE{replace} FUNCTION{exists} {quote_identifier(operation.name)} AS {operation.expression}"
+    _exec_sql(operations, sql, literal_sql=True)
+
+
+@Operations.register_operation("drop_clickhouse_function")
+class DropClickHouseFunctionOp(MigrateOperation):
+    def __init__(self, name: str, *, if_exists: bool = False) -> None:
+        self.name: str = name
+        self.if_exists: bool = if_exists
+
+    @classmethod
+    def drop_clickhouse_function(cls, operations: Operations, name: str, if_exists: bool = False) -> Any:
+        """Drop a server-global SQL function."""
+        return operations.invoke(cls(name, if_exists=if_exists))
+
+
+@Operations.implementation_for(DropClickHouseFunctionOp)
+def _drop_clickhouse_function(operations: Operations, operation: DropClickHouseFunctionOp) -> None:
+    exists = " IF EXISTS" if operation.if_exists else ""
+    _exec_sql(operations, f"DROP FUNCTION{exists} {quote_identifier(operation.name)}", literal_sql=True)
+
+
 @Operations.register_operation("create_clickhouse_materialized_view")
-class _CreateClickHouseMaterializedViewOp(MigrateOperation):
+class CreateClickHouseMaterializedViewOp(MigrateOperation):
     def __init__(
         self,
         name: str,
@@ -822,12 +1009,12 @@ class _CreateClickHouseMaterializedViewOp(MigrateOperation):
         schema: str | None = None,
         to_schema: str | None = None,
     ) -> None:
-        self.name = name
-        self.to_table = to_table
-        self.select = select
-        self.if_not_exists = if_not_exists
-        self.schema = schema
-        self.to_schema = to_schema
+        self.name: str = name
+        self.to_table: str = to_table
+        self.select: str = select
+        self.if_not_exists: bool = if_not_exists
+        self.schema: str | None = schema
+        self.to_schema: str | None = to_schema
 
     @classmethod
     def create_clickhouse_materialized_view(
@@ -859,15 +1046,15 @@ class _CreateClickHouseMaterializedViewOp(MigrateOperation):
         )
 
     def reverse(self) -> MigrateOperation:
-        return _DropClickHouseMaterializedViewOp(
+        return DropClickHouseMaterializedViewOp(
             self.name,
             if_exists=True,
             schema=self.schema,
         )
 
 
-@Operations.implementation_for(_CreateClickHouseMaterializedViewOp)
-def _create_clickhouse_materialized_view(operations: Operations, operation: _CreateClickHouseMaterializedViewOp) -> Any:
+@Operations.implementation_for(CreateClickHouseMaterializedViewOp)
+def _create_clickhouse_materialized_view(operations: Operations, operation: CreateClickHouseMaterializedViewOp) -> Any:
     exists = " IF NOT EXISTS" if operation.if_not_exists else ""
     sql = (
         f"CREATE MATERIALIZED VIEW{exists} {full_table(operation.name, operation.schema)} "
@@ -877,7 +1064,7 @@ def _create_clickhouse_materialized_view(operations: Operations, operation: _Cre
 
 
 @Operations.register_operation("drop_clickhouse_materialized_view")
-class _DropClickHouseMaterializedViewOp(MigrateOperation):
+class DropClickHouseMaterializedViewOp(MigrateOperation):
     def __init__(
         self,
         name: str,
@@ -886,10 +1073,10 @@ class _DropClickHouseMaterializedViewOp(MigrateOperation):
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
     ) -> None:
-        self.name = name
-        self.if_exists = if_exists
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.name: str = name
+        self.if_exists: bool = if_exists
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def drop_clickhouse_materialized_view(
@@ -911,19 +1098,19 @@ class _DropClickHouseMaterializedViewOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_DropClickHouseMaterializedViewOp)
-def _drop_clickhouse_materialized_view(operations: Operations, operation: _DropClickHouseMaterializedViewOp) -> Any:
+@Operations.implementation_for(DropClickHouseMaterializedViewOp)
+def _drop_clickhouse_materialized_view(operations: Operations, operation: DropClickHouseMaterializedViewOp) -> Any:
     exists = " IF EXISTS" if operation.if_exists else ""
     sql = f"DROP VIEW{exists} {full_table(operation.name, operation.schema)}{_settings_suffix(operation.clickhouse_settings)}"
     return _exec_sql(operations, sql)
 
 
 @Operations.register_operation("create_clickhouse_dictionary")
-class _CreateClickHouseDictionaryOp(MigrateOperation):
+class CreateClickHouseDictionaryOp(MigrateOperation):
     def __init__(
         self,
         name: str,
-        columns: Sequence[Column],
+        columns: Sequence[Column[Any]],
         *,
         primary_key: str,
         source: str,
@@ -934,25 +1121,25 @@ class _CreateClickHouseDictionaryOp(MigrateOperation):
         comment: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
     ) -> None:
-        self.name = name
-        self.columns = tuple(columns)
+        self.name: str = name
+        self.columns: tuple[Column[Any], ...] = tuple(columns)
         if not self.columns:
             raise ValueError("create_clickhouse_dictionary requires at least one column")
-        self.primary_key = primary_key
-        self.source = source
-        self.layout = layout
-        self.lifetime = lifetime
-        self.if_not_exists = if_not_exists
-        self.schema = schema
-        self.comment = comment
-        self.clickhouse_settings = clickhouse_settings
+        self.primary_key: str = primary_key
+        self.source: str = source
+        self.layout: str = layout
+        self.lifetime: str = lifetime
+        self.if_not_exists: bool = if_not_exists
+        self.schema: str | None = schema
+        self.comment: str | None = comment
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def create_clickhouse_dictionary(
         cls,
         operations: Operations,
         name: str,
-        columns: Sequence[Column],
+        columns: Sequence[Column[Any]],
         *,
         primary_key: str,
         source: str,
@@ -984,7 +1171,7 @@ class _CreateClickHouseDictionaryOp(MigrateOperation):
         )
 
     def reverse(self) -> MigrateOperation:
-        return _DropClickHouseDictionaryOp(
+        return DropClickHouseDictionaryOp(
             self.name,
             if_exists=True,
             schema=self.schema,
@@ -992,8 +1179,8 @@ class _CreateClickHouseDictionaryOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_CreateClickHouseDictionaryOp)
-def _create_clickhouse_dictionary(operations: Operations, operation: _CreateClickHouseDictionaryOp) -> Any:
+@Operations.implementation_for(CreateClickHouseDictionaryOp)
+def _create_clickhouse_dictionary(operations: Operations, operation: CreateClickHouseDictionaryOp) -> Any:
     exists = " IF NOT EXISTS" if operation.if_not_exists else ""
     layout = operation.layout if "(" in operation.layout else f"{operation.layout}()"
     sql = (
@@ -1014,7 +1201,7 @@ def _create_clickhouse_dictionary(operations: Operations, operation: _CreateClic
 
 
 @Operations.register_operation("drop_clickhouse_dictionary")
-class _DropClickHouseDictionaryOp(MigrateOperation):
+class DropClickHouseDictionaryOp(MigrateOperation):
     def __init__(
         self,
         name: str,
@@ -1023,10 +1210,10 @@ class _DropClickHouseDictionaryOp(MigrateOperation):
         schema: str | None = None,
         clickhouse_settings: Mapping[str, Any] | None = None,
     ) -> None:
-        self.name = name
-        self.if_exists = if_exists
-        self.schema = schema
-        self.clickhouse_settings = clickhouse_settings
+        self.name: str = name
+        self.if_exists: bool = if_exists
+        self.schema: str | None = schema
+        self.clickhouse_settings: Mapping[str, Any] | None = clickhouse_settings
 
     @classmethod
     def drop_clickhouse_dictionary(
@@ -1048,18 +1235,18 @@ class _DropClickHouseDictionaryOp(MigrateOperation):
         )
 
 
-@Operations.implementation_for(_DropClickHouseDictionaryOp)
-def _drop_clickhouse_dictionary(operations: Operations, operation: _DropClickHouseDictionaryOp) -> Any:
+@Operations.implementation_for(DropClickHouseDictionaryOp)
+def _drop_clickhouse_dictionary(operations: Operations, operation: DropClickHouseDictionaryOp) -> Any:
     exists = " IF EXISTS" if operation.if_exists else ""
     sql = f"DROP DICTIONARY{exists} {full_table(operation.name, operation.schema)}{_settings_suffix(operation.clickhouse_settings)}"
     return _exec_sql(operations, sql)
 
 
 @Operations.register_operation("reload_clickhouse_dictionary")
-class _ReloadClickHouseDictionaryOp(MigrateOperation):
+class ReloadClickHouseDictionaryOp(MigrateOperation):
     def __init__(self, name: str, *, schema: str | None = None) -> None:
-        self.name = name
-        self.schema = schema
+        self.name: str = name
+        self.schema: str | None = schema
 
     @classmethod
     def reload_clickhouse_dictionary(
@@ -1076,7 +1263,31 @@ class _ReloadClickHouseDictionaryOp(MigrateOperation):
         return operations.invoke(cls(name, schema=schema))
 
 
-@Operations.implementation_for(_ReloadClickHouseDictionaryOp)
-def _reload_clickhouse_dictionary(operations: Operations, operation: _ReloadClickHouseDictionaryOp) -> Any:
+@Operations.implementation_for(ReloadClickHouseDictionaryOp)
+def _reload_clickhouse_dictionary(operations: Operations, operation: ReloadClickHouseDictionaryOp) -> Any:
     sql = f"SYSTEM RELOAD DICTIONARY {full_table(operation.name, operation.schema)}"
     return _exec_sql(operations, sql)
+
+
+# Compatibility aliases preserve existing imports.
+_AddClickHouseIndexOp = AddClickHouseIndexOp
+_AddClickHouseIndexesOp = AddClickHouseIndexesOp
+_DropClickHouseIndexOp = DropClickHouseIndexOp
+_DropClickHouseIndexesOp = DropClickHouseIndexesOp
+_MaterializeClickHouseIndexOp = MaterializeClickHouseIndexOp
+_AddClickHouseProjectionOp = AddClickHouseProjectionOp
+_AddClickHouseProjectionsOp = AddClickHouseProjectionsOp
+_DropClickHouseProjectionOp = DropClickHouseProjectionOp
+_DropClickHouseProjectionsOp = DropClickHouseProjectionsOp
+_MaterializeClickHouseProjectionOp = MaterializeClickHouseProjectionOp
+_ModifyClickHouseTableSettingsOp = ModifyClickHouseTableSettingsOp
+_ResetClickHouseTableSettingsOp = ResetClickHouseTableSettingsOp
+_CreateClickHouseViewOp = CreateClickHouseViewOp
+_DropClickHouseViewOp = DropClickHouseViewOp
+_CreateClickHouseFunctionOp = CreateClickHouseFunctionOp
+_DropClickHouseFunctionOp = DropClickHouseFunctionOp
+_CreateClickHouseMaterializedViewOp = CreateClickHouseMaterializedViewOp
+_DropClickHouseMaterializedViewOp = DropClickHouseMaterializedViewOp
+_CreateClickHouseDictionaryOp = CreateClickHouseDictionaryOp
+_DropClickHouseDictionaryOp = DropClickHouseDictionaryOp
+_ReloadClickHouseDictionaryOp = ReloadClickHouseDictionaryOp

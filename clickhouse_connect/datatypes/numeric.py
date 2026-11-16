@@ -2,7 +2,7 @@ import array
 import decimal
 import struct
 from collections.abc import MutableSequence, Sequence
-from math import isinf, isnan, nan
+from math import isfinite, nan
 from typing import Any
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef, _TypeArgs
@@ -10,6 +10,7 @@ from clickhouse_connect.driver import ctypes as driver_ctypes
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.common import array_type, decimal_prec, decimal_size, first_value, write_array
 from clickhouse_connect.driver.ctypes import data_conv
+from clickhouse_connect.driver.exceptions import DataError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.parser import escape_enum_key
 from clickhouse_connect.driver.query import QueryContext
@@ -38,18 +39,27 @@ class IntBase(ArrayType, registered=False):
         if np is not None and isinstance(column, np.ndarray) and column.dtype.kind in ("i", "u"):
             data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
             return
-        if self.nullable:
-            first = next((x for x in column if x is not None), None)
-            if isinstance(first, int):
-                column = [0 if x is None else x for x in column]
-            elif isinstance(first, float):
-                column = [0 if x is None or isnan(x) or isinf(x) else int(x) for x in column]
-            else:
-                column = [int(x) if x else 0 for x in column]
-        elif isinstance(column[0], float):
-            column = [0 if x is None or isnan(x) or isinf(x) else int(x) for x in column]
-        elif not isinstance(column[0], int):
-            column = [int(x) for x in column]
+        try:
+            if self.nullable:
+                first = next((x for x in column if x is not None), None)
+                if isinstance(first, int):
+                    column = [0 if x is None else x for x in column]
+                elif isinstance(first, float) or (np is not None and isinstance(first, np.floating)):
+                    column = [0 if x is None else int(x) for x in column]
+                else:
+                    column = [int(x) if x else 0 for x in column]
+            elif not isinstance(column[0], int):
+                column = [int(x) for x in column]
+        except (ValueError, OverflowError):
+            float_types = (float, np.floating) if np is not None else (float,)
+            value = next((x for x in column if isinstance(x, float_types) and not isfinite(x)), None)
+            if value is None:
+                raise
+            raise ctx.data_error(f"{self.name} value {float(value)} is not finite; pass an integer value") from None
+        except TypeError:
+            if not self.nullable and any(x is None for x in column):
+                raise ctx.data_error(f"None in non-Nullable {self.name} column") from None
+            raise
         data_conv.write_native_col(self._array_type, column, dest, ctx.column_name)
 
 
@@ -165,6 +175,13 @@ class BigInt(ClickHouseType, registered=False):
             else:
                 for x in column:
                     ext(x.to_bytes(sz, "little", signed=signed))
+
+    def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if ctx.as_pandas and self.nullable:
+            # pandas infers float64 for ints with None, and pd.concat of int64 and uint64 blocks gives float64.
+            # Both lose precision above 2**53, so keep the Python ints in an object column.
+            return options.np.array(column, dtype=object)
+        return column
 
 
 class Int128(BigInt):
@@ -325,7 +342,7 @@ class Boolean(Bool):
 
 
 class Enum(ClickHouseType):
-    __slots__ = "_name_map", "_int_map"
+    __slots__ = "_name_map", "_int_map", "_write_name_map"
     _array_type = "b"
     valid_formats = "native", "int"
     python_type = str
@@ -335,6 +352,7 @@ class Enum(ClickHouseType):
         super().__init__(type_def)
         escaped_keys = [escape_enum_key(key) for key in type_def.keys]
         self._name_map = dict(zip(type_def.keys, type_def.values))
+        self._write_name_map = {None: 0, **self._name_map} if self.nullable else self._name_map
         self._int_map = dict(zip(type_def.values, type_def.keys))
         val_str = ", ".join(f"'{key}' = {value}" for key, value in zip(escaped_keys, type_def.values))
         self._name_suffix = f"({val_str})"
@@ -347,14 +365,30 @@ class Enum(ClickHouseType):
         return [lookup(x, None) for x in column]
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
-        first = first_value(column, self.nullable)
-        if first is None or not isinstance(first, str):
-            if self.nullable:
-                column = [0 if not x else x for x in column]
-            write_array(self._array_type, column, dest, ctx.column_name)
+        lookup = self._name_map
+        nullable = self.nullable
+        if isinstance(first_value(column, nullable), str):
+            write_lookup = self._write_name_map
+            try:
+                values = [write_lookup[value] for value in column]
+            except (KeyError, TypeError):
+                pass
+            else:
+                write_array(self._array_type, values, dest, ctx.column_name)
+                return
         else:
-            lookup = self._name_map.get
-            write_array(self._array_type, [lookup(x, 0) for x in column], dest, ctx.column_name)
+            try:
+                if nullable:
+                    column = [0 if value is None else value for value in column]
+                write_array(self._array_type, column, dest, ctx.column_name)
+                return
+            except DataError:
+                pass
+        try:
+            column = [lookup[value] if isinstance(value, str) else 0 if value is None and nullable else value for value in column]
+        except KeyError as ex:
+            raise ctx.data_error(f"Enum label {ex.args[0]!r} is not defined in {self.name}") from None
+        write_array(self._array_type, column, dest, ctx.column_name)
 
 
 class Enum8(Enum):
@@ -407,7 +441,8 @@ class Decimal(ClickHouseType):
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         with decimal.localcontext() as dec_ctx:
-            dec_ctx.prec = self.prec
+            dec_ctx.prec = decimal.MAX_PREC
+            dec_ctx.clamp = 0
             dec = decimal.Decimal
             mult = self._mult
             if self.nullable:
@@ -446,7 +481,8 @@ class BigDecimal(Decimal, registered=False):
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, _ctx):
         with decimal.localcontext() as ctx:
-            ctx.prec = self.prec
+            ctx.prec = decimal.MAX_PREC
+            ctx.clamp = 0
             mult = decimal.Decimal(f"{self._mult}.{'0' * self.scale}")
             sz = self.byte_size
             itb = int.to_bytes

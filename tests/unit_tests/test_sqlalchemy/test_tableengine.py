@@ -25,6 +25,16 @@ def test_simple_engine_construction(engine_cls):
     assert eval(repr(engine), vars(engines)).compile() == engine.compile()
 
 
+@pytest.mark.parametrize("expression", ["`Null`", '"Null"', "`Null`()"])
+def test_quoted_engine_name_round_trip(expression):
+    engine = build_engine(expression)
+    assert isinstance(engine, engines.Null)
+    assert engine.name == "Null"
+    assert repr(engine) == "Null()"
+    reconstructed = eval(repr(engine), vars(engines))
+    assert reconstructed.compile() == "Engine Null"
+
+
 @pytest.mark.parametrize("engine_cls", simple_engines)
 @pytest.mark.parametrize("keyword", [False, True])
 def test_simple_engine_legacy_mapping(engine_cls, keyword):
@@ -163,3 +173,22 @@ def test_reflected_engine_alembic_execution(engine_sql):
     namespace = {"sa": sa, "op": Operations(offline), **vars(engines), **vars(types)}
     exec("def upgrade():\n" + generated + "\nupgrade()", namespace)
     assert "Engine " + engine_sql in output.getvalue()
+
+
+def test_build_engine_setting_named_like_a_clause_is_not_a_clause():
+    engine = engines.build_engine(
+        "MergeTree ORDER BY ts TTL ts + toIntervalDay(30) SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1"
+    )
+    assert engine is not None
+    assert engine._orig_kwargs["ttl"] == "ts + toIntervalDay(30)"
+    assert engine.settings == {"index_granularity": 8192, "ttl_only_drop_parts": 1}
+    engine = engines.build_engine("MergeTree ORDER BY ts SETTINGS ttl_only_drop_parts = 1")
+    assert engine is not None
+    assert "ttl" not in engine._orig_kwargs
+    assert engine.settings == {"ttl_only_drop_parts": 1}
+
+
+def test_build_engine_clause_keyword_followed_by_paren():
+    engine = engines.build_engine("MergeTree ORDER BY(a, b) SETTINGS index_granularity = 8192")
+    assert engine is not None
+    assert engine._orig_kwargs["order_by"] == "(a, b)"

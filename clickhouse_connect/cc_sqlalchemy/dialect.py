@@ -27,14 +27,21 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.base import (
     _QueryValueSignature,
     _typed_query_value,
 )
+from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex
+from clickhouse_connect.cc_sqlalchemy.ddl.projection import ClickHouseProjection
 from clickhouse_connect.cc_sqlalchemy.inspector import (
     _INTERNAL_QUERY_OPTION,
     _INTERNAL_QUERY_SENTINEL,
     ChInspector,
     _database_name,
     _NoSuchTableError,
+    get_clickhouse_function_definition,
+    get_clickhouse_function_names,
+    get_clickhouse_indexes,
+    get_clickhouse_projections,
     get_columns,
     get_table_metadata,
+    get_view_definition,
     with_internal_query_formats,
 )
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
@@ -541,7 +548,10 @@ class ClickHouseDialect(DefaultDialect):
         return []
 
     def get_view_definition(self, connection, view_name, schema=None, **kw):
-        raise NoSuchTableError(f"{schema}.{view_name}" if schema else view_name)
+        definition = get_view_definition(connection, view_name, schema)
+        if definition is None:
+            raise NoSuchTableError(f"{schema}.{view_name}" if schema else view_name)
+        return definition
 
     def get_table_comment(self, connection, table_name, schema=None, **kw):
         try:
@@ -552,6 +562,22 @@ class ClickHouseDialect(DefaultDialect):
 
     def get_indexes(self, connection, table_name, schema=None, **kw):
         return []
+
+    def get_clickhouse_function_names(self, connection: Connection) -> list[str]:
+        return get_clickhouse_function_names(connection)
+
+    def get_clickhouse_function_definition(self, connection: Connection, function_name: str) -> str:
+        return get_clickhouse_function_definition(connection, function_name)
+
+    def get_clickhouse_indexes(
+        self, connection: Connection, table_name: str, schema: str | None = None, **kwargs: Any
+    ) -> list[ClickHouseIndex]:
+        return get_clickhouse_indexes(connection, table_name, schema)
+
+    def get_clickhouse_projections(
+        self, connection: Connection, table_name: str, schema: str | None = None, **kwargs: Any
+    ) -> list[ClickHouseProjection]:
+        return get_clickhouse_projections(connection, table_name, schema)
 
     def get_unique_constraints(self, connection, table_name, schema=None, **kw):
         return []

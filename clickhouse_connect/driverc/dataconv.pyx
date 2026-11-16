@@ -23,9 +23,8 @@ from libc.string cimport memcpy
 from datetime import tzinfo
 
 from clickhouse_connect.driver import tzutil, options
-from clickhouse_connect.driver.common import must_swap
+from clickhouse_connect.driver.common import _native_array_error, must_swap
 from clickhouse_connect.driver.errors import NONE_IN_NULLABLE_COLUMN
-from clickhouse_connect.driver.exceptions import DataError
 
 # Initialize datetime C API for direct object construction
 import_datetime()
@@ -584,15 +583,7 @@ def write_native_col(str code, column, bytearray dest, object col_name=None) -> 
     try:
         dest += struct.Struct(f"<{num_rows}{code}").pack(*column)
     except (TypeError, OverflowError, struct.error) as ex:
-        col_msg = f" for column `{str(col_name)}`" if col_name else ""
-        error_detail = type(ex).__name__
-        if isinstance(ex, OverflowError):
-            error_detail = "value out of range"
-        elif isinstance(ex, TypeError):
-            error_detail = "type mismatch (usually None in non-Nullable column)"
-        raise DataError(
-            f"Unable to create native array{col_msg}: {error_detail}"
-        ) from ex
+        raise _native_array_error(ex, col_name) from ex
     return 0
 
 

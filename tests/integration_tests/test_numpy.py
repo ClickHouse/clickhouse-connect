@@ -36,6 +36,48 @@ def test_numpy_dates(param_client: Client, call, table_context: Callable):
         assert np.array_equal(source_arr, np_array)
 
 
+@pytest.mark.parametrize(
+    "type_name, value, unit, expected",
+    [
+        ("DateTime", "2024-05-06T07:08:09.123456789", "ns", "2024-05-06 07:08:09"),
+        ("DateTime", "2024-05-06", "D", "2024-05-06 00:00:00"),
+        ("DateTime64(3)", "2024-05-06T07:08:09.123456789", "ns", "2024-05-06 07:08:09.123"),
+        ("DateTime64(3)", "2024-05-06T07:08:09", "s", "2024-05-06 07:08:09.000"),
+        ("DateTime64(3)", "1969-12-31T23:59:59.999999", "us", "1969-12-31 23:59:59.999"),
+        ("DateTime64(6)", "2024-05-06T07:08:09.123", "ms", "2024-05-06 07:08:09.123000"),
+        ("DateTime64(9)", "2024-05-06T07:08:09.123456", "us", "2024-05-06 07:08:09.123456000"),
+        ("DateTime64(9)", "2024-05-06T07:08:09.123456789", "ns", "2024-05-06 07:08:09.123456789"),
+        ("Nullable(DateTime64(3))", "2024-05-06T07:08:09.123456", "us", "2024-05-06 07:08:09.123"),
+        ("Date", "2024-05-06T07:08:09.123456789", "ns", "2024-05-06"),
+        ("Date32", "1900-01-02T03:04:05", "s", "1900-01-02"),
+        ("Date32", "2024-05-06", "D", "2024-05-06"),
+    ],
+)
+@pytest.mark.parametrize("shape", ["structured", "rows", "columns"])
+def test_numpy_datetime64_unit_conversion(param_client: Client, call, table_context: Callable, type_name, value, unit, expected, shape):
+    dt_type = f"datetime64[{unit}]"
+    with table_context("test_numpy_dt64_unit", ["v"], [type_name], order_by="tuple()"):
+        if shape == "structured":
+            np_array = np.array([(np.datetime64(value),)], dtype=[("v", dt_type)])
+        else:
+            np_array = np.array([[np.datetime64(value)]], dtype=dt_type)
+        call(param_client.insert, "test_numpy_dt64_unit", np_array, column_oriented=shape == "columns")
+        assert call(param_client.command, "SELECT toString(v) FROM test_numpy_dt64_unit") == expected
+
+
+@pytest.mark.parametrize("column_oriented", [False, True])
+def test_numpy_datetime64_2d_mixed_columns(param_client: Client, call, table_context: Callable, column_oriented):
+    values = np.array(["2024-05-06T07:08:09.123456789", "1999-12-31T23:59:59.5"], dtype="datetime64[ns]")
+    with table_context("test_numpy_dt64_mixed", ["d", "dt", "dt64"], ["Date", "DateTime", "DateTime64(6)"]):
+        np_array = np.stack([values] * 3) if column_oriented else np.stack([values] * 3, axis=1)
+        call(param_client.insert, "test_numpy_dt64_mixed", np_array, column_oriented=column_oriented)
+        result = call(param_client.query, "SELECT toString(d), toString(dt), toString(dt64) FROM test_numpy_dt64_mixed ORDER BY d")
+        assert result.result_rows == [
+            ("1999-12-31", "1999-12-31 23:59:59", "1999-12-31 23:59:59.500000"),
+            ("2024-05-06", "2024-05-06 07:08:09", "2024-05-06 07:08:09.123456"),
+        ]
+
+
 @pytest.mark.skipif(pd is None, reason="Pandas package not installed")
 @pytest.mark.parametrize("date_type, value", [("Date", "2023-05-04"), ("Date32", "1968-04-15")])
 @pytest.mark.parametrize("has_null", [False, True])

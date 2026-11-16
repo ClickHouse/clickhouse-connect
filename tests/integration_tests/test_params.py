@@ -2,6 +2,7 @@ import os
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timezone
+from enum import Enum
 
 import pytest
 
@@ -263,6 +264,29 @@ def test_server_bind_between_repeated_binary_markers(param_client: Client, call)
         parameters={"$x$": b"user_1", "a": 13},
     ).first_row
     assert row == ("user_1", 13, "user_1")
+
+
+class ParamEnum(Enum):
+    LABEL = "user_1's"
+    CODE = 13
+    DAY = date(2023, 6, 1)
+
+
+def test_server_bind_enum_values(param_client: Client, call):
+    query = "SELECT {s:String}, {e:Enum8('user_1''s' = 1)}, {i:Int32}, {d:Date}, {a:Array(String)}, {t:Tuple(Date, Int32)}"
+    values = {
+        "s": ParamEnum.LABEL,
+        "e": ParamEnum.LABEL,
+        "i": ParamEnum.CODE,
+        "d": ParamEnum.DAY,
+        "a": [ParamEnum.LABEL],
+        "t": (ParamEnum.DAY, ParamEnum.CODE),
+    }
+    expected = ("user_1's", "user_1's", 13, date(2023, 6, 1), ["user_1's"], (date(2023, 6, 1), 13))
+    assert call(param_client.query, query, parameters=values).first_row == expected
+    # The same values without the Enum wrapper give the same result
+    plain = dict(zip(values, expected))
+    assert call(param_client.query, query, parameters=plain).first_row == expected
 
 
 def test_decoy_placeholder_with_escaped_percent_literal(param_client: Client, call):

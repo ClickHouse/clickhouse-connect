@@ -93,9 +93,10 @@ def parse_enum(expr) -> tuple[tuple[str, ...], tuple[int, ...]]:
     :return: Parallel tuples of string enum keys and integer enum values
     """
     keys = []
-    values = []
+    values: list[int | None] = []
     pos = expr.find("(") + 1
     in_key = False
+    assigned = False
     key: list[str] = []
     value: list[str] = []
     while True:
@@ -118,18 +119,28 @@ def parse_enum(expr) -> tuple[tuple[str, ...], tuple[int, ...]]:
                 pos += 1
             else:
                 key.append(char)
-        elif char not in (" ", "="):
-            if char == ",":
-                values.append(int("".join(value)))
+        elif char == "=":
+            assigned = True
+        elif char != " ":
+            if char in (",", ")"):
+                values.append(int("".join(value)) if value or assigned else None)
                 value = []
-            elif char == ")":
-                values.append(int("".join(value)))
-                break
+                assigned = False
+                if char == ")":
+                    break
             elif char == "'" and not value:
                 in_key = True
             else:
                 value.append(char)
-    sorted_values, sorted_keys = zip(*sorted(zip(values, keys)))
+    if len(keys) != len(values):
+        raise ValueError("Enum keys and values must have the same length")
+    implicit = [number is None for number in values[1:]]
+    if any(implicit) and not all(implicit):
+        raise ValueError("Enum elements after the first must all have explicit values or all omit them")
+    first = values[0]
+    base = 1 if first is None else first
+    assigned_values = [base + index if number is None else number for index, number in enumerate(values)]
+    sorted_values, sorted_keys = zip(*sorted(zip(assigned_values, keys)))
     return tuple(sorted_keys), tuple(sorted_values)
 
 

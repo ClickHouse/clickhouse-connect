@@ -454,7 +454,7 @@ def test_nullable_tuple_mask_preserves_visible_validation(element_type, value):
     ],
 )
 def test_nullable_tuple_mask_preserves_missing_key_validation(type_name, values):
-    with pytest.raises(TypeError):
+    with pytest.raises(DataError, match="None in non-Nullable UInt64 column"):
         registry.get_from_name(type_name).write_column(values, bytearray(), InsertContext("", [], []))
 
 

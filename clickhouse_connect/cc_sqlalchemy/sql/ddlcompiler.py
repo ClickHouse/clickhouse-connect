@@ -11,6 +11,8 @@ from sqlalchemy.sql.visitors import Visitable
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
+from clickhouse_connect.cc_sqlalchemy.ddl.index import index_definition, table_indexes
+from clickhouse_connect.cc_sqlalchemy.ddl.projection import projection_definition, table_projections
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
 from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.driver.binding import format_str, quote_identifier
@@ -119,9 +121,9 @@ class ClickHouseDDLHelper:
         return render_setting_value(value)
 
 
-def column_specification(dialect, column: Column) -> str:
+def column_specification(dialect, column: Column, *, include_type: bool = True) -> str:
     compiler = dialect.ddl_compiler(dialect, None)
-    return compiler.get_column_specification(column)
+    return compiler.get_column_specification(column, include_type=include_type)
 
 
 class ChDDLCompiler(DDLCompiler):
@@ -136,6 +138,10 @@ class ChDDLCompiler(DDLCompiler):
         if_not_exists = " IF NOT EXISTS" if getattr(create, "if_not_exists", False) else ""
 
         if ClickHouseDDLHelper.is_dictionary(table):
+            if table_indexes(table):
+                raise CompileError("Dictionaries do not support data skipping indexes")
+            if table_projections(table):
+                raise CompileError("Dictionaries do not support projections")
             return self._visit_create_dictionary(create, table, if_not_exists)
 
         engine = getattr(table, "engine", None) or ClickHouseDDLHelper.get_option(table, "engine")
@@ -144,7 +150,11 @@ class ChDDLCompiler(DDLCompiler):
                 f"ClickHouse table '{table.name}' requires an engine — specify e.g. MergeTree(order_by='id') as a table argument"
             )
         text = f"CREATE TABLE{if_not_exists} {format_table(table)} ("
-        text += ", ".join([self.get_column_specification(c.element) for c in create.columns])
+        text += ", ".join(
+            [self.get_column_specification(c.element) for c in create.columns]
+            + [f"INDEX {index_definition(index)}" for index in table_indexes(table)]
+            + [f"PROJECTION {projection_definition(projection)}" for projection in table_projections(table)]
+        )
         text += ") " + engine.compile()
         if table.comment:
             text += f" COMMENT {self.sql_compiler.render_literal_value(table.comment, sqltypes.STRINGTYPE)}"
@@ -190,10 +200,12 @@ class ChDDLCompiler(DDLCompiler):
     def visit_drop_column(self, drop, **_):
         return f"ALTER TABLE {format_table(drop.element)} DROP COLUMN {quote_identifier(drop.column.name)}"
 
-    def get_column_specification(self, column: Column, **_):
-        effective_type = ClickHouseDDLHelper.effective_column_type(column)
-        compiled_type = self.dialect.type_compiler.process(effective_type, type_expression=column)
-        text = f"{quote_identifier(column.name)} {compiled_type}"
+    def get_column_specification(self, column: Column, include_type: bool = True, **_):
+        text = quote_identifier(column.name)
+        if include_type:
+            effective_type = ClickHouseDDLHelper.effective_column_type(column)
+            compiled_type = self.dialect.type_compiler.process(effective_type, type_expression=column)
+            text += f" {compiled_type}"
         materialized = ClickHouseDDLHelper.get_option(column, "materialized")
         alias = ClickHouseDDLHelper.get_option(column, "alias")
         # DEFAULT, MATERIALIZED, and ALIAS are mutually exclusive in ClickHouse.

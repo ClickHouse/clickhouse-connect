@@ -352,7 +352,7 @@ class Client(ABC):
         return setting_status(self.server_settings, key)
 
     def _prep_query(self, context: QueryContext):
-        if context.is_select and not context.has_limit and self.query_limit:
+        if self.query_limit and context.is_select and not context.has_limit:
             limit = f"\n LIMIT {self.query_limit}"
             if isinstance(context.query, bytes):
                 return context.final_query + limit.encode()

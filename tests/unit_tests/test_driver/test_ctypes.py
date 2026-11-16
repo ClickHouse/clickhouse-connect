@@ -16,11 +16,13 @@ def runtime_state(use_c: str | None = None):
             "-c",
             """
 import json
-from clickhouse_connect.driver.ctypes import RespBuffCls, data_conv, numpy_conv
+from clickhouse_connect.driver import query
+from clickhouse_connect.driver.ctypes import RespBuffCls, data_conv, numpy_conv, sql_scan
 print(json.dumps({
     "buffer": RespBuffCls.__module__,
     "data_conv": data_conv.__name__,
     "numpy_conv": numpy_conv.__name__,
+    "sql_scan": [module and module.__name__ for module in (sql_scan, query._c_sqlscan)],
 }))
 """,
         ],
@@ -37,6 +39,7 @@ def test_runtime_hook_enables_c_modules_by_default():
         "buffer": "clickhouse_connect.driverc.buffer",
         "data_conv": "clickhouse_connect.driverc.dataconv",
         "numpy_conv": "clickhouse_connect.driverc.npconv",
+        "sql_scan": ["clickhouse_connect.driverc.sqlscan", "clickhouse_connect.driverc.sqlscan"],
     }
 
 
@@ -45,4 +48,5 @@ def test_runtime_hook_can_be_disabled():
         "buffer": "clickhouse_connect.driver.buffer",
         "data_conv": "clickhouse_connect.driver.dataconv",
         "numpy_conv": "clickhouse_connect.driver.npconv",
+        "sql_scan": [None, None],
     }

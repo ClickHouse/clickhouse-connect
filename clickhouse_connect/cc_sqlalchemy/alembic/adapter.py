@@ -9,7 +9,7 @@ from alembic.runtime.migration import MigrationContext
 from alembic.util import CommandError, DispatchPriority, PriorityDispatchResult
 
 from clickhouse_connect.cc_sqlalchemy._schema import COLUMN_OPTIONS, TABLE_OPTIONS, canonical_schema_kwargs
-from clickhouse_connect.cc_sqlalchemy.alembic.impl import ClickHouseImpl
+from clickhouse_connect.cc_sqlalchemy.alembic.impl import _STANDARD_INDEX_MESSAGE, ClickHouseImpl
 from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
     ClickHouseIndex,
     ClickHouseProjection,
@@ -18,13 +18,17 @@ from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
     _AddClickHouseProjectionOp,
     _AddClickHouseProjectionsOp,
     _CreateClickHouseDictionaryOp,
+    _CreateClickHouseFunctionOp,
     _CreateClickHouseMaterializedViewOp,
+    _CreateClickHouseViewOp,
     _DropClickHouseDictionaryOp,
+    _DropClickHouseFunctionOp,
     _DropClickHouseIndexesOp,
     _DropClickHouseIndexOp,
     _DropClickHouseMaterializedViewOp,
     _DropClickHouseProjectionOp,
     _DropClickHouseProjectionsOp,
+    _DropClickHouseViewOp,
     _MaterializeClickHouseIndexOp,
     _MaterializeClickHouseProjectionOp,
     _ModifyClickHouseTableSettingsOp,
@@ -32,6 +36,7 @@ from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
     _ResetClickHouseTableSettingsOp,
 )
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
+from clickhouse_connect.cc_sqlalchemy.inspector import VIEW_ENGINE_KINDS
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
 
 __all__ = ["clickhouse_writer", "include_object", "patch_alembic_version"]
@@ -177,7 +182,9 @@ def _render_create_table(autogen_context: AutogenContext, op: ops.CreateTableOp)
 
     table_kwargs = canonical_schema_kwargs(op.kw, TABLE_OPTIONS)
     for key in sorted(table_kwargs):
-        rendered += f",\n{key.replace(' ', '_')}={table_kwargs[key]!r}"
+        value = _render_table_option(autogen_context, key, table_kwargs[key])
+        if value is not None:
+            rendered += f",\n{key.replace(' ', '_')}={value}"
 
     if op.if_not_exists is not None:
         rendered += f",\nif_not_exists={bool(op.if_not_exists)!r}"
@@ -218,7 +225,9 @@ def _render_drop_table(autogen_context: AutogenContext, op: ops.DropTableOp) -> 
         arguments.append(f"if_exists={bool(op.if_exists)!r}")
     table_kwargs = canonical_schema_kwargs(op.table_kw, TABLE_OPTIONS)
     for key in sorted(table_kwargs):
-        arguments.append(f"{key.replace(' ', '_')}={table_kwargs[key]!r}")
+        value = _render_table_option(autogen_context, key, table_kwargs[key])
+        if value is not None:
+            arguments.append(f"{key.replace(' ', '_')}={value}")
     if arguments:
         rendered += ",\n" + ",\n".join(arguments)
     rendered += ")"
@@ -236,6 +245,14 @@ def _render_kwargs(kwargs: list[tuple[str, object]]) -> list[str]:
 
 
 def _render_op_call(autogen_context: AutogenContext, name: str, args: list[str], kwargs: list[tuple[str, object]]) -> str:
+    if autogen_context._has_batch:
+        if "index" in name:
+            subject = "ClickHouse index operations"
+        elif "projection" in name:
+            subject = "ClickHouse projection operations"
+        else:
+            subject = "ClickHouse operations"
+        raise CommandError(f"{subject} do not support batch rendering. Generate with render_as_batch=False.")
     prefix = render._alembic_autogenerate_prefix(autogen_context)
     params = args + _render_kwargs(kwargs)
     return f"{prefix}{name}({', '.join(params)})"
@@ -255,6 +272,18 @@ def _render_clickhouse_index(autogen_context: AutogenContext, index: ClickHouseI
     )
     params = [repr(index.name), repr(index.expression), repr(index.type_)] + _render_kwargs(kwargs)
     return f"ClickHouseIndex({', '.join(params)})"
+
+
+def _render_table_option(autogen_context: AutogenContext, name: str, value: Any) -> str | None:
+    if name == "clickhousedb_indexes":
+        if not value:
+            return None
+        return "(" + ", ".join(_render_clickhouse_index(autogen_context, index) for index in value) + ",)"
+    if name == "clickhousedb_projections":
+        if not value:
+            return None
+        return "(" + ", ".join(_render_clickhouse_projection(autogen_context, projection) for projection in value) + ",)"
+    return repr(value)
 
 
 def _render_clickhouse_projection(autogen_context: AutogenContext, projection: ClickHouseProjection) -> str:
@@ -421,6 +450,43 @@ def _render_reset_clickhouse_table_settings(autogen_context: AutogenContext, op:
     )
 
 
+@render.renderers.dispatch_for(_CreateClickHouseViewOp)
+def _render_create_clickhouse_view(autogen_context: AutogenContext, op: _CreateClickHouseViewOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "create_clickhouse_view",
+        [repr(op.name), repr(op.select)],
+        _optional_kwargs(("if_not_exists", op.if_not_exists, False), ("or_replace", op.or_replace, False), ("schema", op.schema, None)),
+    )
+
+
+@render.renderers.dispatch_for(_DropClickHouseViewOp)
+def _render_drop_clickhouse_view(autogen_context: AutogenContext, op: _DropClickHouseViewOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "drop_clickhouse_view",
+        [repr(op.name)],
+        _optional_kwargs(("if_exists", op.if_exists, False), ("schema", op.schema, None)),
+    )
+
+
+@render.renderers.dispatch_for(_CreateClickHouseFunctionOp)
+def _render_create_clickhouse_function(autogen_context: AutogenContext, op: _CreateClickHouseFunctionOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "create_clickhouse_function",
+        [repr(op.name), repr(op.expression)],
+        _optional_kwargs(("if_not_exists", op.if_not_exists, False), ("or_replace", op.or_replace, False)),
+    )
+
+
+@render.renderers.dispatch_for(_DropClickHouseFunctionOp)
+def _render_drop_clickhouse_function(autogen_context: AutogenContext, op: _DropClickHouseFunctionOp) -> str:
+    return _render_op_call(
+        autogen_context, "drop_clickhouse_function", [repr(op.name)], _optional_kwargs(("if_exists", op.if_exists, False))
+    )
+
+
 @render.renderers.dispatch_for(_CreateClickHouseMaterializedViewOp)
 def _render_create_clickhouse_materialized_view(autogen_context: AutogenContext, op: _CreateClickHouseMaterializedViewOp) -> str:
     return _render_op_call(
@@ -490,14 +556,11 @@ def include_object(object_: Any, name: str | None, type_: str, reflected: bool, 
     Standard filter for ClickHouse system tables and internal objects.
     """
     if type_ == "index":
+        if isinstance(object_, ClickHouseIndex):
+            return True
         if reflected:
             return False
-        raise CommandError(
-            "ClickHouse data skipping indexes cannot be created with SQLAlchemy Index, "
-            "Column(index=True), or autogenerate. Use op.add_clickhouse_index "
-            "and op.drop_clickhouse_index for ClickHouse data skipping indexes, "
-            "or op.execute for custom DDL."
-        )
+        raise CommandError(_STANDARD_INDEX_MESSAGE)
 
     # Guard against None name which can happen in some Alembic versions/contexts
     if not name:
@@ -511,6 +574,9 @@ def include_object(object_: Any, name: str | None, type_: str, reflected: bool, 
             return False
         # Ignore internal tables (Materialized View storage)
         if name.startswith(".inner"):
+            return False
+        # Reflected views and materialized views are not tables to drop or alter.
+        if reflected and ClickHouseDDLHelper.get_option(object_, "table_type") in VIEW_ENGINE_KINDS.values():
             return False
 
     return True

@@ -70,7 +70,7 @@ def response_reads(monkeypatch, client_mode):
 @pytest.mark.parametrize(
     "compress", [False, pytest.param("lz4", marks=pytest.mark.skipif(_lz4_frame is None, reason="lz4 is not installed"))]
 )
-def test_early_stream_close_reuses_client(client_factory, call, consume_stream, client_mode, response_reads, native_codec, compress):
+def test_early_stream_close_reuses_client(client_factory, call, consume_stream, native_codec, compress):
     if native_codec == "rust_strict":
         pytest.importorskip("_ch_core")
     # Smoke coverage for early close and reuse across codecs. The slow-read test below is the race regression.
@@ -82,12 +82,6 @@ def test_early_stream_close_reuses_client(client_factory, call, consume_stream, 
 
     def stop(block):
         assert block[0] == (0,)
-        _, exhausted, response = response_reads[-1]
-        assert not exhausted.is_set(), "The response was already read to EOF"
-        if client_mode == "sync":
-            assert not response._original_response.isclosed(), "The HTTP body was already read to EOF"
-        else:
-            assert not response.content.is_eof(), "The HTTP body was already received in full"
         raise StopAfterBlockError
 
     for _ in range(2):

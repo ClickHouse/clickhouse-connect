@@ -207,6 +207,17 @@ For ClickHouse specifically, this version of `env.py`:
 - `clickhouse_writer(...)` ensures generated revisions include required ClickHouse imports
 - `version_table="alembic_version"` configures a compatible version table
 
+On ClickHouse Cloud, add `alter_sync=2` to the migration engine URL so schema
+changes finish across replicas before reflection. This matters if a connection is
+replaced or autogenerate follows an upgrade. `select_sequential_consistency=1`
+covers data reads, not schema changes.
+
+Version-table inserts bypass insert deduplication so downgrades can restore earlier
+revision rows. Offline SQL uses `SETTINGS deduplicate_insert = 'disable'` and needs
+that setting on the target server. Online migrations fall back to
+`insert_deduplicate = 0` when the newer setting is unavailable. This does not change
+deduplication for your data tables.
+
 ## Step 7: Generate the initial migration
 
 Now we are at the key point where:
@@ -516,6 +527,19 @@ op.alter_column(
 )
 ```
 
+Remove a column default or another column property. ClickHouse keeps an existing `DEFAULT` when `MODIFY COLUMN` only restates the type, so removal is an explicit `REMOVE` statement. Passing `None` for `server_default`, `clickhousedb_codec`, `clickhousedb_ttl`, `clickhousedb_alias`, or `clickhousedb_materialized` removes that property. Leaving the argument out keeps it. Setting or removing codec, TTL, alias, or materialized properties alone does not require `existing_type`. Pass SQL expressions with `text(...)`, for example `clickhousedb_ttl=text("ts + INTERVAL 7 DAY")`. If both namespaces are passed to `alter_column`, an explicit `clickhousedb_` value takes precedence over the legacy `clickhouse_` value, including `None`:
+
+```python
+op.alter_column(
+    "events",
+    "payload",
+    schema="alembic_demo",
+    server_default=None,
+    clickhousedb_codec=None,
+    clickhouse_settings={"alter_sync": 2},
+)
+```
+
 Drop a column safely:
 
 ```python
@@ -637,7 +661,7 @@ Modify or reset MergeTree table settings after creation:
 ```python
 op.modify_clickhouse_table_settings(
     "events",
-    {"index_granularity": 4096, "merge_with_ttl_timeout": 3600},
+    {"ttl_only_drop_parts": 1, "merge_with_ttl_timeout": 3600},
     schema="alembic_demo",
 )
 
@@ -648,7 +672,29 @@ op.reset_clickhouse_table_settings(
 )
 ```
 
-`MODIFY SETTING` is its own statement and is never combined with schema alters, because replicated databases reject a statement that mixes settings changes with schema changes.
+`MODIFY SETTING` is its own statement and is never combined with schema alters, because replicated databases reject a statement that mixes settings changes with schema changes. Settings fixed at creation, such as `index_granularity` and `index_granularity_bytes`, are read-only on the server and cannot be modified. Autogenerate emits these helpers when the `settings` declared on the table engine differ from the server, and refuses read-only settings as unsupported changes. Settings omitted from the model, including settings removed after an earlier migration, stay unchanged because reflection cannot distinguish them from server-injected settings. Use an explicit reset operation to remove them.
+
+### Ordinary views and SQL functions
+
+Ordinary view helpers take a raw SQL SELECT body. SQL function helpers take a raw SQL lambda:
+
+```python
+op.create_clickhouse_view("events_view", "SELECT id FROM alembic_demo.events", schema="alembic_demo")
+op.create_clickhouse_view("events_view", "SELECT id FROM alembic_demo.events WHERE id > 13", schema="alembic_demo", or_replace=True)
+op.drop_clickhouse_view("events_view", schema="alembic_demo", if_exists=True)
+
+op.create_clickhouse_function("demo_increment_v1", "value -> value + 13")
+op.create_clickhouse_function("demo_increment_v1", "value -> value + 79", or_replace=True)
+op.drop_clickhouse_function("demo_increment_v1", if_exists=True)
+```
+
+Create helpers accept `if_not_exists` or `or_replace`, never both. Both default to `False`. Names are quoted; function names are single identifiers and have no database qualifier or `schema` argument. SQL UDFs are server-global, so give them unique or versioned names and coordinate changes across databases. Replacement requires both create and drop function privileges.
+
+`CREATE OR REPLACE VIEW` can replace a table or materialized view with the same name and discard its data. `DROP VIEW` also accepts materialized views. Review collisions before opting into replacement. `IF NOT EXISTS` preserves an existing definition without validating it. Guarded creates and replacements refuse automatic reversal because the old state is unknown. Write explicit downgrade operations with the old definitions for replacements and drops. They cannot recover discarded data.
+
+`inspect(connection).get_view_definition(name, schema=...)` returns a view's stored SELECT. `get_clickhouse_function_names()` lists SQL UDFs only, and `get_clickhouse_function_definition(name)` returns the full stored `CREATE FUNCTION` statement unchanged. Missing functions raise `sqlalchemy.exc.NoResultFound`. SQL functions have no schema parameter. The stored CREATE statement is for inspection or explicit replay; the create helper still expects only the lambda body.
+
+These helpers work online and offline, with sync connections and async `run_sync`. They do not add autogenerate comparison or dependency ordering. Render them with `render_as_batch=False` and order explicit revisions yourself.
 
 ### Materialized views
 
@@ -752,3 +798,221 @@ The intended user experience is:
 - roll back bad revisions when needed
 
 If you find yourself needing features or hitting bugs, find us on [GitHub](https://github.com/ClickHouse/clickhouse-connect).
+
+## Upgrade existing index and projection migrations
+
+Alembic compares explicit skip indexes and SELECT projections by default. Objects
+created only by earlier imperative migrations generate drops when absent from
+managed table metadata. Before upgrading, declare them with `ClickHouseIndex` or
+`ClickHouseProjection`, filter unmanaged objects with `include_name` or
+`include_object`, or pass `clickhousedb_compare_indexes=False` or
+`clickhousedb_compare_projections=False` to `context.configure()` for the relevant
+object type. Each opt-out skips its catalog reads and table-drop snapshots.
+
+Edits generate separate drop and add operations. Downgrade restores definitions,
+but neither direction restores prior materialization. Replacing a projection
+discards its existing projection parts. Review that rebuild cost and call
+`op.materialize_clickhouse_projection` explicitly when existing parts need the
+replacement immediately. Index materialization also remains explicit.
+
+## Declarative skip indexes
+
+Use `ClickHouseIndex` table arguments to include indexes in generated `CREATE TABLE`
+statements and to compare them on existing tables:
+
+```python
+from clickhouse_connect.cc_sqlalchemy import ClickHouseIndex
+
+# Inside Table(...):
+ClickHouseIndex("value_idx", "value", "minmax", granularity=4)
+```
+
+Explicit indexes absent from managed table metadata generate drops by default.
+Catalog classification and server normalization
+must be available when comparison is enabled. Unavailable catalog access,
+expression resolution, or expected normalization output raises
+`IndexComparisonError` with structured definitions and a reason. Comparison uses
+the server's structural normal form. It does not prove arbitrary mathematical
+equivalence. When normalization succeeds but the resulting forms differ,
+autogenerate generates replacement operations.
+
+Same-name edits generate separate drop and add operations. Policy hooks should
+pair both index and projection edits by schema, table, and object name. Do not
+rely on adjacency. Their downgrades
+restore definitions, including indexes on a recreated dropped table, but do not
+restore old part materialization. Review the generated operations before running
+them and call `op.materialize_clickhouse_index` explicitly when required.
+
+An edited index can reference a physical column added in the same revision.
+When analysis names that scheduled new column as an unknown identifier,
+autogenerate validates the full expression with the added columns available,
+then emits `add_column` followed by the index drop and add. Downgrade restores
+the old index before dropping the column. Other unknown identifiers, including
+typos and columns excluded by filters, still raise `IndexComparisonError`.
+Changed `ALIAS` definitions that affect an index still require an explicit column
+migration before index comparison.
+
+Generate index add, drop, and edit operations with `render_as_batch=False`.
+ClickHouse index helpers do not participate in Alembic's deferred batch queue,
+so batch rendering of those operations raises an actionable error. Inline table
+creation and drop-table downgrade snapshots remain supported.
+
+Other custom ClickHouse operations inside a batch block, including table settings,
+projections, and materialization, are also refused during rendering.
+
+For physical batch recreation, pass a complete `copy_from` Table containing its
+`ClickHouseIndex` definitions. Automatic recreation reads the explicit-index
+catalog at execution time and refuses tables with explicit indexes before
+creating or dropping tables. Ordinary table autoload still omits skip indexes.
+The autogenerate comparison opt-out does not bypass this execution guard.
+
+## Declarative SELECT projections
+
+Use `ClickHouseProjection` table arguments to include projections in generated CREATE statements and compare existing tables:
+
+```python
+from clickhouse_connect.cc_sqlalchemy import ClickHouseProjection
+
+# Inside Table(...):
+ClickHouseProjection("by_label", "SELECT value, label ORDER BY label, value")
+```
+
+Declarations own the projection set on managed tables by default. An undeclared projection generates a drop. A changed SELECT generates a separate drop followed by an add. On each table, autogenerate orders projection drops, column additions and alterations, index operations, projection additions, then column drops. Alembic appends column drops after the table comparators finish. Other operations can appear between an edited projection's drop and add. Downgrade restores the previous definition. Table-drop downgrades also restore projection declarations. No `MATERIALIZE PROJECTION` is generated, so existing parts need explicit materialization if the projection must serve them immediately.
+
+For `AggregatingMergeTree` and other engines with nonstandard merge behavior, ClickHouse rejects `ADD PROJECTION` when `deduplicate_merge_projection_mode='throw'`. Set it explicitly to `drop` or `rebuild` before applying projection additions or replacements, including replacements of projections originally declared inline.
+
+Projection filters receive `type_="projection"`. Object filters expose the definition and `.table`, with the usual `reflected` and `compare_to` values. Inline CREATE declarations are filtered before policy hooks run.
+
+Comparison follows the server's projection grammar formatting and case-insensitive function-name normalization, preserving wildcards, aliases, GROUP BY, and ORDER BY. Case-sensitive names such as `sumIf` and `SumIf` remain distinct. When the formatted definitions differ, comparison also checks the parsed syntax tree, which ignores grouping parentheses. Redundant parentheses and operator and function spellings such as `value + 13` and `plus(value, 13)` compare equally, because servers store redundant parentheses inconsistently. Other structural differences generate a replacement. Comparison does not prove arbitrary SQL equivalence, analyze an ordinary SELECT, or validate column dependencies. Review changes involving columns and ALIAS definitions. Invalid DDL dependencies fail at execution. A failed add leaves the preceding drop applied. Catalog, formatter, or function-metadata failures raise `ProjectionComparisonError` with structured definitions and a reason instead of generating a replacement. Projection-level `WITH SETTINGS` and index-based forms also raise rather than lose information. Filter them or use explicit migrations. If `query_masking_rules` changes the SELECT text returned by the catalog, use explicit migrations, filters, or the comparison opt-out for affected projections.
+
+`inspect(connection).get_clickhouse_projections("events")` returns replayable SELECT definitions. Ordinary table autoload omits projections. For physical batch recreation, pass a complete `copy_from` Table with `clickhousedb_projections`, optionally populated from that inspection method. Automatic online recreation refuses tables with projections before DDL. Generate custom projection operations with `render_as_batch=False`. Inline CREATE and table-drop snapshots are supported.
+
+### Classify generated operations before rendering
+
+All 21 ClickHouse migration operation classes are public from
+`clickhouse_connect.cc_sqlalchemy.alembic` and its `operations` module. Use
+`isinstance` to inspect them in `process_revision_directives` or register them
+with Alembic's `Rewriter.rewrites`. The old underscore names remain aliases of
+the same classes, so existing registrations and imports keep working.
+
+The public inspection fields match constructor arguments. Table operations expose
+`table_name`, `schema`, and `clickhouse_settings`. Single index operations expose
+`name`. Additions also expose `expression`, `type_`, `granularity`, `if_not_exists`,
+`first`, and `after_index`. Projection additions expose `select` and
+`after_projection` instead of index expression, type, and granularity fields. Drops
+expose `if_exists` and, for single indexes or projections, `existing_index` or
+`existing_projection` when a prior definition is available. Materializations
+expose `if_exists` and `partition`. Grouped additions store `indexes` or
+`projections` as tuples of `ClickHouseIndex` or `ClickHouseProjection`. Grouped
+drops store `names` as a tuple. Inspect every member of a grouped operation.
+
+`ModifyClickHouseTableSettingsOp` exposes `settings` and optional
+`existing_settings`. `ResetClickHouseTableSettingsOp` exposes a tuple of `names`.
+These table settings differ from the query-level `clickhouse_settings` mapping.
+Create view and function operations expose `name`, `select` or `expression`,
+`if_not_exists`, and `or_replace`. Views also expose `schema`. Materialized-view
+creation exposes `name`, `schema`, `to_table`, `to_schema`, `select`, and
+`if_not_exists`. Dictionary creation exposes `name`, `schema`, a `columns` tuple,
+`primary_key`, `source`, `layout`, `lifetime`, `comment`, `if_not_exists`, and
+`clickhouse_settings`. View, function, materialized-view, and dictionary drops expose
+`name` and `if_exists`, plus `schema` and `clickhouse_settings` where accepted by
+the constructor. Dictionary reload exposes `name` and `schema`. SQL fragments
+remain strings. Mappings retain their supplied values. Reverse operations can
+require prior definitions or raise `NotImplementedError`. A reversible definition
+does not restore materialized data.
+
+This example is an application policy, not a driver safety guarantee. It permits
+only an explicitly chosen index shape or table setting, sends replacements and
+unknown operations for review, and rejects standalone index drops, standalone
+projection drops, and destructive built-in operations. Change these rules for your deployment. Even
+creation needs field inspection: `or_replace=True` on a view can discard a
+colliding table's data, and raw SQL bodies and dictionary sources need review.
+
+```python
+import logging
+
+from alembic.operations import ops
+from clickhouse_connect.cc_sqlalchemy import alembic as ch_alembic
+
+
+def leaves(operation):
+    if isinstance(operation, ops.OpContainer):
+        for child in operation.ops:
+            yield from leaves(child)
+    else:
+        yield operation
+
+
+def object_key(operation):
+    if isinstance(operation, (ch_alembic.AddClickHouseIndexOp,
+                              ch_alembic.DropClickHouseIndexOp)):
+        kind = "index"
+    elif isinstance(operation, (ch_alembic.AddClickHouseProjectionOp,
+                                ch_alembic.DropClickHouseProjectionOp)):
+        kind = "projection"
+    else:
+        return None
+    return kind, operation.schema, operation.table_name, operation.name
+
+
+def classify_tree(tree, direction):
+    operations = list(leaves(tree))
+    adds = {object_key(op) for op in operations if isinstance(
+        op, (ch_alembic.AddClickHouseIndexOp, ch_alembic.AddClickHouseProjectionOp))}
+    drops = {object_key(op) for op in operations if isinstance(
+        op, (ch_alembic.DropClickHouseIndexOp, ch_alembic.DropClickHouseProjectionOp))}
+    replacements = adds & drops
+    for operation in operations:
+        verdict, reason = "review", "operation needs explicit review"
+        if isinstance(operation, (ops.DropTableOp, ops.DropColumnOp, ops.ExecuteSQLOp)):
+            verdict, reason = "rejected", "destructive change or opaque SQL"
+        elif object_key(operation) in replacements:
+            reason = "replacement can discard existing materialization"
+        elif isinstance(operation, (ch_alembic.DropClickHouseIndexOp,
+                                    ch_alembic.DropClickHouseProjectionOp,
+                                    ch_alembic.DropClickHouseIndexesOp,
+                                    ch_alembic.DropClickHouseProjectionsOp)):
+            verdict, reason = "rejected", "removal requires a separate migration"
+        elif direction == "upgrade":
+            if isinstance(operation, ch_alembic.AddClickHouseIndexOp):
+                if (operation.type_ == "minmax" and operation.expression == "value"
+                        and operation.granularity == 1 and not operation.first
+                        and operation.after_index is None and not operation.clickhouse_settings):
+                    verdict, reason = "allowed", "approved index definition"
+            elif isinstance(operation, ch_alembic.ModifyClickHouseTableSettingsOp):
+                if (dict(operation.settings) == {"max_bytes_to_merge_at_max_space_in_pool": 107374182400}
+                        and not operation.clickhouse_settings):
+                    verdict, reason = "allowed", "approved table setting value"
+        yield direction, operation, verdict, reason
+
+
+def review_revision(context, revision, directives):
+    # Scope: a single-engine env.py. clickhouse_writer uses singular roots.
+    for script in directives:
+        if len(script.upgrade_ops_list) != 1 or len(script.downgrade_ops_list) != 1:
+            raise ValueError("This policy hook supports one operation stream only")
+        findings = [
+            *classify_tree(script.upgrade_ops_list[0], "upgrade"),
+            *classify_tree(script.downgrade_ops_list[0], "downgrade"),
+        ]
+        for direction, op, verdict, reason in findings:
+            logging.getLogger("alembic.policy").info(
+                "%s: %s: %s: %s", direction, type(op).__name__, verdict, reason)
+        blocked = [f"{direction}: {type(op).__name__}: {verdict}: {reason}"
+                   for direction, op, verdict, reason in findings
+                   if direction == "upgrade" and verdict != "allowed"]
+        if blocked:
+            raise ValueError("Migration requires review:\n" + "\n".join(blocked))
+    ch_alembic.clickhouse_writer(context, revision, directives)
+```
+
+Pass `process_revision_directives=review_revision` to `context.configure()` in
+place of `clickhouse_writer`. The hook logs findings for both directions and gates revision generation on
+upgrade findings. Downgrade findings require a separate review before executing
+a downgrade. They do not block writing an approved upgrade. The hook traverses nested containers and pairs replacements by
+kind, schema, table, and name, regardless of adjacency. Grouped additions and all
+unrecognized operations default to review. This recipe supports one engine and
+one operation stream per direction. Using list roots in the classifier does not
+make `clickhouse_writer` a multi-engine hook. An empty generated tree proves only
+that enabled, supported comparisons found no changes. Views, functions,
+dictionaries, and other unsupported comparisons still need explicit migrations.

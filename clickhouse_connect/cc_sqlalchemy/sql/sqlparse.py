@@ -9,7 +9,7 @@ def walk_sql(sql: str, start: int = 0):
             escape = False
             continue
         if quote_char:
-            if char == "\\" and quote_char == "'":
+            if char == "\\":
                 escape = True
             elif char == quote_char:
                 quote_char = None

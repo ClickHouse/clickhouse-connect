@@ -1,16 +1,20 @@
 import ast
 import re
 from collections.abc import Collection
-from typing import Any, cast
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, cast
 
 import sqlalchemy.schema as sa_schema
 from sqlalchemy import String, bindparam, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.engine.reflection import Inspector
-from sqlalchemy.exc import NoResultFound, NoSuchTableError
+from sqlalchemy.exc import InvalidRequestError, NoResultFound, NoSuchTableError
 from sqlalchemy.sql.elements import TextClause
 
 from clickhouse_connect.cc_sqlalchemy._schema import COLUMN_OPTIONS, TABLE_OPTIONS, canonical_schema_kwargs
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
+from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex
+from clickhouse_connect.cc_sqlalchemy.ddl.projection import ClickHouseProjection
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import build_engine
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import (
@@ -20,8 +24,12 @@ from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import (
 )
 from clickhouse_connect.driver.client import _INTERNAL_QUERY_FORMATS
 
+if TYPE_CHECKING:
+    from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
+
 _INTERNAL_QUERY_OPTION = "ch_internal_query"
 _INTERNAL_QUERY_SENTINEL = object()
+VIEW_ENGINE_KINDS = {"View": "view", "MaterializedView": "materialized_view", "WindowView": "window_view", "LiveView": "live_view"}
 _EXPRESSION_KEYS = ("server_default", "clickhouse_materialized", "clickhouse_alias", "clickhouse_ttl")
 
 
@@ -68,6 +76,113 @@ def get_table_metadata(connection, table_name, schema=None):
 def get_engine(connection, table_name, schema=None):
     row = get_table_metadata(connection, table_name, schema)
     return build_engine(row.engine_full)
+
+
+def get_clickhouse_function_names(connection: Connection) -> list[str]:
+    """Return server-global SQL UDF names, excluding built-in and executable functions."""
+    statement = text("SELECT name FROM system.functions WHERE origin = 'SQLUserDefined' ORDER BY name")
+    return [row.name for row in connection.execute(with_internal_query_formats(statement))]
+
+
+def get_clickhouse_function_definition(connection: Connection, function_name: str) -> str:
+    """Return the complete stored CREATE FUNCTION statement."""
+    statement = text("SELECT create_query FROM system.functions WHERE origin = 'SQLUserDefined' AND name = :function_name").bindparams(
+        bindparam("function_name", type_=String())
+    )
+    row = connection.execute(with_internal_query_formats(statement), {"function_name": function_name}).first()
+    if row is None:
+        raise NoResultFound(f"SQL function {function_name!r} does not exist")
+    return str(row.create_query)
+
+
+def get_clickhouse_indexes(connection: Connection, table_name: str, schema: str | None = None) -> list[ClickHouseIndex]:
+    """Reflect explicit, replayable index definitions without guessing implicit names."""
+    database = _database_name(connection, schema)
+    try:
+        get_table_metadata(connection, table_name, database)
+    except NoResultFound as ex:
+        raise _NoSuchTableError(str(ex)) from ex
+    return _get_clickhouse_index_catalog(connection, database, table_name).get(table_name, [])
+
+
+def _get_clickhouse_index_catalog(connection: Connection, database: str, table_name: str | None = None) -> dict[str, list[ClickHouseIndex]]:
+    """Read index definitions for tables already known to exist."""
+    statement = text(
+        "SELECT table, name, expr, type_full, granularity, creation FROM system.data_skipping_indices "
+        "WHERE database = :database" + (" AND table = :table_name" if table_name is not None else "") + " ORDER BY table, name"
+    ).bindparams(bindparam("database", type_=String()))
+    parameters = {"database": database}
+    if table_name is not None:
+        statement = statement.bindparams(bindparam("table_name", type_=String()))
+        parameters["table_name"] = table_name
+    indexes: dict[str, list[ClickHouseIndex]] = {}
+    for row in connection.execute(with_internal_query_formats(statement), parameters):
+        if row.creation == "Implicit":
+            continue
+        if row.creation != "Explicit":
+            raise InvalidRequestError(f"Unrecognized ClickHouse index creation classification {row.creation!r}")
+        indexes.setdefault(row.table, []).append(ClickHouseIndex(row.name, f"tuple({row.expr})", row.type_full, row.granularity))
+    return indexes
+
+
+@dataclass(frozen=True)
+class _ProjectionCatalogEntry(ClickHouseProjection):
+    unsupported_reason: str | None = field(default=None, kw_only=True, compare=False)
+
+
+def get_clickhouse_projections(connection: Connection, table_name: str, schema: str | None = None) -> list[ClickHouseProjection]:
+    """Reflect replayable SELECT projections, refusing definitions we cannot preserve."""
+    database = _database_name(connection, schema)
+    try:
+        get_table_metadata(connection, table_name, database)
+    except NoResultFound as ex:
+        raise _NoSuchTableError(str(ex)) from ex
+    projections = _get_clickhouse_projection_catalog(connection, database, table_name).get(table_name, [])
+    for projection in projections:
+        if projection.unsupported_reason:
+            raise InvalidRequestError(f"Cannot reflect ClickHouse projection {projection.name!r}: {projection.unsupported_reason}")
+    return [ClickHouseProjection(projection.name, projection.select) for projection in projections]
+
+
+def _get_clickhouse_projection_catalog(
+    connection: Connection, database: str, table_name: str | None = None
+) -> dict[str, list[_ProjectionCatalogEntry]]:
+    statement = text(
+        "SELECT table, name, toString(type) AS type, query, settings FROM system.projections "
+        "WHERE database = :database" + (" AND table = :table_name" if table_name is not None else "") + " ORDER BY table, name"
+    ).bindparams(bindparam("database", type_=String()))
+    parameters = {"database": database}
+    if table_name is not None:
+        statement = statement.bindparams(bindparam("table_name", type_=String()))
+        parameters["table_name"] = table_name
+    projections: dict[str, list[_ProjectionCatalogEntry]] = {}
+    for row in connection.execute(with_internal_query_formats(statement), parameters):
+        reason = None
+        if row.settings:
+            reason = "projection WITH SETTINGS is not supported; its settings cannot be preserved"
+        elif not row.query.startswith(("SELECT ", "WITH ")):
+            reason = "only SELECT projections can be reflected; index-based projection definitions are not supported"
+        elif row.type not in ("Normal", "Aggregate"):
+            reason = f"unsupported projection type {row.type!r}"
+        projections.setdefault(row.table, []).append(_ProjectionCatalogEntry(row.name, row.query, unsupported_reason=reason))
+    return projections
+
+
+def get_view_definition(connection, view_name: str, schema: str | None = None) -> str | None:
+    """Return the stored SELECT of a view or materialized view, or None for other objects."""
+    database = _database_name(connection, schema)
+    result_set = connection.execute(
+        with_internal_query_formats(
+            text("SELECT as_select FROM system.tables WHERE database = :database AND name = :view_name AND engine IN :engines").bindparams(
+                bindparam("database", type_=String()),
+                bindparam("view_name", type_=String()),
+                bindparam("engines", expanding=True),
+            )
+        ),
+        {"database": database, "view_name": view_name, "engines": sorted(VIEW_ENGINE_KINDS)},
+    )
+    row = next(result_set, None)
+    return row.as_select if row else None
 
 
 def get_dictionary_create_sql(connection, table_name: str, schema: str | None = None) -> str:
@@ -179,6 +294,26 @@ def get_columns(connection, table_name: str, schema: str | None = None) -> list[
 
 
 class ChInspector(Inspector):
+    def get_clickhouse_function_names(self) -> list[str]:
+        """Return server-global SQL UDF names."""
+        with self._operation_context() as connection:
+            return cast("ClickHouseDialect", self.dialect).get_clickhouse_function_names(connection)
+
+    def get_clickhouse_function_definition(self, function_name: str) -> str:
+        """Return stored CREATE FUNCTION SQL; missing names raise NoResultFound."""
+        with self._operation_context() as connection:
+            return cast("ClickHouseDialect", self.dialect).get_clickhouse_function_definition(connection, function_name)
+
+    def get_clickhouse_indexes(self, table_name: str, schema: str | None = None, **kwargs: Any) -> list[ClickHouseIndex]:
+        """Return explicit skip indexes. Generic get_indexes remains unchanged."""
+        with self._operation_context() as connection:
+            return cast("ClickHouseDialect", self.dialect).get_clickhouse_indexes(connection, table_name, schema, **kwargs)
+
+    def get_clickhouse_projections(self, table_name: str, schema: str | None = None, **kwargs: Any) -> list[ClickHouseProjection]:
+        """Return replayable SELECT projection definitions."""
+        with self._operation_context() as connection:
+            return cast("ClickHouseDialect", self.dialect).get_clickhouse_projections(connection, table_name, schema, **kwargs)
+
     def reflect_table(
         self,
         table,
@@ -219,8 +354,14 @@ class ChInspector(Inspector):
                     table.kwargs[key] = value
                 return
 
-            table.engine = build_engine(table_metadata.engine_full)
             table.comment = table_metadata.comment or None
+            view_kind = VIEW_ENGINE_KINDS.get(table_metadata.engine)
+            if view_kind is not None:
+                # Views carry no engine. Record the kind so autogenerate can tell them from tables.
+                table.engine = None
+                table.kwargs["clickhousedb_table_type"] = view_kind
+                return
+            table.engine = build_engine(table_metadata.engine_full)
             if table.engine is not None:
                 table.kwargs["clickhousedb_engine"] = table.engine
 
