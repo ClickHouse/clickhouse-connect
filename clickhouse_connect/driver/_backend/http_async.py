@@ -658,6 +658,10 @@ class HttpAsyncBackend:
                 await self._rotate_connections(background=True)
 
         final_params = dict_copy(self.client_settings, params)
+        for key, value in final_params.items():
+            if isinstance(value, bool):
+                # aiohttp rejects bool query parameters. urlencode() sends str(value) for the sync backend.
+                final_params[key] = str(value)
         if retryable is None:
             retryable = _request_is_read_only(data, final_params, files)
         if server_wait:

@@ -152,6 +152,13 @@ def test_transport_settings(param_client, call):
     assert len(result.result_set) > 0
 
 
+def test_bool_settings(param_client, call):
+    query = "SELECT getSetting('join_use_nulls'), getSetting('enable_optimize_predicate_expression')"
+    settings = {"join_use_nulls": True, "enable_optimize_predicate_expression": False}
+    assert call(param_client.query, query, settings=settings).result_rows == [(True, False)]
+    assert call(param_client.command, query, settings=settings) == ["true", "false"]
+
+
 def test_initial_settings_override_generated_defaults(client_factory):
     client = client_factory(settings={"date_time_input_format": "basic"})
     assert client.get_client_setting("date_time_input_format") == "basic"
