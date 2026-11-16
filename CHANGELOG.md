@@ -32,7 +32,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
-- SQL comment detection now reads only the comments and quoted text of a query. Most large queries prepare faster. Very large queries with tens of thousands of quoted values, `$` or `{` characters and a comment marker late in the text prepare slower.
+- SQL comment detection now reads only the comments and quoted text of a query. On CPython with the C extensions it uses a compiled scanner. On other interpreters or without the C extensions, very large queries with tens of thousands of quoted values, `$` or `{` characters and a comment marker late in the text prepare slower.
 - All 21 ClickHouse Alembic operation classes are now public, with typed inspection fields for application policy hooks and Alembic Rewriters. Existing private names remain identity-preserving aliases. The SQLAlchemy docs include a structural upgrade and downgrade classification recipe.
 - Alembic now provides explicit ordinary view and SQL UDF create, drop, and opt-in `CREATE OR REPLACE` helpers with online, offline, and revision rendering support. SQL bodies remain strings. `Inspector.get_clickhouse_function_names()` lists server-global SQL UDFs, and `get_clickhouse_function_definition()` returns their full stored CREATE statements. Replacement and guarded creation require explicit downgrades with prior definitions. View replacement follows ClickHouse semantics and can discard a colliding table or materialized view and its data.
 - String and bytes parameter escaping now uses lookup tables instead of per-character Python code. Binding large `IN` lists or `Array(String)` parameters is about 3-4x faster, and binary `String` parameters about 6x.
