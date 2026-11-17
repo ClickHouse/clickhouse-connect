@@ -67,7 +67,7 @@ def test_materialized_view_literal_sql(run_sqlalchemy, test_db, ch_name, engine_
             schema=test_db,
             to_schema=test_db if engine_kind == "target" else None,
             engine=engine,
-            refresh=ch.ClickHouseRefresh(after="1 DAY", depends_on=((test_db, dependency),)) if refresh else None,
+            refresh=ch.ClickHouseRefresh(every="1 DAY", depends_on=((test_db, dependency),)) if refresh else None,
             empty=refresh,
             comment=LITERAL,
         )
