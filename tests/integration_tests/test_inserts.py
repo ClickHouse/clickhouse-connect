@@ -590,11 +590,11 @@ def test_numeric_conversion(param_client: Client, call, table_context: Callable)
         ("Array(Tuple(Nullable(Int32), String))", [[(None, "user_1"), (79.25, "user_2")]], [[(None, "user_1"), (79, "user_2")]]),
     ],
 )
-def test_insert_finite_float_into_int(client_factory, call, client_mode, type_name, values, expected):
+def test_insert_finite_float_into_int(client_factory, call, client_mode, test_table_engine, type_name, values, expected):
     client = client_factory(native_codec="python", settings={"allow_suspicious_low_cardinality_types": 1})
     table = f"test_int_finite_{client_mode}_{uuid4().hex}"
     try:
-        call(client.command, f"CREATE TABLE {table} (id UInt8, v {type_name}) ENGINE Memory")
+        call(client.command, f"CREATE TABLE {table} (id UInt8, v {type_name}) ENGINE {test_table_engine} ORDER BY id")
         call(client.insert, table, [list(range(len(values))), values], column_names=["id", "v"], column_oriented=True)
         result = call(client.query, f"SELECT v FROM {table} ORDER BY id").result_rows
         assert result == [(value,) for value in expected]

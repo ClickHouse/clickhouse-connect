@@ -1,3 +1,4 @@
+import array
 from collections.abc import Collection, MutableSequence, Sequence
 from typing import Any
 from uuid import UUID as PYUUID
@@ -12,6 +13,13 @@ from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
 
 empty_uuid_b = bytes(b"\x00" * 16)
+
+
+def _write_big_endian_uuids(values: list[bytes], dest: bytearray):
+    # The values are big-endian and ClickHouse wants each 8 byte half little-endian, so swap every half
+    halves = array.array("Q", b"".join(values))
+    halves.byteswap()
+    dest += halves
 
 
 class UUID(ClickHouseType):
@@ -43,25 +51,12 @@ class UUID(ClickHouseType):
         first = first_value(column, self.nullable)
         empty = empty_uuid_b
         if isinstance(first, str) or self.write_format(ctx) == "string":
-            for v in column:
-                if v:
-                    x = int(v.replace("-", ""), 16)
-                    dest += (x >> 64).to_bytes(8, "little") + (x & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "little")
-                else:
-                    dest += empty
+            _write_big_endian_uuids([int(v.replace("-", ""), 16).to_bytes(16, "big") if v else empty for v in column], dest)
         elif isinstance(first, int):
-            for x in column:
-                if x:
-                    dest += (x >> 64).to_bytes(8, "little") + (x & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "little")
-                else:
-                    dest += empty
+            # Unbound int.to_bytes so a non-int value later in the column still raises TypeError
+            _write_big_endian_uuids([int.to_bytes(x, 16, "big") if x else empty for x in column], dest)
         elif isinstance(first, PYUUID):
-            for v in column:
-                if v:
-                    x = v.int
-                    dest += (x >> 64).to_bytes(8, "little") + (x & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "little")
-                else:
-                    dest += empty
+            _write_big_endian_uuids([v.bytes if v else empty for v in column], dest)
         elif isinstance(first, (bytes, bytearray, memoryview)):
             for v in column:
                 if v:
