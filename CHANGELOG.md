@@ -5,6 +5,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Improvements
+
+- The Python codec serializes `UUID` insert columns faster when values are `uuid.UUID` objects, integers or strings, by building the column bytes in one pass instead of per value.
+
 ## 1.13.0, 2026-11-16
 
 ### Bug Fixes
