@@ -1320,6 +1320,18 @@ def test_alembic_reload_dictionary_live(test_engine: Engine, test_db: str, ch_na
         assert element_count == 1
 
 
+def _refresh_view(op, connection, schema, view, query, expected, timeout=60.0):
+    """Refresh a view and poll until its rows match, since WAIT VIEW can reach another Cloud replica."""
+    op.execute(f"SYSTEM REFRESH VIEW `{schema}`.`{view}`")
+    deadline = time.monotonic() + timeout
+    while True:
+        op.execute(f"SYSTEM WAIT VIEW `{schema}`.`{view}`")
+        rows = connection.execute(text(query)).fetchall()
+        if rows == expected or time.monotonic() > deadline:
+            return rows
+        time.sleep(0.2)
+
+
 @pytest.mark.parametrize(
     ("use_target", "engine_kind", "refresh", "append"),
     [
@@ -1349,7 +1361,7 @@ def test_materialized_view_forms_live(reflection_connection, test_db, ch_name, u
             schema=test_db,
             to_schema=test_db if use_target else None,
             engine=engine,
-            refresh=ClickHouseRefresh(every="1 DAY", append=append) if refresh else None,
+            refresh=ClickHouseRefresh(after="1 DAY", append=append) if refresh else None,
             empty=refresh,
             comment=comment,
         )
@@ -1378,11 +1390,10 @@ def test_materialized_view_forms_live(reflection_connection, test_db, ch_name, u
                 == 1
             )
         connection.execute(text(f"INSERT INTO `{test_db}`.`{source}` VALUES (13, 'user_1')"))
+        query = f"SELECT id, value FROM `{test_db}`.`{sink if use_target else view}`"
         if refresh:
-            op.execute(f"SYSTEM REFRESH VIEW `{test_db}`.`{view}`")
-            op.execute(f"SYSTEM WAIT VIEW `{test_db}`.`{view}`")
-        query_table = sink if use_target else view
-        assert connection.execute(text(f"SELECT id, value FROM `{test_db}`.`{query_table}`")).fetchall() == [(13, "user_1")]
+            assert _refresh_view(op, connection, test_db, view, query, [(13, "user_1")]) == [(13, "user_1")]
+        assert connection.execute(text(query)).fetchall() == [(13, "user_1")]
         op.drop_clickhouse_materialized_view(view, schema=test_db)
         assert not inspect(connection).has_table(view, schema=test_db)
         if inner_table is not None:
@@ -1414,7 +1425,7 @@ def test_materialized_view_modify_refresh_round_trip_live(reflection_connection,
             select,
             engine="MergeTree ORDER BY id",
             schema=test_db,
-            refresh=ClickHouseRefresh(every="1 DAY", append=True),
+            refresh=ClickHouseRefresh(after="1 DAY", append=True),
             empty=True,
         )
         original = ClickHouseRefresh(
@@ -1446,7 +1457,7 @@ def test_materialized_view_modify_refresh_round_trip_live(reflection_connection,
         create_sql = connection.execute(text(f"SHOW CREATE TABLE `{test_db}`.`{view}`")).scalar()
         for clause in ("REFRESH EVERY 1 DAY", "OFFSET 1 HOUR", "RANDOMIZE FOR 1 MINUTE", "DEPENDS ON", "refresh_retries = 13", "APPEND"):
             assert clause in create_sql
-        with pytest.raises(DatabaseError, match="Adding or removing APPEND is not supported"):
+        with pytest.raises(DatabaseError, match="NOT_IMPLEMENTED"):
             op.modify_clickhouse_materialized_view_refresh(view, ClickHouseRefresh(every="2 DAY"), schema=test_db)
 
     reflection_connection(workflow)
@@ -1470,7 +1481,7 @@ def test_materialized_view_modify_query_round_trip_live(reflection_connection, t
             engine=None if use_target else "MergeTree ORDER BY id",
             schema=test_db,
             to_schema=test_db if use_target else None,
-            refresh=ClickHouseRefresh(every="1 DAY", append=True) if refresh else None,
+            refresh=ClickHouseRefresh(after="1 DAY", append=True) if refresh else None,
             empty=refresh,
         )
         connection.execute(text(f"INSERT INTO `{test_db}`.`{source}` VALUES (13, 'user_1')"))
@@ -1478,17 +1489,13 @@ def test_materialized_view_modify_query_round_trip_live(reflection_connection, t
         op.invoke(operation)
         definition = inspect(connection).get_view_definition(view, schema=test_db)
         assert "concat(value, '%%') AS value" in definition
-        query_table = sink if use_target else view
-        assert connection.execute(text(f"SELECT id, value FROM `{test_db}`.`{query_table}`")).fetchall() == (
-            [] if refresh else [(13, "user_1")]
-        )
+        query = f"SELECT id, value FROM `{test_db}`.`{sink if use_target else view}` ORDER BY id"
+        assert connection.execute(text(query)).fetchall() == ([] if refresh else [(13, "user_1")])
         if refresh:
-            op.execute(f"SYSTEM REFRESH VIEW `{test_db}`.`{view}`")
-            op.execute(f"SYSTEM WAIT VIEW `{test_db}`.`{view}`")
+            assert _refresh_view(op, connection, test_db, view, query, [(13, "user_1%%")]) == [(13, "user_1%%")]
         else:
             connection.execute(text(f"INSERT INTO `{test_db}`.`{source}` VALUES (79, 'user_2')"))
-        rows = connection.execute(text(f"SELECT id, value FROM `{test_db}`.`{query_table}` ORDER BY id")).fetchall()
-        assert rows == ([(13, "user_1%%")] if refresh else [(13, "user_1"), (79, "user_2%%")])
+            assert connection.execute(text(query)).fetchall() == [(13, "user_1"), (79, "user_2%%")]
         op.invoke(operation.reverse())
         assert inspect(connection).get_view_definition(view, schema=test_db) == f"SELECT id, value FROM {test_db}.{source}"
 
