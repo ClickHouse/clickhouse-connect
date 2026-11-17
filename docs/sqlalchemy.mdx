@@ -465,6 +465,8 @@ ClickHouse does not support recursive materialized CTEs. The SQLAlchemy helpers 
 
 ClickHouse Connect provides ClickHouse data types, table engines, dictionary constructs, database DDL, and table reflection.
 
+`metadata.create_all()` and `Table.create()` send names, engine clauses, index and projection definitions, and dictionary clauses to the server as written. Pass a single `%` for a single percent sign. Compiled DDL for a pyformat engine, such as `str(CreateTable(table).compile(engine))`, doubles every percent sign, as other SQLAlchemy pyformat dialects do. To get DDL to run elsewhere, compile it with a dialect created with `paramstyle="named"` or use `create_mock_engine`.
+
 `Inspector.get_table_names()` includes all view kinds for compatibility. `MetaData.reflect()` includes them by default, and `only` can select a view by name. Use `Inspector.get_view_names()` for non-materialized views and `Inspector.get_materialized_view_names()` for materialized views. Both methods accept `schema` and work on SQLAlchemy 1.4.40 and later, including 2.x. `Inspector.get_view_definition()` returns the stored `SELECT` of a view or materialized view and raises `NoSuchTableError` for tables and missing names. A reflected view has no engine. Its `Table` carries `clickhousedb_table_type` set to `view`, `materialized_view`, `window_view`, or `live_view`.
 
 `Nullable()` and `LowCardinality()` from `clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes` accept a ClickHouse SQLAlchemy type class or instance and preserve its concrete type for type checkers. For example, `Nullable(String)` returns a `String` instance and can be passed directly to `Column`. Type checkers infer `list[String]` for `[Nullable(String)]`. If the list also holds other ClickHouse types, annotate it as `list[ChSqlaType]` and import `ChSqlaType` from `clickhouse_connect.cc_sqlalchemy.datatypes.base`.
@@ -659,7 +661,7 @@ These operations support online execution, offline SQL, and async `run_sync`. Th
 
 ## Data skipping indexes {#sqlalchemy-skip-indexes}
 
-Declare ClickHouse data skipping indexes as table arguments. This API requires SQLAlchemy, and works without Alembic:
+Declare ClickHouse data skipping indexes as table arguments. This API requires SQLAlchemy, and works without Alembic. Index expressions reach the server as written, so pass a single `%` for a single percent sign:
 
 ```python
 from sqlalchemy import Column, MetaData, Table, inspect
@@ -698,7 +700,7 @@ reflected = Table(
 
 ## Projections {#sqlalchemy-projections}
 
-Declare SELECT projections as table arguments, without requiring Alembic:
+Declare SELECT projections as table arguments, without requiring Alembic. Projection queries reach the server as written, so pass a single `%` for a single percent sign:
 
 ```python
 from sqlalchemy import Column, MetaData, Table, inspect
