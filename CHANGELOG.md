@@ -7,6 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
+- `query_df` is faster when the result arrives in many blocks, for example a `GROUP BY` that uses two-level aggregation and returns 256 blocks. Before, the time to build the DataFrame grew with the number of blocks times the number of columns. Columns of the `object` dtype still use the old path, so their dtypes do not change. Closes [#1203](https://github.com/ClickHouse/clickhouse-connect/issues/1203).
 - The Python codec serializes `UUID` insert columns faster when values are `uuid.UUID` objects, integers or strings, by building the column bytes in one pass instead of per value.
 
 ## 1.13.0, 2026-11-16
