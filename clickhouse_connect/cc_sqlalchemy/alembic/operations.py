@@ -9,6 +9,8 @@ from sqlalchemy import Column
 
 from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex, index_definition
 from clickhouse_connect.cc_sqlalchemy.ddl.projection import ClickHouseProjection, projection_definition
+from clickhouse_connect.cc_sqlalchemy.ddl.refresh import ClickHouseRefresh
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import TableEngine
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import column_specification, render_settings
 from clickhouse_connect.driver.binding import format_str, quote_identifier
@@ -32,11 +34,14 @@ __all__ = [
     "DropClickHouseFunctionOp",
     "CreateClickHouseMaterializedViewOp",
     "DropClickHouseMaterializedViewOp",
+    "ModifyClickHouseMaterializedViewRefreshOp",
+    "ModifyClickHouseMaterializedViewQueryOp",
     "CreateClickHouseDictionaryOp",
     "DropClickHouseDictionaryOp",
     "ReloadClickHouseDictionaryOp",
     "ClickHouseIndex",
     "ClickHouseProjection",
+    "ClickHouseRefresh",
 ]
 
 
@@ -1002,37 +1007,59 @@ class CreateClickHouseMaterializedViewOp(MigrateOperation):
     def __init__(
         self,
         name: str,
-        to_table: str,
+        to_table: str | None,
         select: str,
         *,
         if_not_exists: bool = False,
         schema: str | None = None,
         to_schema: str | None = None,
+        engine: TableEngine | str | None = None,
+        refresh: ClickHouseRefresh | None = None,
+        empty: bool = False,
+        comment: str | None = None,
     ) -> None:
+        if (to_table is not None) == (engine is not None):
+            raise ValueError("create_clickhouse_materialized_view requires exactly one of to_table or engine")
+        if to_schema is not None and to_table is None:
+            raise ValueError("to_schema requires to_table")
+        if empty and refresh is None:
+            raise ValueError("empty requires refresh")
+        if refresh is not None and not isinstance(refresh, ClickHouseRefresh):
+            raise ValueError("refresh must be a ClickHouseRefresh")
+        if engine is not None and not (isinstance(engine, TableEngine) or isinstance(engine, str) and engine.strip()):
+            raise ValueError("engine must be a TableEngine or a non-empty string")
         self.name: str = name
-        self.to_table: str = to_table
+        self.to_table: str | None = to_table
         self.select: str = select
         self.if_not_exists: bool = if_not_exists
         self.schema: str | None = schema
         self.to_schema: str | None = to_schema
+        self.engine: TableEngine | str | None = engine
+        self.refresh: ClickHouseRefresh | None = refresh
+        self.empty: bool = empty
+        self.comment: str | None = comment
 
     @classmethod
     def create_clickhouse_materialized_view(
         cls,
         operations: Operations,
         name: str,
-        to_table: str,
+        to_table: str | None,
         select: str,
         if_not_exists: bool = False,
         schema: str | None = None,
         to_schema: str | None = None,
+        *,
+        engine: TableEngine | str | None = None,
+        refresh: ClickHouseRefresh | None = None,
+        empty: bool = False,
+        comment: str | None = None,
     ) -> Any:
-        """Emit CREATE MATERIALIZED VIEW ... TO ... AS ...
+        """Create a materialized view. select and string engines are raw SQL.
 
-        select is raw SQL passthrough. This helper intentionally supports only the
-        TO-table form because ENGINE and POPULATE are not valid with TO. ClickHouse
-        treats SETTINGS after AS SELECT as part of the stored SELECT, so this helper
-        does not accept clickhouse_settings.
+        String engines contain the text after ENGINE =. SETTINGS after AS SELECT
+        belong to the stored SELECT, so clickhouse_settings is not accepted.
+        Dropping an inner-engine view also removes its data.
         """
         return operations.invoke(
             cls(
@@ -1042,25 +1069,104 @@ class CreateClickHouseMaterializedViewOp(MigrateOperation):
                 if_not_exists=if_not_exists,
                 schema=schema,
                 to_schema=to_schema,
+                engine=engine,
+                refresh=refresh,
+                empty=empty,
+                comment=comment,
             )
         )
 
     def reverse(self) -> MigrateOperation:
-        return DropClickHouseMaterializedViewOp(
-            self.name,
-            if_exists=True,
-            schema=self.schema,
-        )
+        if self.if_not_exists and (self.engine is not None or self.refresh is not None):
+            raise NotImplementedError("Guarded or replacement creation requires an explicit downgrade with the previous definition")
+        return DropClickHouseMaterializedViewOp(self.name, if_exists=True, schema=self.schema)
 
 
 @Operations.implementation_for(CreateClickHouseMaterializedViewOp)
 def _create_clickhouse_materialized_view(operations: Operations, operation: CreateClickHouseMaterializedViewOp) -> Any:
     exists = " IF NOT EXISTS" if operation.if_not_exists else ""
-    sql = (
-        f"CREATE MATERIALIZED VIEW{exists} {full_table(operation.name, operation.schema)} "
-        f"TO {full_table(operation.to_table, operation.to_schema)} AS {operation.select}"
+    parts = [f"CREATE MATERIALIZED VIEW{exists} {full_table(operation.name, operation.schema)}"]
+    if operation.refresh is not None:
+        parts.append(operation.refresh.render())
+    if operation.to_table is not None:
+        parts.append(f"TO {full_table(operation.to_table, operation.to_schema)}")
+    if isinstance(operation.engine, TableEngine):
+        parts.append(operation.engine.compile())
+    elif operation.engine is not None:
+        parts.append(f"ENGINE = {operation.engine}")
+    if operation.empty:
+        parts.append("EMPTY")
+    if operation.comment is not None:
+        parts.append(f"COMMENT {format_str(operation.comment)}")
+    parts.append(f"AS {operation.select}")
+    return _exec_sql(operations, " ".join(parts))
+
+
+@Operations.register_operation("modify_clickhouse_materialized_view_refresh")
+class ModifyClickHouseMaterializedViewRefreshOp(MigrateOperation):
+    def __init__(
+        self,
+        name: str,
+        refresh: ClickHouseRefresh,
+        *,
+        schema: str | None = None,
+        existing_refresh: ClickHouseRefresh | None = None,
+    ) -> None:
+        if not isinstance(refresh, ClickHouseRefresh):
+            raise ValueError("refresh must be a ClickHouseRefresh")
+        if existing_refresh is not None and not isinstance(existing_refresh, ClickHouseRefresh):
+            raise ValueError("existing_refresh must be a ClickHouseRefresh")
+        if existing_refresh is not None and existing_refresh.append != refresh.append:
+            raise ValueError("MODIFY REFRESH cannot change APPEND")
+        self.name: str = name
+        self.refresh: ClickHouseRefresh = refresh
+        self.schema: str | None = schema
+        self.existing_refresh: ClickHouseRefresh | None = existing_refresh
+
+    @classmethod
+    def modify_clickhouse_materialized_view_refresh(
+        cls, operations: Operations, name: str, refresh: ClickHouseRefresh, *, schema: str | None = None
+    ) -> Any:
+        """Replace a refresh strategy. APPEND and all_replicas cannot change."""
+        return operations.invoke(cls(name, refresh, schema=schema))
+
+    def reverse(self) -> MigrateOperation:
+        if self.existing_refresh is None:
+            raise NotImplementedError("modify_clickhouse_materialized_view_refresh needs existing_refresh to reverse")
+        return ModifyClickHouseMaterializedViewRefreshOp(
+            self.name, self.existing_refresh, schema=self.schema, existing_refresh=self.refresh
+        )
+
+
+@Operations.implementation_for(ModifyClickHouseMaterializedViewRefreshOp)
+def _modify_clickhouse_materialized_view_refresh(operations: Operations, operation: ModifyClickHouseMaterializedViewRefreshOp) -> None:
+    _exec_sql(
+        operations, f"ALTER TABLE {full_table(operation.name, operation.schema)} MODIFY {operation.refresh.render()}", literal_sql=True
     )
-    return _exec_sql(operations, sql)
+
+
+@Operations.register_operation("modify_clickhouse_materialized_view_query")
+class ModifyClickHouseMaterializedViewQueryOp(MigrateOperation):
+    def __init__(self, name: str, select: str, *, schema: str | None = None, existing_select: str | None = None) -> None:
+        self.name: str = name
+        self.select: str = select
+        self.schema: str | None = schema
+        self.existing_select: str | None = existing_select
+
+    @classmethod
+    def modify_clickhouse_materialized_view_query(cls, operations: Operations, name: str, select: str, *, schema: str | None = None) -> Any:
+        """Replace a materialized view query without backfill."""
+        return operations.invoke(cls(name, select, schema=schema))
+
+    def reverse(self) -> MigrateOperation:
+        if self.existing_select is None:
+            raise NotImplementedError("modify_clickhouse_materialized_view_query needs existing_select to reverse")
+        return ModifyClickHouseMaterializedViewQueryOp(self.name, self.existing_select, schema=self.schema, existing_select=self.select)
+
+
+@Operations.implementation_for(ModifyClickHouseMaterializedViewQueryOp)
+def _modify_clickhouse_materialized_view_query(operations: Operations, operation: ModifyClickHouseMaterializedViewQueryOp) -> None:
+    _exec_sql(operations, f"ALTER TABLE {full_table(operation.name, operation.schema)} MODIFY QUERY {operation.select}", literal_sql=True)
 
 
 @Operations.register_operation("drop_clickhouse_materialized_view")
@@ -1291,3 +1397,6 @@ _DropClickHouseMaterializedViewOp = DropClickHouseMaterializedViewOp
 _CreateClickHouseDictionaryOp = CreateClickHouseDictionaryOp
 _DropClickHouseDictionaryOp = DropClickHouseDictionaryOp
 _ReloadClickHouseDictionaryOp = ReloadClickHouseDictionaryOp
+
+_ModifyClickHouseMaterializedViewRefreshOp = ModifyClickHouseMaterializedViewRefreshOp
+_ModifyClickHouseMaterializedViewQueryOp = ModifyClickHouseMaterializedViewQueryOp

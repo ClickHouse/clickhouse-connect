@@ -12,12 +12,16 @@ from alembic.runtime.migration import MigrationContext
 from alembic.util import CommandError
 from sqlalchemy import Column, Index, MetaData, Table, inspect, literal_column, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import DatabaseError
 from sqlalchemy.schema import CreateTable
 
 from clickhouse_connect.cc_sqlalchemy.alembic import (
     ClickHouseImpl,
     ClickHouseIndex,
     ClickHouseProjection,
+    ClickHouseRefresh,
+    ModifyClickHouseMaterializedViewQueryOp,
+    ModifyClickHouseMaterializedViewRefreshOp,
 )
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import sqla_type_from_name
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
@@ -41,6 +45,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import (
     SummingMergeTree,
 )
 from clickhouse_connect.datatypes.registry import parse_name
+from tests.integration_tests.test_sqlalchemy.test_view_reflection import reflection_connection  # noqa: F401
 
 logging.getLogger("alembic").setLevel(logging.WARNING)
 
@@ -1313,3 +1318,178 @@ def test_alembic_reload_dictionary_live(test_engine: Engine, test_db: str, ch_na
         ).fetchone()
         assert status == "LOADED"
         assert element_count == 1
+
+
+@pytest.mark.parametrize(
+    ("use_target", "engine_kind", "refresh", "append"),
+    [
+        (True, None, False, False),
+        (False, "object", False, False),
+        (False, "string", False, False),
+        (True, None, True, False),
+        (True, None, True, True),
+        (False, "object", True, False),
+        (False, "string", True, True),
+    ],
+)
+def test_materialized_view_forms_live(reflection_connection, test_db, ch_name, use_target, engine_kind, refresh, append):  # noqa: F811
+    source, sink, view = (ch_name(prefix) for prefix in ("mv_source", "mv_sink", "mv_forms"))
+    comment = "owner's view 13% with \\ path"
+
+    def workflow(connection):
+        op = Operations(MigrationContext.configure(connection))
+        for name in (source, sink):
+            connection.execute(text(f"CREATE TABLE `{test_db}`.`{name}` (id UInt32, value String) ENGINE MergeTree ORDER BY id"))
+        select = f"SELECT id, value FROM `{test_db}`.`{source}`"
+        engine = MergeTree(order_by="id") if engine_kind == "object" else "MergeTree ORDER BY id" if engine_kind else None
+        op.create_clickhouse_materialized_view(
+            view,
+            sink if use_target else None,
+            select,
+            schema=test_db,
+            to_schema=test_db if use_target else None,
+            engine=engine,
+            refresh=ClickHouseRefresh(every="1 DAY", append=append) if refresh else None,
+            empty=refresh,
+            comment=comment,
+        )
+        inspector = inspect(connection)
+        assert inspector.get_view_definition(view, schema=test_db) == f"SELECT id, value FROM {test_db}.{source}"
+        assert inspector.get_table_comment(view, schema=test_db) == {"text": comment}
+        inner_table = None
+        if not use_target:
+            inner_table = connection.execute(
+                text("SELECT concat('.inner_id.', toString(uuid)) FROM system.tables WHERE database = :db AND name = :name"),
+                {"db": test_db, "name": view},
+            ).scalar()
+            assert (
+                connection.execute(
+                    text("SELECT count() FROM system.tables WHERE database = :db AND name = :name"),
+                    {"db": test_db, "name": inner_table},
+                ).scalar()
+                == 1
+            )
+        if refresh:
+            assert (
+                connection.execute(
+                    text("SELECT count() FROM system.view_refreshes WHERE database = :db AND view = :name"),
+                    {"db": test_db, "name": view},
+                ).scalar()
+                == 1
+            )
+        connection.execute(text(f"INSERT INTO `{test_db}`.`{source}` VALUES (13, 'user_1')"))
+        if refresh:
+            op.execute(f"SYSTEM REFRESH VIEW `{test_db}`.`{view}`")
+            op.execute(f"SYSTEM WAIT VIEW `{test_db}`.`{view}`")
+        query_table = sink if use_target else view
+        assert connection.execute(text(f"SELECT id, value FROM `{test_db}`.`{query_table}`")).fetchall() == [(13, "user_1")]
+        op.drop_clickhouse_materialized_view(view, schema=test_db)
+        assert not inspect(connection).has_table(view, schema=test_db)
+        if inner_table is not None:
+            assert (
+                connection.execute(
+                    text("SELECT count() FROM system.tables WHERE database = :db AND name = :name"),
+                    {"db": test_db, "name": inner_table},
+                ).scalar()
+                == 0
+            )
+        else:
+            assert inspect(connection).has_table(sink, schema=test_db)
+
+    reflection_connection(workflow)
+
+
+@pytest.mark.parametrize("use_target", [True, False])
+def test_materialized_view_modify_refresh_round_trip_live(reflection_connection, test_db, ch_name, use_target):  # noqa: F811
+    source, sink, view, dependency = (ch_name(prefix) for prefix in ("refresh_source", "refresh_sink", "refresh_mv", "refresh_dep"))
+
+    def workflow(connection):
+        op = Operations(MigrationContext.configure(connection))
+        for name in (source, sink):
+            connection.execute(text(f"CREATE TABLE `{test_db}`.`{name}` (id UInt32) ENGINE MergeTree ORDER BY id"))
+        select = f"SELECT id FROM `{test_db}`.`{source}`"
+        op.create_clickhouse_materialized_view(
+            dependency,
+            None,
+            select,
+            engine="MergeTree ORDER BY id",
+            schema=test_db,
+            refresh=ClickHouseRefresh(every="1 DAY", append=True),
+            empty=True,
+        )
+        original = ClickHouseRefresh(
+            every="1 DAY",
+            offset="1 HOUR",
+            randomize_for="1 MINUTE",
+            depends_on=((test_db, dependency),),
+            settings={"refresh_retries": 13},
+            append=True,
+        )
+        op.create_clickhouse_materialized_view(
+            view,
+            sink if use_target else None,
+            select,
+            engine=None if use_target else MergeTree(order_by="id"),
+            schema=test_db,
+            to_schema=test_db if use_target else None,
+            refresh=original,
+            empty=True,
+        )
+        changed = ClickHouseRefresh(every="2 DAY", append=True)
+        operation = ModifyClickHouseMaterializedViewRefreshOp(view, changed, schema=test_db, existing_refresh=original)
+        op.invoke(operation)
+        create_sql = connection.execute(text(f"SHOW CREATE TABLE `{test_db}`.`{view}`")).scalar()
+        assert "REFRESH EVERY 2 DAY APPEND" in create_sql
+        for clause in ("OFFSET", "RANDOMIZE FOR", "DEPENDS ON", "refresh_retries"):
+            assert clause not in create_sql
+        op.invoke(operation.reverse())
+        create_sql = connection.execute(text(f"SHOW CREATE TABLE `{test_db}`.`{view}`")).scalar()
+        for clause in ("REFRESH EVERY 1 DAY", "OFFSET 1 HOUR", "RANDOMIZE FOR 1 MINUTE", "DEPENDS ON", "refresh_retries = 13", "APPEND"):
+            assert clause in create_sql
+        with pytest.raises(DatabaseError, match="Adding or removing APPEND is not supported"):
+            op.modify_clickhouse_materialized_view_refresh(view, ClickHouseRefresh(every="2 DAY"), schema=test_db)
+
+    reflection_connection(workflow)
+
+
+@pytest.mark.parametrize("use_target", [True, False])
+@pytest.mark.parametrize("refresh", [True, False])
+def test_materialized_view_modify_query_round_trip_live(reflection_connection, test_db, ch_name, use_target, refresh):  # noqa: F811
+    source, sink, view = (ch_name(prefix) for prefix in ("query_source", "query_sink", "query_mv"))
+
+    def workflow(connection):
+        op = Operations(MigrationContext.configure(connection))
+        for name in (source, sink):
+            connection.execute(text(f"CREATE TABLE `{test_db}`.`{name}` (id UInt32, value String) ENGINE MergeTree ORDER BY id"))
+        original = f"SELECT id, value FROM `{test_db}`.`{source}`"
+        changed = f"SELECT id, concat(value, '%%') AS value FROM `{test_db}`.`{source}`"
+        op.create_clickhouse_materialized_view(
+            view,
+            sink if use_target else None,
+            original,
+            engine=None if use_target else "MergeTree ORDER BY id",
+            schema=test_db,
+            to_schema=test_db if use_target else None,
+            refresh=ClickHouseRefresh(every="1 DAY", append=True) if refresh else None,
+            empty=refresh,
+        )
+        connection.execute(text(f"INSERT INTO `{test_db}`.`{source}` VALUES (13, 'user_1')"))
+        operation = ModifyClickHouseMaterializedViewQueryOp(view, changed, schema=test_db, existing_select=original)
+        op.invoke(operation)
+        definition = inspect(connection).get_view_definition(view, schema=test_db)
+        assert "concat(value, '%%') AS value" in definition
+        query_table = sink if use_target else view
+        assert connection.execute(text(f"SELECT id, value FROM `{test_db}`.`{query_table}`")).fetchall() == (
+            [] if refresh else [(13, "user_1")]
+        )
+        if refresh:
+            op.execute(f"SYSTEM REFRESH VIEW `{test_db}`.`{view}`")
+            op.execute(f"SYSTEM WAIT VIEW `{test_db}`.`{view}`")
+        else:
+            connection.execute(text(f"INSERT INTO `{test_db}`.`{source}` VALUES (79, 'user_2')"))
+        rows = connection.execute(text(f"SELECT id, value FROM `{test_db}`.`{query_table}` ORDER BY id")).fetchall()
+        assert rows == ([(13, "user_1%%")] if refresh else [(13, "user_1"), (79, "user_2%%")])
+        op.invoke(operation.reverse())
+        assert inspect(connection).get_view_definition(view, schema=test_db) == f"SELECT id, value FROM {test_db}.{source}"
+
+    reflection_connection(workflow)

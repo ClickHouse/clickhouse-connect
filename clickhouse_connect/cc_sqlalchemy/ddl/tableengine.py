@@ -145,7 +145,7 @@ class TableEngine(SchemaItem):
     optional_args: set[str] = set()
     eng_params: Sequence[str] = ()
 
-    def __init_subclass__(cls, **kwargs):
+    def __init_subclass__(cls, **kwargs: Any) -> None:
         engine_map[cls.__name__] = cls
 
     def __init__(self, kwargs: dict[str, Any] | None = None, *, settings: dict[str, Any] | None = None) -> None:
@@ -154,7 +154,7 @@ class TableEngine(SchemaItem):
             kwargs = {}
         if settings is not None:
             kwargs["settings"] = settings
-        self.name = self.__class__.__name__
+        self.name: str = self.__class__.__name__
         te_name = f"{self.name} Table Engine"
         self._orig_kwargs = kwargs.copy()
         engine_args = []
@@ -176,9 +176,9 @@ class TableEngine(SchemaItem):
             if v is not None:
                 params.append(tuple_expr(param_name.upper().replace("_", " "), v))
         settings = kwargs.pop("settings", None)
-        self.settings = settings or {}
+        self.settings: dict[str, Any] = settings or {}
 
-        self.full_engine = "Engine " + self.name
+        self.full_engine: str = "Engine " + self.name
         if engine_args:
             self.full_engine += f"({', '.join(engine_args)})"
         if params:
@@ -187,7 +187,7 @@ class TableEngine(SchemaItem):
             settings_expr = ", ".join(f"{k} = {_render_setting_value(v)}" for k, v in self.settings.items())
             self.full_engine += f" SETTINGS {settings_expr}"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Produce Python code representation of the engine for Alembic autogeneration."""
         args = []
         for k, v in self._orig_kwargs.items():
@@ -198,10 +198,10 @@ class TableEngine(SchemaItem):
             args.append(f"{k}={repr_engine_value(v)}")
         return f"{self.name}({', '.join(args)})"
 
-    def compile(self):
+    def compile(self) -> str:
         return self.full_engine
 
-    def check_primary_keys(self, primary_keys: Sequence):
+    def check_primary_keys(self, primary_keys: Sequence[Any]) -> None:
         raise SQLAlchemyError(f"Table Engine {self.name} does not support primary keys")
 
     def _set_parent(self, parent, **_kwargs):

@@ -698,7 +698,7 @@ These helpers work online and offline, with sync connections and async `run_sync
 
 ### Materialized views
 
-Create and drop materialized views with an explicit target table. The `select` argument is raw SQL passthrough:
+Create materialized views with an explicit target table or an inner engine. The `select` argument is raw SQL passthrough:
 
 ```python
 op.create_clickhouse_materialized_view(
@@ -717,7 +717,53 @@ op.drop_clickhouse_materialized_view(
 )
 ```
 
-This helper intentionally models the `TO ... AS SELECT ...` form. ClickHouse rejects combining `TO` with `ENGINE` or `POPULATE`, so use `op.execute(...)` for exotic materialized view shapes. `create_clickhouse_materialized_view` does not accept `clickhouse_settings`, because ClickHouse parses `SETTINGS` after `AS SELECT` as part of the stored SELECT definition rather than as one-shot DDL settings.
+Use `ClickHouseRefresh` for a refreshable view. Pass `None` as the second positional argument for an inner-engine view:
+
+```python
+from clickhouse_connect.cc_sqlalchemy import ClickHouseRefresh, engines
+
+op.create_clickhouse_materialized_view(
+    "events_hourly_mv",
+    "events_rollup",
+    "SELECT id, event_name FROM alembic_demo.events",
+    schema="alembic_demo",
+    to_schema="alembic_demo",
+    refresh=ClickHouseRefresh(every="1 HOUR", offset="5 MINUTE", append=True),
+    empty=True,
+    comment="Hourly events",
+)
+
+op.create_clickhouse_materialized_view(
+    "events_inner_mv",
+    None,
+    "SELECT id, event_name FROM alembic_demo.events",
+    schema="alembic_demo",
+    engine=engines.MergeTree(order_by="id"),
+)
+
+op.modify_clickhouse_materialized_view_refresh(
+    "events_hourly_mv",
+    ClickHouseRefresh(every="2 HOUR", append=True),
+    schema="alembic_demo",
+)
+op.modify_clickhouse_materialized_view_query(
+    "events_inner_mv",
+    "SELECT id, event_name FROM alembic_demo.events WHERE id > 13",
+    schema="alembic_demo",
+)
+```
+
+Exactly one of `to_table` and `engine` is required. An engine can be a `TableEngine` object or a SQL string containing the text after `ENGINE =`, such as `"MergeTree ORDER BY id"`. A refresh can be used with either form. `empty=True` requires a refresh and skips the initial refresh. Comments belong to the view. The helper does not support `POPULATE`.
+
+`ClickHouseRefresh` requires exactly one of `every` and `after`. Intervals are raw SQL text. `offset` is valid only with `every`. Other fields are `randomize_for`, `depends_on`, refresh `settings`, and `append`. Refresh settings such as `refresh_retries` differ from SELECT settings. Dependency names can be strings such as `"analytics.source_mv"` or tuples such as `("analytics", "source.with.dot")`. Strings split on the first dot. Unqualified names resolve against the session database, even when the operation has a different `schema`. The server decides whether a dependency is valid with `after`.
+
+For non-APPEND refreshable views, target replication must match the database. A `Replicated` database requires a `Replicated*` or `Shared*` target engine. A non-Replicated database rejects those target engines for this form. This rule applies to both an inner engine and a TO target.
+
+`MODIFY REFRESH` replaces the full schedule, offset, randomization, dependencies, and refresh settings. Pass the full desired `ClickHouseRefresh`. It cannot change `append` or the `all_replicas` setting, or add or remove refresh behavior. Those changes require drop and create. `MODIFY QUERY` does not backfill data. For a TO-form view, the server can accept a query whose columns no longer match the target and use target defaults on the next insert. Check target columns before applying it. Inner-engine views reject unknown output columns. Query modification also works on refreshable views.
+
+Dropping an inner-engine view removes its inner table and all its data. Dropping a TO-form view preserves the target table. Automatic reversal of create uses a guarded drop. For an inner-engine view this also discards data, as reversing `create_table` does. Inner-engine or refreshable creates with `if_not_exists=True` refuse automatic reversal because the prior state is unknown. The plain TO form retains its guarded-drop reversal. Modify operations need the prior definition for automatic reversal. Hand-written revisions should provide explicit downgrade operations with the previous refresh or SELECT.
+
+These operations work online, offline, and through async `run_sync`. They do not add autogenerate comparison or dependency ordering. `create_clickhouse_materialized_view` does not accept `clickhouse_settings`, because ClickHouse parses `SETTINGS` after `AS SELECT` as part of the stored SELECT definition rather than as one-shot DDL settings. Use `op.execute` for `SYSTEM ... VIEW` commands.
 
 ### Dictionaries
 
@@ -889,7 +935,7 @@ Comparison follows the server's projection grammar formatting and case-insensiti
 
 ### Classify generated operations before rendering
 
-All 21 ClickHouse migration operation classes are public from
+All 23 ClickHouse migration operation classes are public from
 `clickhouse_connect.cc_sqlalchemy.alembic` and its `operations` module. Use
 `isinstance` to inspect them in `process_revision_directives` or register them
 with Alembic's `Rewriter.rewrites`. The old underscore names remain aliases of
@@ -911,8 +957,10 @@ drops store `names` as a tuple. Inspect every member of a grouped operation.
 These table settings differ from the query-level `clickhouse_settings` mapping.
 Create view and function operations expose `name`, `select` or `expression`,
 `if_not_exists`, and `or_replace`. Views also expose `schema`. Materialized-view
-creation exposes `name`, `schema`, `to_table`, `to_schema`, `select`, and
-`if_not_exists`. Dictionary creation exposes `name`, `schema`, a `columns` tuple,
+creation exposes `name`, `schema`, `to_table`, `to_schema`, `select`,
+`if_not_exists`, `engine`, `refresh`, `empty`, and `comment`. Refresh modification
+exposes `name`, `schema`, `refresh`, and optional `existing_refresh`. Query
+modification exposes `name`, `schema`, `select`, and optional `existing_select`. Dictionary creation exposes `name`, `schema`, a `columns` tuple,
 `primary_key`, `source`, `layout`, `lifetime`, `comment`, `if_not_exists`, and
 `clickhouse_settings`. View, function, materialized-view, and dictionary drops expose
 `name` and `if_exists`, plus `schema` and `clickhouse_settings` where accepted by
@@ -924,9 +972,12 @@ does not restore materialized data.
 This example is an application policy, not a driver safety guarantee. It permits
 only an explicitly chosen index shape or table setting, sends replacements and
 unknown operations for review, and rejects standalone index drops, standalone
-projection drops, and destructive built-in operations. Change these rules for your deployment. Even
+projection drops, materialized-view drops, and destructive built-in operations. Change these rules for your deployment. Even
 creation needs field inspection: `or_replace=True` on a view can discard a
 colliding table's data, and raw SQL bodies and dictionary sources need review.
+All materialized-view create forms use the same class. Inspect `engine` and
+`refresh` before approving a create. Treat materialized-view drops as possibly
+destructive because their fields do not identify inner-engine views.
 
 ```python
 import logging
@@ -966,6 +1017,15 @@ def classify_tree(tree, direction):
         verdict, reason = "review", "operation needs explicit review"
         if isinstance(operation, (ops.DropTableOp, ops.DropColumnOp, ops.ExecuteSQLOp)):
             verdict, reason = "rejected", "destructive change or opaque SQL"
+        elif isinstance(operation, ch_alembic.DropClickHouseMaterializedViewOp):
+            verdict, reason = "rejected", "materialized-view drop can discard inner-table data"
+        elif isinstance(operation, ch_alembic.CreateClickHouseMaterializedViewOp):
+            if operation.engine is not None:
+                reason = "inner-engine materialized view needs review"
+            elif operation.refresh is not None:
+                reason = "refreshable materialized view needs review"
+            else:
+                reason = "target-table materialized view needs review"
         elif object_key(operation) in replacements:
             reason = "replacement can discard existing materialization"
         elif isinstance(operation, (ch_alembic.DropClickHouseIndexOp,

@@ -31,11 +31,14 @@ from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
     _DropClickHouseViewOp,
     _MaterializeClickHouseIndexOp,
     _MaterializeClickHouseProjectionOp,
+    _ModifyClickHouseMaterializedViewQueryOp,
+    _ModifyClickHouseMaterializedViewRefreshOp,
     _ModifyClickHouseTableSettingsOp,
     _ReloadClickHouseDictionaryOp,
     _ResetClickHouseTableSettingsOp,
 )
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
+from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import TableEngine
 from clickhouse_connect.cc_sqlalchemy.inspector import VIEW_ENGINE_KINDS
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
 
@@ -489,11 +492,46 @@ def _render_drop_clickhouse_function(autogen_context: AutogenContext, op: _DropC
 
 @render.renderers.dispatch_for(_CreateClickHouseMaterializedViewOp)
 def _render_create_clickhouse_materialized_view(autogen_context: AutogenContext, op: _CreateClickHouseMaterializedViewOp) -> str:
+    if op.refresh is not None:
+        autogen_context.imports.add("from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseRefresh")
+    if isinstance(op.engine, TableEngine):
+        autogen_context.imports.add("from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import *  # noqa: F401,F403")
     return _render_op_call(
         autogen_context,
         "create_clickhouse_materialized_view",
         [repr(op.name), repr(op.to_table), repr(op.select)],
-        _optional_kwargs(("if_not_exists", op.if_not_exists, False), ("schema", op.schema, None), ("to_schema", op.to_schema, None)),
+        _optional_kwargs(
+            ("if_not_exists", op.if_not_exists, False),
+            ("schema", op.schema, None),
+            ("to_schema", op.to_schema, None),
+            ("engine", op.engine, None),
+            ("refresh", op.refresh, None),
+            ("empty", op.empty, False),
+            ("comment", op.comment, None),
+        ),
+    )
+
+
+@render.renderers.dispatch_for(_ModifyClickHouseMaterializedViewRefreshOp)
+def _render_modify_clickhouse_materialized_view_refresh(
+    autogen_context: AutogenContext, op: _ModifyClickHouseMaterializedViewRefreshOp
+) -> str:
+    autogen_context.imports.add("from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseRefresh")
+    return _render_op_call(
+        autogen_context,
+        "modify_clickhouse_materialized_view_refresh",
+        [repr(op.name), repr(op.refresh)],
+        _optional_kwargs(("schema", op.schema, None)),
+    )
+
+
+@render.renderers.dispatch_for(_ModifyClickHouseMaterializedViewQueryOp)
+def _render_modify_clickhouse_materialized_view_query(autogen_context: AutogenContext, op: _ModifyClickHouseMaterializedViewQueryOp) -> str:
+    return _render_op_call(
+        autogen_context,
+        "modify_clickhouse_materialized_view_query",
+        [repr(op.name), repr(op.select)],
+        _optional_kwargs(("schema", op.schema, None)),
     )
 
 
