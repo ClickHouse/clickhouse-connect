@@ -22,6 +22,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex, index_de
 from clickhouse_connect.cc_sqlalchemy.inspector import _database_name, _get_clickhouse_index_catalog, with_internal_query_formats
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import ClickHouseDDLHelper
+from clickhouse_connect.cc_sqlalchemy.sql.preparer import literal_dialect
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import extract_parenthesized_block, split_top_level
 from clickhouse_connect.driver.binding import format_str, quote_identifier
 from clickhouse_connect.driver.exceptions import Error
@@ -137,7 +138,7 @@ def _key_expression(context: AutogenContext, expression: str) -> str:
             assert context.connection is not None
             _require_analyzer(context)
             rows = context.connection.exec_driver_sql(
-                f"EXPLAIN QUERY TREE run_passes=0 SELECT {expression} AS _index LIMIT 1",
+                f"EXPLAIN QUERY TREE run_passes=0 SELECT {expression.replace('%', '%%')} AS _index LIMIT 1",
                 execution_options=with_internal_query_formats(text("")).get_execution_options(),
             ).fetchall()
             if [row[0] for row in rows[:3]] != ["QUERY id: 0", "  PROJECTION", "    LIST id: 1, nodes: 1"]:
@@ -152,11 +153,12 @@ def _key_expression(context: AutogenContext, expression: str) -> str:
 
 def _aliases(context: AutogenContext, table: Table) -> str:
     aliases = []
+    dialect = literal_dialect(context.dialect)
     for column in table.columns:
         alias = ClickHouseDDLHelper.get_option(column, "alias")
         if alias is not None:
             clause = literal(alias) if isinstance(alias, str) else alias
-            rendered = clause.compile(dialect=context.dialect, compile_kwargs={"literal_binds": True})
+            rendered = clause.compile(dialect=dialect, compile_kwargs={"literal_binds": True})
             aliases.append(f"{rendered} AS {quote_identifier(column.name)}")
     return "WITH " + ", ".join(aliases) + " " if aliases else ""
 
@@ -177,7 +179,7 @@ def _analyzed_expression(context: AutogenContext, expression: str, table: Table,
         "SETTINGS prefer_column_name_to_alias=0"
     )
     rows = context.connection.exec_driver_sql(
-        statement, execution_options=with_internal_query_formats(text("")).get_execution_options()
+        statement.replace("%", "%%"), execution_options=with_internal_query_formats(text("")).get_execution_options()
     ).fetchall()
     if not rows:
         raise ValueError("Server returned no analyzed index expression")

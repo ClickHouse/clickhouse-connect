@@ -262,7 +262,7 @@ def test_different_projection_definitions_generate_replacements(run_sqlalchemy, 
         ("SELECT plus(value, 13) AS extra ORDER BY extra", "SELECT value + 13 AS extra ORDER BY extra"),
         ("SELECT label, value ORDER BY (label, value)", "SELECT label, value ORDER BY label, value"),
         ("SELECT (value % 2) AS parity ORDER BY (parity)", "SELECT value % 2 AS parity ORDER BY parity"),
-        ("SELECT concat(label, '100%%') AS category ORDER BY category", "SELECT concat(label, '100%') AS category ORDER BY category"),
+        ("SELECT concat(label, '100%%') AS category ORDER BY (category)", "SELECT concat(label, '100%%') AS category ORDER BY category"),
         (
             "WITH (item -> item + 13) AS date SELECT date(value) AS extra ORDER BY extra",
             "WITH item -> (item + 13) AS date SELECT date(value) AS extra ORDER BY extra",

@@ -557,6 +557,8 @@ For DDL that Alembic does not model, use `op.execute(...)` directly with a raw S
 
 The integration also registers runtime `op.*` helpers for ClickHouse-specific DDL that standard Alembic does not model: skip indexes, projections, table settings, materialized views, and dictionaries. They render valid ClickHouse SQL in both online and offline `--sql` mode, quote identifiers for you, and helpers with a `clickhouse_settings={...}` parameter render it as an inline `SETTINGS` clause where ClickHouse accepts one. Because Alembic attaches these methods dynamically, static type checkers may not recognize them in migration scripts.
 
+All ClickHouse operation helpers preserve percent signs in SQL fragments, comments, settings, and identifiers in online and offline migrations. This also applies to inline index, projection, engine, and other table clauses in `metadata.create_all` and `op.create_table`. Pass SQL as it should reach the server. Pass single percent signs for a single percent. Alembic offline SQL configured with a live pyformat dialect through `dialect=engine.dialect` or `connection=` renders percents as written in every statement. This includes `op.execute` text and raw strings, identifiers, `bulk_insert`, `add_column` defaults and comments, `alter_column`, `rename_table`, and `create_table_comment`. Bind placeholders render as `:x`. Standard `env.py` URL configurations with or without named `dialect_opts`, `dialect_name=`, and server-side parameter configurations also preserve literal percents.
+
 Import the value objects from the integration package:
 
 ```python
@@ -763,7 +765,7 @@ For non-APPEND refreshable views, target replication must match the database. A 
 
 Dropping an inner-engine view removes its inner table and all its data. Dropping a TO-form view preserves the target table. Automatic reversal of create uses a guarded drop. For an inner-engine view this also discards data, as reversing `create_table` does. Inner-engine or refreshable creates with `if_not_exists=True` refuse automatic reversal because the prior state is unknown. The plain TO form retains its guarded-drop reversal. Modify operations need the prior definition for automatic reversal. Hand-written revisions should provide explicit downgrade operations with the previous refresh or SELECT.
 
-These operations work online, offline, and through async `run_sync`. They do not add autogenerate comparison or dependency ordering. `create_clickhouse_materialized_view` does not accept `clickhouse_settings`, because ClickHouse parses `SETTINGS` after `AS SELECT` as part of the stored SELECT definition rather than as one-shot DDL settings. Use `op.execute` for `SYSTEM ... VIEW` commands. Online, `create_clickhouse_materialized_view` turns `%%` into `%` in the SELECT, comment, and refresh clause. Offline SQL and the modify operations keep `%%`.
+These operations work online, offline, and through async `run_sync`. They do not add autogenerate comparison or dependency ordering. `create_clickhouse_materialized_view` does not accept `clickhouse_settings`, because ClickHouse parses `SETTINGS` after `AS SELECT` as part of the stored SELECT definition rather than as one-shot DDL settings. Use `op.execute` for `SYSTEM ... VIEW` commands.
 
 ### Dictionaries
 
@@ -878,7 +880,7 @@ Catalog classification and server normalization
 must be available when comparison is enabled. Unavailable catalog access,
 expression resolution, or expected normalization output raises
 `IndexComparisonError` with structured definitions and a reason. Comparison uses
-the server's structural normal form. It does not prove arbitrary mathematical
+the server's structural normal form and preserves literal percents in expressions. It does not prove arbitrary mathematical
 equivalence. When normalization succeeds but the resulting forms differ,
 autogenerate generates replacement operations.
 

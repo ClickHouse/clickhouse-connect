@@ -5,6 +5,13 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- Alembic ClickHouse operation helpers now preserve percent signs in SQL fragments, comments, settings, and identifiers online, matching offline SQL. This includes materialized views, dictionaries, indexes, projections, and table settings. Previously, these helpers changed `%%` to `%` online. Callers who doubled percents to work around that behavior should now pass single percents.
+- SQLAlchemy `metadata.create_all` and Alembic `op.create_table` now keep `%%` in inline index, projection, engine, and other raw table clauses. Callers who doubled percents there as a workaround should use single percents. `str(CreateTable(table).compile(engine))` for a pyformat engine now doubles percents in every clause, including ORDER BY and PARTITION BY expressions such as `x % 7`, following SQLAlchemy's pyformat convention. To get raw DDL to run elsewhere, compile with a dialect created with `paramstyle="named"` or use `create_mock_engine`.
+- Index comparison in Alembic autogenerate preserves literal percents, so it detects changes between expressions such as `LIKE 'a%%b'` and `LIKE 'a%b'`. Projection comparison also distinguishes single and double percents.
+- Alembic offline output configured with a live pyformat dialect through `dialect=engine.dialect` or `connection=` now renders percents as written in every statement. This includes `op.execute` text and raw strings, identifiers, `bulk_insert`, `add_column` defaults and comments, `alter_column`, `rename_table`, and `create_table_comment`. Bind placeholders now render as `:x` instead of `%(x)s`. Previously, this output mixed doubled, quadrupled, and single percents. Standard `env.py` URL output with or without named `dialect_opts`, `dialect_name=` output, and server-side parameter output are unchanged.
+
 ### Improvements
 
 - Alembic materialized view creation now supports refresh schedules through `ClickHouseRefresh`, inner engines, comments, and skipping the initial refresh with `empty=True`. New helpers modify refresh schedules and SELECT queries. All create forms use `CreateClickHouseMaterializedViewOp`, so policy hooks must inspect its `engine` and `refresh` fields. Materialized view drops can discard inner-table data.

@@ -13,6 +13,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.refresh import ClickHouseRefresh
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import TableEngine
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
 from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import column_specification, render_settings
+from clickhouse_connect.cc_sqlalchemy.sql.preparer import literal_dialect
 from clickhouse_connect.driver.binding import format_str, quote_identifier
 
 __all__ = [
@@ -68,7 +69,7 @@ def _settings_suffix(clickhouse_settings: Mapping[str, Any] | None) -> str:
 
 
 def _render_column_list(operations: Operations, columns: Sequence[Column[Any]]) -> str:
-    dialect = operations.get_context().dialect
+    dialect = literal_dialect(operations.get_context().dialect)
     return ", ".join(column_specification(dialect, column) for column in columns)
 
 
@@ -184,7 +185,7 @@ def _add_clickhouse_index(operations: Operations, operation: AddClickHouseIndexO
     )
     ft = full_table(operation.table_name, operation.schema)
     sql = f"ALTER TABLE {ft} {_render_add_index(index)}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("add_clickhouse_indexes")
@@ -245,7 +246,7 @@ def _add_clickhouse_indexes(operations: Operations, operation: AddClickHouseInde
     ft = full_table(operation.table_name, operation.schema)
     subcommands = ", ".join(_render_add_index(index) for index in operation.indexes)
     sql = f"ALTER TABLE {ft} {subcommands}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("drop_clickhouse_index")
@@ -311,7 +312,7 @@ def _drop_clickhouse_index(operations: Operations, operation: DropClickHouseInde
     ft = full_table(operation.table_name, operation.schema)
     exists = "IF EXISTS " if operation.if_exists else ""
     sql = f"ALTER TABLE {ft} DROP INDEX {exists}{quote_identifier(operation.name)}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("drop_clickhouse_indexes")
@@ -361,7 +362,7 @@ def _drop_clickhouse_indexes(operations: Operations, operation: DropClickHouseIn
     exists = "IF EXISTS " if operation.if_exists else ""
     subcommands = ", ".join(f"DROP INDEX {exists}{quote_identifier(name)}" for name in operation.names)
     sql = f"ALTER TABLE {ft} {subcommands}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("materialize_clickhouse_index")
@@ -421,7 +422,7 @@ def _materialize_clickhouse_index(operations: Operations, operation: Materialize
         f"ALTER TABLE {ft} MATERIALIZE INDEX {exists}{quote_identifier(operation.name)}"
         f"{partition}{_settings_suffix(operation.clickhouse_settings)}"
     )
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("add_clickhouse_projection")
@@ -502,7 +503,7 @@ def _add_clickhouse_projection(operations: Operations, operation: AddClickHouseP
     )
     ft = full_table(operation.table_name, operation.schema)
     sql = f"ALTER TABLE {ft} {_render_add_projection(projection)}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("add_clickhouse_projections")
@@ -563,7 +564,7 @@ def _add_clickhouse_projections(operations: Operations, operation: AddClickHouse
     ft = full_table(operation.table_name, operation.schema)
     subcommands = ", ".join(_render_add_projection(projection) for projection in operation.projections)
     sql = f"ALTER TABLE {ft} {subcommands}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("drop_clickhouse_projection")
@@ -627,7 +628,7 @@ def _drop_clickhouse_projection(operations: Operations, operation: DropClickHous
     ft = full_table(operation.table_name, operation.schema)
     exists = "IF EXISTS " if operation.if_exists else ""
     sql = f"ALTER TABLE {ft} DROP PROJECTION {exists}{quote_identifier(operation.name)}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("drop_clickhouse_projections")
@@ -677,7 +678,7 @@ def _drop_clickhouse_projections(operations: Operations, operation: DropClickHou
     exists = "IF EXISTS " if operation.if_exists else ""
     subcommands = ", ".join(f"DROP PROJECTION {exists}{quote_identifier(name)}" for name in operation.names)
     sql = f"ALTER TABLE {ft} {subcommands}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("materialize_clickhouse_projection")
@@ -737,7 +738,7 @@ def _materialize_clickhouse_projection(operations: Operations, operation: Materi
         f"ALTER TABLE {ft} MATERIALIZE PROJECTION {exists}{quote_identifier(operation.name)}"
         f"{partition}{_settings_suffix(operation.clickhouse_settings)}"
     )
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("modify_clickhouse_table_settings")
@@ -810,7 +811,7 @@ class ModifyClickHouseTableSettingsOp(MigrateOperation):
 def _modify_clickhouse_table_settings(operations: Operations, operation: ModifyClickHouseTableSettingsOp) -> Any:
     ft = full_table(operation.table_name, operation.schema)
     sql = f"ALTER TABLE {ft} MODIFY SETTING {render_settings(operation.settings)}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("reset_clickhouse_table_settings")
@@ -859,7 +860,7 @@ def _reset_clickhouse_table_settings(operations: Operations, operation: ResetCli
     ft = full_table(operation.table_name, operation.schema)
     names = ", ".join(operation.names)
     sql = f"ALTER TABLE {ft} RESET SETTING {names}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 def _view_identifier(name: str, schema: str | None) -> str:
@@ -1101,7 +1102,7 @@ def _create_clickhouse_materialized_view(operations: Operations, operation: Crea
     if operation.comment is not None:
         parts.append(f"COMMENT {format_str(operation.comment)}")
     parts.append(f"AS {operation.select}")
-    return _exec_sql(operations, " ".join(parts))
+    return _exec_sql(operations, " ".join(parts), literal_sql=True)
 
 
 @Operations.register_operation("modify_clickhouse_materialized_view_refresh")
@@ -1210,7 +1211,7 @@ class DropClickHouseMaterializedViewOp(MigrateOperation):
 def _drop_clickhouse_materialized_view(operations: Operations, operation: DropClickHouseMaterializedViewOp) -> Any:
     exists = " IF EXISTS" if operation.if_exists else ""
     sql = f"DROP VIEW{exists} {full_table(operation.name, operation.schema)}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("create_clickhouse_dictionary")
@@ -1305,7 +1306,7 @@ def _create_clickhouse_dictionary(operations: Operations, operation: CreateClick
         # COMMENT ends the dictionary body so the trailing SETTINGS is query-level.
         sql += " COMMENT ''"
     sql += settings
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("drop_clickhouse_dictionary")
@@ -1347,7 +1348,7 @@ class DropClickHouseDictionaryOp(MigrateOperation):
 def _drop_clickhouse_dictionary(operations: Operations, operation: DropClickHouseDictionaryOp) -> Any:
     exists = " IF EXISTS" if operation.if_exists else ""
     sql = f"DROP DICTIONARY{exists} {full_table(operation.name, operation.schema)}{_settings_suffix(operation.clickhouse_settings)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 @Operations.register_operation("reload_clickhouse_dictionary")
@@ -1374,7 +1375,7 @@ class ReloadClickHouseDictionaryOp(MigrateOperation):
 @Operations.implementation_for(ReloadClickHouseDictionaryOp)
 def _reload_clickhouse_dictionary(operations: Operations, operation: ReloadClickHouseDictionaryOp) -> Any:
     sql = f"SYSTEM RELOAD DICTIONARY {full_table(operation.name, operation.schema)}"
-    return _exec_sql(operations, sql)
+    return _exec_sql(operations, sql, literal_sql=True)
 
 
 # Compatibility aliases preserve existing imports.
