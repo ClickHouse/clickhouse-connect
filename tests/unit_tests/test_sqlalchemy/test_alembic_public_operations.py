@@ -38,6 +38,8 @@ PUBLIC_OPERATIONS = [
     ch_alembic.DropClickHouseFunctionOp("value_function"),
     ch_alembic.CreateClickHouseMaterializedViewOp("value_mv", "events", "SELECT 13"),
     ch_alembic.DropClickHouseMaterializedViewOp("value_mv"),
+    ch_alembic.ModifyClickHouseMaterializedViewRefreshOp("value_mv", ch_alembic.ClickHouseRefresh(every="1 HOUR")),
+    ch_alembic.ModifyClickHouseMaterializedViewQueryOp("value_mv", "SELECT 79"),
     ch_alembic.CreateClickHouseDictionaryOp(
         "value_dictionary",
         [Column("value", UInt32)],
@@ -74,6 +76,7 @@ def test_public_identity_invocation_rendering_and_rewriter(operation):
             "UInt32": UInt32,
             "ClickHouseIndex": ch_alembic.ClickHouseIndex,
             "ClickHouseProjection": ch_alembic.ClickHouseProjection,
+            "ClickHouseRefresh": ch_alembic.ClickHouseRefresh,
         },
     )
     assert rendered.getvalue() == direct.getvalue()
@@ -97,7 +100,7 @@ def test_public_identity_invocation_rendering_and_rewriter(operation):
 
 
 def test_public_export_set_is_complete():
-    assert len(PUBLIC_OPERATIONS) == 21
+    assert len(PUBLIC_OPERATIONS) == 23
     assert {type(op) for op in PUBLIC_OPERATIONS} == {getattr(operations, name) for name in operations.__all__ if name.endswith("Op")}
 
 
