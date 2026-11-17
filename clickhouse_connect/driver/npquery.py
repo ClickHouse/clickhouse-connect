@@ -1,4 +1,3 @@
-import itertools
 import logging
 from collections.abc import Generator, Sequence
 from typing import Any
@@ -9,6 +8,20 @@ from clickhouse_connect.driver.exceptions import StreamClosedError
 from clickhouse_connect.driver.types import Closable
 
 logger = logging.getLogger(__name__)
+
+
+def _concat_column(pieces: Sequence[Any]) -> Any:
+    pd, np = options.pd, options.np
+    first = pieces[0]
+    if (
+        type(first) is np.ndarray
+        and first.dtype != np.object_
+        and all(type(piece) is np.ndarray and piece.dtype == first.dtype for piece in pieces)
+    ):
+        return pd.Series(first if len(pieces) == 1 else np.concatenate(pieces))
+    if all(isinstance(piece, pd.api.extensions.ExtensionArray) and piece.dtype == first.dtype for piece in pieces):
+        return pd.Series(first if len(pieces) == 1 else type(first)._concat_same_type(pieces))
+    return pd.concat([pd.Series(piece) for piece in pieces], ignore_index=True)
 
 
 class NumpyResult(Closable):
@@ -110,14 +123,11 @@ class NumpyResult(Closable):
     def close_df(self):
         if self._block_gen is None:
             raise StreamClosedError
-        bg = self._block_gen
-        chain = itertools.chain
-        chains = [chain(b) for b in zip(*bg)]
         new_df_series = []
-        for c in chains:
-            series = [options.pd.Series(piece) for piece in c if len(piece) > 0]
-            if len(series) > 0:
-                new_df_series.append(options.pd.concat(series, ignore_index=True))
+        for column in zip(*self._block_gen):
+            pieces = [piece for piece in column if len(piece) > 0]
+            if pieces:
+                new_df_series.append(_concat_column(pieces))
         self._df_result = options.pd.DataFrame(dict(zip(self.column_names, new_df_series)))
         self.close()
         return self
