@@ -2120,6 +2120,8 @@ def test_render_settings_module_level_matches_helper():
         ({"every": "1 HOUR", "depends_on": [("db",)]}, "depends_on entries"),
         ({"every": "1 HOUR", "depends_on": [("db", "a", "b")]}, "depends_on entries"),
         ({"every": "1 HOUR", "depends_on": [("db", 13)]}, "depends_on entries"),
+        ({"every": "1 HOUR", "depends_on": [13]}, "depends_on entries"),
+        ({"every": "1 HOUR", "depends_on": [None]}, "depends_on entries"),
     ],
 )
 def test_refresh_validation(kwargs, match):
@@ -2246,7 +2248,7 @@ def test_materialized_view_reverse_forms(if_not_exists, engine, refresh):
         if_not_exists=if_not_exists,
     )
     if if_not_exists and (engine is not None or refresh is not None):
-        with pytest.raises(NotImplementedError, match="Guarded or replacement creation requires an explicit downgrade"):
+        with pytest.raises(NotImplementedError, match="Guarded creation of an inner-engine or refreshable materialized view"):
             operation.reverse()
     else:
         reverse = operation.reverse()

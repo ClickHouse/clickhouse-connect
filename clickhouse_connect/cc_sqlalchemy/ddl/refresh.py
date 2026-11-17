@@ -31,9 +31,11 @@ class ClickHouseRefresh:
                 raise ValueError(f"ClickHouseRefresh {name} must be a non-empty string")
         if isinstance(self.depends_on, str):
             raise TypeError("ClickHouseRefresh depends_on must be a sequence of names, not a string")
-        depends_on = tuple(entry if isinstance(entry, str) else tuple(entry) for entry in self.depends_on)
+        depends_on = tuple(tuple(entry) if isinstance(entry, list) else entry for entry in self.depends_on)
         for entry in depends_on:
-            if not isinstance(entry, str) and (len(entry) != 2 or not all(isinstance(part, str) for part in entry)):
+            if not isinstance(entry, str) and not (
+                isinstance(entry, tuple) and len(entry) == 2 and all(isinstance(part, str) for part in entry)
+            ):
                 raise ValueError("ClickHouseRefresh depends_on entries must be names or (schema, name) pairs")
         object.__setattr__(self, "depends_on", depends_on)
         object.__setattr__(self, "settings", dict(self.settings) if self.settings else None)

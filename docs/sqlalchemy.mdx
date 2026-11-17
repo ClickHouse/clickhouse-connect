@@ -655,7 +655,7 @@ For non-APPEND refreshable views, target replication must match the database. A 
 
 Dropping an inner-engine view deletes its inner table and data. Dropping a TO-form view preserves the target. Automatic create reversal uses a guarded drop, which also deletes inner-table data. Inner-engine or refreshable creates with `if_not_exists=True` refuse automatic reversal. Plain TO-form creates retain the guarded-drop reverse. Modify operations need prior definitions for automatic reversal. The operation class constructors accept `existing_refresh` or `existing_select`. The `op.*` helpers do not accept these fields, and revision rendering omits them. Write explicit downgrade operations with the previous SELECT or refresh specification in hand-written revisions.
 
-These operations support online execution, offline SQL, and async `run_sync`. They do not add autogenerate comparison or dependency ordering. Use `op.execute` for `SYSTEM ... VIEW` commands. See the [Alembic worked example](https://github.com/ClickHouse/clickhouse-connect/blob/main/clickhouse_connect/cc_sqlalchemy/alembic/WORKED_EXAMPLE.md) for policy hooks and explicit migrations.
+These operations support online execution, offline SQL, and async `run_sync`. They do not add autogenerate comparison or dependency ordering. Use `op.execute` for `SYSTEM ... VIEW` commands. Online, `create_clickhouse_materialized_view` turns `%%` into `%` in the SELECT, comment, and refresh clause. Offline SQL and the modify operations keep `%%`. See the [Alembic worked example](https://github.com/ClickHouse/clickhouse-connect/blob/main/clickhouse_connect/cc_sqlalchemy/alembic/WORKED_EXAMPLE.md) for policy hooks and explicit migrations.
 
 ## Data skipping indexes {#sqlalchemy-skip-indexes}
 

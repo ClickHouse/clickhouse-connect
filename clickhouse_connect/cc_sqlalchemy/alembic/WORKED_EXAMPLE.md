@@ -763,7 +763,7 @@ For non-APPEND refreshable views, target replication must match the database. A 
 
 Dropping an inner-engine view removes its inner table and all its data. Dropping a TO-form view preserves the target table. Automatic reversal of create uses a guarded drop. For an inner-engine view this also discards data, as reversing `create_table` does. Inner-engine or refreshable creates with `if_not_exists=True` refuse automatic reversal because the prior state is unknown. The plain TO form retains its guarded-drop reversal. Modify operations need the prior definition for automatic reversal. Hand-written revisions should provide explicit downgrade operations with the previous refresh or SELECT.
 
-These operations work online, offline, and through async `run_sync`. They do not add autogenerate comparison or dependency ordering. `create_clickhouse_materialized_view` does not accept `clickhouse_settings`, because ClickHouse parses `SETTINGS` after `AS SELECT` as part of the stored SELECT definition rather than as one-shot DDL settings. Use `op.execute` for `SYSTEM ... VIEW` commands.
+These operations work online, offline, and through async `run_sync`. They do not add autogenerate comparison or dependency ordering. `create_clickhouse_materialized_view` does not accept `clickhouse_settings`, because ClickHouse parses `SETTINGS` after `AS SELECT` as part of the stored SELECT definition rather than as one-shot DDL settings. Use `op.execute` for `SYSTEM ... VIEW` commands. Online, `create_clickhouse_materialized_view` turns `%%` into `%` in the SELECT, comment, and refresh clause. Offline SQL and the modify operations keep `%%`.
 
 ### Dictionaries
 

@@ -1078,7 +1078,9 @@ class CreateClickHouseMaterializedViewOp(MigrateOperation):
 
     def reverse(self) -> MigrateOperation:
         if self.if_not_exists and (self.engine is not None or self.refresh is not None):
-            raise NotImplementedError("Guarded or replacement creation requires an explicit downgrade with the previous definition")
+            raise NotImplementedError(
+                "Guarded creation of an inner-engine or refreshable materialized view requires an explicit downgrade with the previous definition"
+            )
         return DropClickHouseMaterializedViewOp(self.name, if_exists=True, schema=self.schema)
 
 
