@@ -7,6 +7,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
+- Alembic materialized view creation now supports refresh schedules through `ClickHouseRefresh`, inner engines, comments, and skipping the initial refresh with `empty=True`. New helpers modify refresh schedules and SELECT queries. All create forms use `CreateClickHouseMaterializedViewOp`, so policy hooks must inspect its `engine` and `refresh` fields. Materialized view drops can discard inner-table data.
 - The Python codec serializes `UUID` insert columns faster when values are `uuid.UUID` objects, integers or strings, by building the column bytes in one pass instead of per value.
 
 ## 1.13.0, 2026-11-16
