@@ -15,6 +15,7 @@ warnings.filterwarnings("error", category=RuntimeWarning)
 import clickhouse_connect.driverc.buffer
 import clickhouse_connect.driverc.dataconv
 import clickhouse_connect.driverc.npconv
+import clickhouse_connect.driverc.sqlscan
 
 sys.exit(0 if not sys._is_gil_enabled() else 1)
 """
