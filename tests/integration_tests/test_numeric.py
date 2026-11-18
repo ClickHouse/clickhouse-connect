@@ -4,6 +4,30 @@ from decimal import Decimal
 import pytest
 
 
+@pytest.mark.parametrize("type_name", ["Int128", "UInt128", "Int256", "UInt256"])
+@pytest.mark.parametrize("representation", ["int64", "uint64", "numpy-first", "int-first"])
+def test_bigint_numpy_scalars(param_client, call, table_context, type_name, representation):
+    np = pytest.importorskip("numpy")
+    values = {
+        "int64": [np.int64(13), np.int64(79)],
+        "uint64": [np.uint64(13), np.uint64(2**64 - 1)],
+        "numpy-first": [np.int64(13), 79],
+        "int-first": [13, np.uint64(79)],
+    }[representation]
+    with table_context("bigint_numpy", [f"value {type_name}"]):
+        call(param_client.insert, "bigint_numpy", [[value] for value in values])
+        result = call(param_client.query, "SELECT value FROM bigint_numpy ORDER BY value")
+        assert result.result_rows == [(int(value),) for value in values]
+
+
+def test_bfloat16_float32_dataframe(param_client, call, table_context):
+    np = pytest.importorskip("numpy")
+    pd = pytest.importorskip("pandas")
+    with table_context("bf16_float32", ["value BFloat16"]):
+        call(param_client.insert_df, "bf16_float32", pd.DataFrame({"value": np.array([1.5, 2.0], dtype=np.float32)}))
+        assert call(param_client.query, "SELECT value FROM bf16_float32 ORDER BY value").result_rows == [(1.5,), (2.0,)]
+
+
 def test_bfloat16_round_trip(param_client, call, table_context: Callable):
     """Test BFloat16 data type with precision loss on round trip."""
     with table_context("bf16_test", ["id UInt32", "bfloat16 BFloat16", "bfloat16_nullable Nullable(BFloat16)"], order_by="id"):

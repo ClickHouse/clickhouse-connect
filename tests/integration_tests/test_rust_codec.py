@@ -600,6 +600,49 @@ def test_rust_codec_dynamic_insert_parity(client_factory, call, client_mode, nat
     assert [row[1] for row in expected] == ["NULL", "True", "13", "2.5", "user_1", "[1, 2]"]
 
 
+@pytest.mark.parametrize(
+    "type_name, rows, query, expected",
+    [
+        ("Int256", "numpy_ints", "SELECT value FROM {table} ORDER BY value", [(13,), (2**64 - 1,)]),
+        ("UInt256", "numpy_ints", "SELECT value FROM {table} ORDER BY value", [(13,), (2**64 - 1,)]),
+        ("BFloat16", "float32_frame", "SELECT value FROM {table} ORDER BY value", [(1.5,), (2.0,)]),
+        (
+            "Map(String, Nested(f1 Dynamic(max_types=1)))",
+            [[{"k": [{"f1": 13}, {"f1": "x"}]}]],
+            "SELECT value FROM {table}",
+            [({"k": [{"f1": "13"}, {"f1": "x"}]},)],
+        ),
+        ("SimpleAggregateFunction(anyLast, Dynamic)", [[13]], "SELECT value FROM {table}", [("13",)]),
+        ("SimpleAggregateFunction(anyLast, Array(Dynamic))", [[[13, "x"]]], "SELECT value FROM {table}", [(["13", "x"],)]),
+    ],
+)
+def test_rust_codec_numpy_and_nested_dynamic_insert_parity(client_factory, call, client_mode, type_name, rows, query, expected):
+    np = pytest.importorskip("numpy")
+    python_client = client_factory(native_codec="python")
+    if "Dynamic" in type_name:
+        type_available(python_client, "dynamic")
+    if rows == "numpy_ints":
+        rows = [[np.int64(13)], [np.uint64(2**64 - 1)]]
+    elif rows == "float32_frame":
+        pd = pytest.importorskip("pandas")
+        rows = pd.DataFrame({"value": np.array([1.5, 2.0], dtype=np.float32)})
+
+    def roundtrip(codec, client):
+        table = f"rc_ins_numpy_nested_{codec}_{client_mode}"
+        call(python_client.command, f"DROP TABLE IF EXISTS {table}")
+        try:
+            call(python_client.command, f"CREATE TABLE {table} (value {type_name}) ENGINE MergeTree ORDER BY tuple()")
+            if isinstance(rows, list):
+                call(client.insert, table, rows, column_names=["value"])
+            else:
+                call(client.insert_df, table, rows)
+            return call(python_client.query, query.format(table=table)).result_rows
+        finally:
+            call(python_client.command, f"DROP TABLE IF EXISTS {table}")
+
+    assert roundtrip("python", python_client) == roundtrip("rust_strict", client_factory(native_codec="rust_strict")) == expected
+
+
 def test_rust_codec_time_parity(client_factory, call, test_config):
     if test_config.cloud:
         pytest.skip("Time/Time64 settings are locked in ClickHouse Cloud")
