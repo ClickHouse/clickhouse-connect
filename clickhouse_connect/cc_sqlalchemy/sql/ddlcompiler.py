@@ -14,6 +14,7 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
 from clickhouse_connect.cc_sqlalchemy.ddl.index import index_definition, table_indexes
 from clickhouse_connect.cc_sqlalchemy.ddl.projection import projection_definition, table_projections
 from clickhouse_connect.cc_sqlalchemy.sql import format_table
+from clickhouse_connect.cc_sqlalchemy.sql.preparer import ChIdentifierPreparer
 from clickhouse_connect.datatypes.base import TypeDef
 from clickhouse_connect.driver.binding import format_str, quote_identifier
 
@@ -127,11 +128,13 @@ def column_specification(dialect, column: Column, *, include_type: bool = True) 
 
 
 class ChDDLCompiler(DDLCompiler):
+    preparer: ChIdentifierPreparer
+
     def visit_create_schema(self, create, **_):
-        return f"CREATE DATABASE {quote_identifier(create.element)}"
+        return f"CREATE DATABASE {self.preparer._escape_percents(quote_identifier(create.element))}"
 
     def visit_drop_schema(self, drop, **_):
-        return f"DROP DATABASE {quote_identifier(drop.element)}"
+        return f"DROP DATABASE {self.preparer._escape_percents(quote_identifier(drop.element))}"
 
     def visit_create_table(self, create, **_):
         table = create.element
@@ -149,38 +152,38 @@ class ChDDLCompiler(DDLCompiler):
             raise CompileError(
                 f"ClickHouse table '{table.name}' requires an engine — specify e.g. MergeTree(order_by='id') as a table argument"
             )
-        text = f"CREATE TABLE{if_not_exists} {format_table(table)} ("
+        text = f"CREATE TABLE{if_not_exists} {self.preparer._escape_percents(format_table(table))} ("
         text += ", ".join(
             [self.get_column_specification(c.element) for c in create.columns]
-            + [f"INDEX {index_definition(index)}" for index in table_indexes(table)]
-            + [f"PROJECTION {projection_definition(projection)}" for projection in table_projections(table)]
+            + [f"INDEX {self.preparer._escape_percents(index_definition(index))}" for index in table_indexes(table)]
+            + [f"PROJECTION {self.preparer._escape_percents(projection_definition(projection))}" for projection in table_projections(table)]
         )
-        text += ") " + engine.compile()
+        text += ") " + self.preparer._escape_percents(engine.compile())
         if table.comment:
             text += f" COMMENT {self.sql_compiler.render_literal_value(table.comment, sqltypes.STRINGTYPE)}"
         return text
 
     def _visit_create_dictionary(self, create, dictionary, if_not_exists: str):
-        text = f"CREATE DICTIONARY{if_not_exists} {format_table(dictionary)} ("
+        text = f"CREATE DICTIONARY{if_not_exists} {self.preparer._escape_percents(format_table(dictionary))} ("
         text += ", ".join([self.get_column_specification(c.element) for c in create.columns])
         text += ")"
 
         primary_key = ClickHouseDDLHelper.dictionary_option(dictionary, "primary_key")
         if primary_key:
-            text += f" PRIMARY KEY {primary_key}"
+            text += f" PRIMARY KEY {self.preparer._escape_percents(str(primary_key))}"
 
         source = ClickHouseDDLHelper.dictionary_option(dictionary, "source")
         if source:
-            text += f" SOURCE({source})"
+            text += f" SOURCE({self.preparer._escape_percents(str(source))})"
 
         layout = ClickHouseDDLHelper.dictionary_option(dictionary, "layout")
         if layout:
             layout = layout if "(" in layout else f"{layout}()"
-            text += f" LAYOUT({layout})"
+            text += f" LAYOUT({self.preparer._escape_percents(layout)})"
 
         lifetime = ClickHouseDDLHelper.dictionary_option(dictionary, "lifetime")
         if lifetime:
-            text += f" LIFETIME({lifetime})"
+            text += f" LIFETIME({self.preparer._escape_percents(str(lifetime))})"
 
         if dictionary.comment:
             text += f" COMMENT {self.sql_compiler.render_literal_value(dictionary.comment, sqltypes.STRINGTYPE)}"
@@ -191,21 +194,24 @@ class ChDDLCompiler(DDLCompiler):
         table = drop.element
         if_exists = " IF EXISTS" if getattr(drop, "if_exists", False) else ""
         if ClickHouseDDLHelper.is_dictionary(table):
-            return f"DROP DICTIONARY{if_exists} {format_table(table)}"
-        return f"DROP TABLE{if_exists} {format_table(table)}"
+            return f"DROP DICTIONARY{if_exists} {self.preparer._escape_percents(format_table(table))}"
+        return f"DROP TABLE{if_exists} {self.preparer._escape_percents(format_table(table))}"
 
     def visit_add_column(self, create, **_):
-        return f"ALTER TABLE {format_table(create.element)} ADD COLUMN {self.get_column_specification(create.column)}"
+        return f"ALTER TABLE {self.preparer._escape_percents(format_table(create.element))} ADD COLUMN {self.get_column_specification(create.column)}"
 
     def visit_drop_column(self, drop, **_):
-        return f"ALTER TABLE {format_table(drop.element)} DROP COLUMN {quote_identifier(drop.column.name)}"
+        return (
+            f"ALTER TABLE {self.preparer._escape_percents(format_table(drop.element))} "
+            f"DROP COLUMN {self.preparer._escape_percents(quote_identifier(drop.column.name))}"
+        )
 
     def get_column_specification(self, column: Column, include_type: bool = True, **_):
-        text = quote_identifier(column.name)
+        text = self.preparer._escape_percents(quote_identifier(column.name))
         if include_type:
             effective_type = ClickHouseDDLHelper.effective_column_type(column)
             compiled_type = self.dialect.type_compiler.process(effective_type, type_expression=column)
-            text += f" {compiled_type}"
+            text += f" {self.preparer._escape_percents(compiled_type)}"
         materialized = ClickHouseDDLHelper.get_option(column, "materialized")
         alias = ClickHouseDDLHelper.get_option(column, "alias")
         # DEFAULT, MATERIALIZED, and ALIAS are mutually exclusive in ClickHouse.
@@ -223,7 +229,7 @@ class ChDDLCompiler(DDLCompiler):
         codec = ClickHouseDDLHelper.get_option(column, "codec")
         if codec is not None:
             codec_sql = codec if isinstance(codec, str) else ", ".join(str(item) for item in codec)
-            text += f" CODEC({codec_sql})"
+            text += f" CODEC({self.preparer._escape_percents(codec_sql)})"
         ttl = ClickHouseDDLHelper.get_option(column, "ttl")
         if ttl is not None:
             text += f" TTL {self.render_default_string(ttl)}"

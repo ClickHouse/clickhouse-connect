@@ -82,6 +82,27 @@ def test_pandas_all_null_float(param_client: Client, call):
     assert df["flt"].dtype.name == "float64"
 
 
+@pytest.mark.parametrize("use_extended_dtypes", [False, True])
+@pytest.mark.parametrize("use_none", [False, True])
+def test_pandas_block_concat(param_client, call, use_extended_dtypes, use_none):
+    query = """
+        SELECT
+            toUInt16(number + 13) AS uint_value,
+            if(number % 2 = 0, NULL, toUInt64(number + 79)) AS nullable_uint,
+            concat('user_', toString(number)) AS string_value,
+            if(number % 2 = 0, NULL, concat('user_', toString(number))) AS nullable_string,
+            toBool(number % 2) AS bool_value,
+            if(number < 4, NULL, toBool(number % 2)) AS nullable_bool,
+            toDateTime(1700000000 + number, 'Asia/Tokyo') AS datetime_value,
+            if(number % 2 = 0, NULL, toDateTime64(1700000000 + number, 3)) AS nullable_datetime
+        FROM numbers(16)
+    """
+    kwargs = {"use_extended_dtypes": use_extended_dtypes, "use_none": use_none}
+    expected = call(param_client.query_df, query, settings={"max_block_size": 100, "max_threads": 1}, **kwargs)
+    actual = call(param_client.query_df, query, settings={"max_block_size": 4, "max_threads": 1}, **kwargs)
+    pd.testing.assert_frame_equal(actual, expected, check_exact=True)
+
+
 @pytest.mark.parametrize("dtype", ["float32", "float64", "Float32", "Float64", "Int64", "object"])
 @pytest.mark.parametrize("nullable", [False, True])
 def test_pandas_integer_missing_defaults(param_client, call, table_context, dtype, nullable):

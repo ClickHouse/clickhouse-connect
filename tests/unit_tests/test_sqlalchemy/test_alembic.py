@@ -14,11 +14,13 @@ from sqlalchemy import Column, Index, Integer, MetaData, String, Table, TypeDeco
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.schema import CreateTable
 
+from clickhouse_connect import cc_sqlalchemy
 from clickhouse_connect.cc_sqlalchemy import engines, types
 from clickhouse_connect.cc_sqlalchemy.alembic import (
     ClickHouseImpl,
     ClickHouseIndex,
     ClickHouseProjection,
+    ClickHouseRefresh,
     clickhouse_writer,
     include_object,
     patch_alembic_version,
@@ -38,6 +40,8 @@ from clickhouse_connect.cc_sqlalchemy.alembic.operations import (
     _DropClickHouseProjectionsOp,
     _MaterializeClickHouseIndexOp,
     _MaterializeClickHouseProjectionOp,
+    _ModifyClickHouseMaterializedViewQueryOp,
+    _ModifyClickHouseMaterializedViewRefreshOp,
     _ModifyClickHouseTableSettingsOp,
     _ReloadClickHouseDictionaryOp,
     _ResetClickHouseTableSettingsOp,
@@ -1189,6 +1193,8 @@ def test_alembic_public_exports():
         "DropClickHouseFunctionOp",
         "CreateClickHouseMaterializedViewOp",
         "DropClickHouseMaterializedViewOp",
+        "ModifyClickHouseMaterializedViewRefreshOp",
+        "ModifyClickHouseMaterializedViewQueryOp",
         "CreateClickHouseDictionaryOp",
         "DropClickHouseDictionaryOp",
         "ReloadClickHouseDictionaryOp",
@@ -1206,10 +1212,12 @@ def test_alembic_public_exports():
         "prevent_empty_migrations",
         "ClickHouseIndex",
         "ClickHouseProjection",
+        "ClickHouseRefresh",
         "TableOptionDrift",
         "UnsupportedTableChangeError",
     }
-    assert len([name for name in ch_alembic.__all__ if name.endswith("Op")]) == 21
+    assert len([name for name in ch_alembic.__all__ if name.endswith("Op")]) == 23
+    assert cc_sqlalchemy.ClickHouseRefresh is ch_alembic.ClickHouseRefresh
 
 
 def test_positional_engine_autogenerate_render():
@@ -2096,3 +2104,263 @@ def test_render_settings_module_level_matches_helper():
     assert ClickHouseDDLHelper.render_settings(settings) == rendered
     assert render_settings(None) == ""
     assert render_settings({}) == ""
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({}, "exactly one of every or after"),
+        ({"every": "1 HOUR", "after": "1 DAY"}, "exactly one of every or after"),
+        ({"after": "1 HOUR", "offset": "1 MINUTE"}, "offset requires every"),
+        ({"every": ""}, "every must be a non-empty string"),
+        ({"after": " "}, "after must be a non-empty string"),
+        ({"every": 3600}, "every must be a non-empty string"),
+        ({"every": "1 HOUR", "offset": ""}, "offset must be a non-empty string"),
+        ({"every": "1 HOUR", "randomize_for": " "}, "randomize_for must be a non-empty string"),
+        ({"every": "1 HOUR", "depends_on": [("db",)]}, "depends_on entries"),
+        ({"every": "1 HOUR", "depends_on": [("db", "a", "b")]}, "depends_on entries"),
+        ({"every": "1 HOUR", "depends_on": [("db", 13)]}, "depends_on entries"),
+        ({"every": "1 HOUR", "depends_on": [13]}, "depends_on entries"),
+        ({"every": "1 HOUR", "depends_on": [None]}, "depends_on entries"),
+    ],
+)
+def test_refresh_validation(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        ClickHouseRefresh(**kwargs)
+
+
+def test_refresh_dependency_list_entries_normalized():
+    refresh = ClickHouseRefresh(every="1 HOUR", depends_on=[["db", "src"]])
+    assert refresh.depends_on == (("db", "src"),)
+    assert hash(refresh) == hash(ClickHouseRefresh(every="1 HOUR", depends_on=(("db", "src"),)))
+
+
+def test_refresh_dependency_string_rejected():
+    with pytest.raises(TypeError, match="depends_on"):
+        ClickHouseRefresh(every="1 HOUR", depends_on="db.src")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"every": "1 DAY 2 HOUR"}, "REFRESH EVERY 1 DAY 2 HOUR"),
+        ({"after": "1 HOUR", "depends_on": ("src",)}, "REFRESH AFTER 1 HOUR DEPENDS ON `src`"),
+        (
+            {
+                "every": "1 DAY",
+                "offset": "2 HOUR",
+                "randomize_for": "1 HOUR",
+                "depends_on": ["db.src", ("odd.db", "view.name"), "unqualified`view", "db.a.b"],
+                "settings": {"refresh_retries": 13, "all_replicas": True, "value": "a'b\\c%"},
+                "append": True,
+            },
+            "REFRESH EVERY 1 DAY OFFSET 2 HOUR RANDOMIZE FOR 1 HOUR "
+            "DEPENDS ON `db`.`src`, `odd.db`.`view.name`, `unqualified\\`view`, `db`.`a.b` "
+            "SETTINGS refresh_retries = 13, all_replicas = 1, value = 'a\\'b\\\\c%' APPEND",
+        ),
+    ],
+)
+def test_refresh_render_and_repr(kwargs, expected):
+    refresh = ClickHouseRefresh(**kwargs)
+    assert refresh.render() == expected
+    assert isinstance(refresh.depends_on, tuple)
+    assert eval(repr(refresh), {"ClickHouseRefresh": ClickHouseRefresh}) == refresh
+
+
+def test_refresh_settings_copy_equality_hash_and_defaults():
+    settings = {"refresh_retries": 13}
+    refresh = ClickHouseRefresh(every="1 HOUR", settings=MappingProxyType(settings))
+    equal = ClickHouseRefresh(every="1 HOUR", settings=settings)
+    assert refresh == equal
+    assert hash(refresh) == hash(equal)
+    assert refresh != ClickHouseRefresh(every="1 HOUR", settings={"refresh_retries": 79})
+    settings["refresh_retries"] = 79
+    assert refresh.settings == {"refresh_retries": 13}
+    assert isinstance(refresh.settings, dict)
+    empty = ClickHouseRefresh(every="1 HOUR", settings={})
+    assert empty.settings is None
+    assert repr(empty) == "ClickHouseRefresh(every='1 HOUR')"
+
+
+@pytest.mark.parametrize(
+    ("to_table", "kwargs", "clause"),
+    [
+        ("sink", {}, "TO `sink`"),
+        ("sink", {"refresh": ClickHouseRefresh(every="1 HOUR")}, "REFRESH EVERY 1 HOUR TO `sink`"),
+        (
+            "sink",
+            {"refresh": ClickHouseRefresh(after="1 HOUR", append=True), "empty": True},
+            "REFRESH AFTER 1 HOUR APPEND TO `sink` EMPTY",
+        ),
+        (None, {"engine": engines.Memory()}, "Engine Memory"),
+        (None, {"engine": "MergeTree ORDER BY id"}, "ENGINE = MergeTree ORDER BY id"),
+        (
+            None,
+            {"engine": engines.MergeTree(order_by="id", partition_by="id", ttl="now()", settings={"index_granularity": 79})},
+            "Engine MergeTree ORDER BY id PARTITION BY id TTL now() SETTINGS index_granularity = 79",
+        ),
+        (
+            None,
+            {"engine": "Memory", "refresh": ClickHouseRefresh(every="1 DAY"), "empty": True, "comment": "owner's\\view%"},
+            "REFRESH EVERY 1 DAY ENGINE = Memory EMPTY COMMENT 'owner\\'s\\\\view%'",
+        ),
+        ("sink", {"comment": ""}, "TO `sink` COMMENT ''"),
+    ],
+)
+def test_materialized_view_forms_offline(to_table, kwargs, clause):
+    op, buffer = _offline_op()
+    op.create_clickhouse_materialized_view("mv", to_table, "SELECT 13 AS id", schema="olap", **kwargs)
+    assert buffer.getvalue() == f"CREATE MATERIALIZED VIEW `olap`.`mv` {clause} AS SELECT 13 AS id;\n\n"
+
+
+@pytest.mark.parametrize(
+    ("to_table", "kwargs", "match"),
+    [
+        (None, {}, "exactly one of to_table or engine"),
+        ("sink", {"engine": "Memory"}, "exactly one of to_table or engine"),
+        (None, {"engine": "Memory", "to_schema": "olap"}, "to_schema requires to_table"),
+        ("sink", {"empty": True}, "empty requires refresh"),
+        (None, {"engine": "Memory", "empty": True}, "empty requires refresh"),
+        ("sink", {"refresh": "EVERY 1 HOUR"}, "refresh must be a ClickHouseRefresh"),
+        (None, {"engine": ""}, "engine must be"),
+        (None, {"engine": " "}, "engine must be"),
+        (None, {"engine": 13}, "engine must be"),
+    ],
+)
+def test_materialized_view_validation(to_table, kwargs, match):
+    op, buffer = _offline_op()
+    with pytest.raises(ValueError, match=match):
+        op.create_clickhouse_materialized_view("mv", to_table, "SELECT 13", **kwargs)
+    assert buffer.getvalue() == ""
+
+
+@pytest.mark.parametrize("if_not_exists", [False, True])
+@pytest.mark.parametrize("engine", [None, "Memory"])
+@pytest.mark.parametrize("refresh", [None, ClickHouseRefresh(every="1 HOUR")])
+def test_materialized_view_reverse_forms(if_not_exists, engine, refresh):
+    operation = _CreateClickHouseMaterializedViewOp(
+        "mv",
+        "sink" if engine is None else None,
+        "SELECT 13",
+        schema="olap",
+        engine=engine,
+        refresh=refresh,
+        if_not_exists=if_not_exists,
+    )
+    if if_not_exists and (engine is not None or refresh is not None):
+        with pytest.raises(NotImplementedError, match="Guarded creation of an inner-engine or refreshable materialized view"):
+            operation.reverse()
+    else:
+        reverse = operation.reverse()
+        assert isinstance(reverse, _DropClickHouseMaterializedViewOp)
+        assert (reverse.name, reverse.schema, reverse.if_exists) == ("mv", "olap", True)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        _CreateClickHouseMaterializedViewOp("mv", "sink", "SELECT 13"),
+        _CreateClickHouseMaterializedViewOp("mv", "sink", "SELECT 13", if_not_exists=True, schema="olap", to_schema="olap"),
+        _CreateClickHouseMaterializedViewOp(
+            "mv",
+            None,
+            "SELECT 13 AS id",
+            engine=MergeTree(order_by="id"),
+            refresh=ClickHouseRefresh(every="1 HOUR", settings={"refresh_retries": 13}),
+            empty=True,
+            comment="owner's\\view%",
+        ),
+        _CreateClickHouseMaterializedViewOp("mv", None, "SELECT 13", engine="Memory"),
+        _ModifyClickHouseMaterializedViewRefreshOp(
+            "mv", ClickHouseRefresh(every="2 HOUR"), schema="olap", existing_refresh=ClickHouseRefresh(every="1 HOUR")
+        ),
+        _ModifyClickHouseMaterializedViewQueryOp("mv", "SELECT '%%' AS id", schema="olap", existing_select="SELECT 13 AS id"),
+    ],
+)
+def test_materialized_view_render_round_trip(operation):
+    context = AutogenContext(MigrationContext.configure(dialect=ClickHouseDialect()), opts={"alembic_module_prefix": "op."})
+    code = render.render_op_text(context, operation)
+    captured = Mock()
+    exec(code, {"op": captured, "ClickHouseRefresh": ClickHouseRefresh, "MergeTree": MergeTree})
+    args, kwargs = captured.method_calls[0][1:]
+    restored = type(operation)(*args, **kwargs)
+    for name, value in vars(operation).items():
+        if name.startswith("existing_"):
+            assert name not in code
+            assert getattr(restored, name) is None
+        elif name == "engine" and isinstance(value, engines.TableEngine):
+            assert restored.engine.compile() == value.compile()
+        else:
+            assert getattr(restored, name) == value
+    if getattr(operation, "refresh", None) is not None:
+        assert "from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseRefresh" in context.imports
+    if isinstance(getattr(operation, "engine", None), engines.TableEngine):
+        assert "from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import *  # noqa: F401,F403" in context.imports
+    if type(operation) is _CreateClickHouseMaterializedViewOp and operation.engine is None and operation.refresh is None:
+        suffix = ", if_not_exists=True, schema='olap', to_schema='olap'" if operation.if_not_exists else ""
+        assert code == f"op.create_clickhouse_materialized_view('mv', 'sink', 'SELECT 13'{suffix})"
+    direct, direct_buffer = _offline_op()
+    direct.invoke(operation)
+    rendered, buffer = _offline_op()
+    exec(code, {"op": rendered, "ClickHouseRefresh": ClickHouseRefresh, "MergeTree": MergeTree})
+    assert buffer.getvalue() == direct_buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("operation", "field", "old", "new"),
+    [
+        (
+            _ModifyClickHouseMaterializedViewRefreshOp,
+            "refresh",
+            ClickHouseRefresh(every="1 HOUR", append=True),
+            ClickHouseRefresh(after="2 HOUR", append=True),
+        ),
+        (_ModifyClickHouseMaterializedViewQueryOp, "select", "SELECT 13", "SELECT 79"),
+    ],
+)
+def test_materialized_view_modify_reverse(operation, field, old, new):
+    with pytest.raises(NotImplementedError, match=f"needs existing_{field} to reverse"):
+        operation("mv", new).reverse()
+    forward = operation("mv", new, schema="olap", **{f"existing_{field}": old})
+    reverse = forward.reverse()
+    assert (reverse.name, reverse.schema) == ("mv", "olap")
+    assert getattr(reverse, field) == old
+    assert getattr(reverse, f"existing_{field}") == new
+    assert getattr(reverse.reverse(), field) == new
+
+
+@pytest.mark.parametrize(
+    ("refresh", "existing_refresh", "match"),
+    [
+        (ClickHouseRefresh(every="1 HOUR", append=True), ClickHouseRefresh(every="1 HOUR"), "cannot change APPEND"),
+        ("EVERY 1 HOUR", None, "refresh must be a ClickHouseRefresh"),
+        (None, None, "refresh must be a ClickHouseRefresh"),
+        (ClickHouseRefresh(every="1 HOUR"), "EVERY 2 HOUR", "existing_refresh must be a ClickHouseRefresh"),
+    ],
+)
+def test_materialized_view_modify_refresh_validation(refresh, existing_refresh, match):
+    with pytest.raises(ValueError, match=match):
+        _ModifyClickHouseMaterializedViewRefreshOp("mv", refresh, existing_refresh=existing_refresh)
+
+
+@pytest.mark.parametrize(
+    ("method", "value", "clause"),
+    [
+        ("modify_clickhouse_materialized_view_refresh", ClickHouseRefresh(every="2 HOUR"), "REFRESH EVERY 2 HOUR"),
+        ("modify_clickhouse_materialized_view_query", "SELECT '%%' AS value", "QUERY SELECT '%%' AS value"),
+        (
+            "modify_clickhouse_materialized_view_refresh",
+            ClickHouseRefresh(every="2 HOUR", depends_on=("dep%%",)),
+            "REFRESH EVERY 2 HOUR DEPENDS ON `dep%%`",
+        ),
+    ],
+)
+def test_materialized_view_modify_sql_and_literal_percent(method, value, clause):
+    op, buffer = _offline_op()
+    getattr(op, method)("mv%%", value, schema="olap")
+    expected = f"ALTER TABLE `olap`.`mv%%` MODIFY {clause}"
+    assert buffer.getvalue() == expected + ";\n\n"
+    connection = Mock(dialect=ClickHouseDialect())
+    context = MigrationContext.configure(connection=connection)
+    getattr(Operations(context), method)("mv%%", value, schema="olap")
+    connection.exec_driver_sql.assert_called_once_with(expected.replace("%", "%%"))
