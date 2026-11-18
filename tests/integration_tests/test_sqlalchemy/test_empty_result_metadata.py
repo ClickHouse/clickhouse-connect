@@ -117,8 +117,6 @@ def test_empty_core_result_keeps_keys_without_metadata_probe(metadata_connection
     ],
 )
 def test_result_processors_skip_metadata_probe(metadata_connection, client_mode, call, empty, result_type, value, expected):
-    if not empty and sa.__version__.startswith("1.4.") and isinstance(result_type, sa.Enum):
-        pytest.skip("SQLAlchemy 1.4 Enum processors require bytes with this dialect's existing Unicode configuration")
     connection = metadata_connection
     raw_connection = call(connection.get_raw_connection) if client_mode == "async" else connection.connection
     client = raw_connection.driver_connection
