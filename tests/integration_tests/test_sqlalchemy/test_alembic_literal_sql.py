@@ -46,7 +46,8 @@ def test_materialized_view_literal_sql(run_sqlalchemy, test_db, ch_name, engine_
                 dependency,
                 None,
                 f"SELECT id FROM {qualified(source)}",
-                engine="Memory",
+                schema=test_db,
+                engine="MergeTree ORDER BY id",
                 refresh=ch.ClickHouseRefresh(after="1 DAY"),
                 empty=True,
             )
