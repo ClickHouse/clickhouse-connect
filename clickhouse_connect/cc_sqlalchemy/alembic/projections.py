@@ -228,8 +228,6 @@ def _ast_dump(context: AutogenContext, body: str, names: tuple[dict[str, str], d
 
 
 def _definitions_match(context: AutogenContext, declared: ClickHouseProjection, reflected: ClickHouseProjection) -> bool:
-    # DDL runs as parameterless driver SQL, which unescapes %% before the server stores the definition.
-    declared = replace(declared, select=declared.select.replace("%%", "%"))
     if declared.select == reflected.select:
         return True
     queries = {}

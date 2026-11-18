@@ -465,6 +465,8 @@ ClickHouse does not support recursive materialized CTEs. The SQLAlchemy helpers 
 
 ClickHouse Connect provides ClickHouse data types, table engines, dictionary constructs, database DDL, and table reflection.
 
+`metadata.create_all()` and `Table.create()` send names, engine clauses, index and projection definitions, and dictionary clauses to the server as written. Pass a single `%` for a single percent sign. Compiled DDL for a pyformat engine, such as `str(CreateTable(table).compile(engine))`, doubles every percent sign, as other SQLAlchemy pyformat dialects do. To get DDL to run elsewhere, compile it with a dialect created with `paramstyle="named"` or use `create_mock_engine`.
+
 `Inspector.get_table_names()` includes all view kinds for compatibility. `MetaData.reflect()` includes them by default, and `only` can select a view by name. Use `Inspector.get_view_names()` for non-materialized views and `Inspector.get_materialized_view_names()` for materialized views. Both methods accept `schema` and work on SQLAlchemy 1.4.40 and later, including 2.x. `Inspector.get_view_definition()` returns the stored `SELECT` of a view or materialized view and raises `NoSuchTableError` for tables and missing names. A reflected view has no engine. Its `Table` carries `clickhousedb_table_type` set to `view`, `materialized_view`, `window_view`, or `live_view`.
 
 `Nullable()` and `LowCardinality()` from `clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes` accept a ClickHouse SQLAlchemy type class or instance and preserve its concrete type for type checkers. For example, `Nullable(String)` returns a `String` instance and can be passed directly to `Column`. Type checkers infer `list[String]` for `[Nullable(String)]`. If the list also holds other ClickHouse types, annotate it as `list[ChSqlaType]` and import `ChSqlaType` from `clickhouse_connect.cc_sqlalchemy.datatypes.base`.
@@ -655,11 +657,11 @@ For non-APPEND refreshable views, target replication must match the database. A 
 
 Dropping an inner-engine view deletes its inner table and data. Dropping a TO-form view preserves the target. Automatic create reversal uses a guarded drop, which also deletes inner-table data. Inner-engine or refreshable creates with `if_not_exists=True` refuse automatic reversal. Plain TO-form creates retain the guarded-drop reverse. Modify operations need prior definitions for automatic reversal. The operation class constructors accept `existing_refresh` or `existing_select`. The `op.*` helpers do not accept these fields, and revision rendering omits them. Write explicit downgrade operations with the previous SELECT or refresh specification in hand-written revisions.
 
-These operations support online execution, offline SQL, and async `run_sync`. They do not add autogenerate comparison or dependency ordering. Use `op.execute` for `SYSTEM ... VIEW` commands. Online, `create_clickhouse_materialized_view` turns `%%` into `%` in the SELECT, comment, and refresh clause. Offline SQL and the modify operations keep `%%`. See the [Alembic worked example](https://github.com/ClickHouse/clickhouse-connect/blob/main/clickhouse_connect/cc_sqlalchemy/alembic/WORKED_EXAMPLE.md) for policy hooks and explicit migrations.
+These operations support online execution, offline SQL, and async `run_sync`. They do not add autogenerate comparison or dependency ordering. Use `op.execute` for `SYSTEM ... VIEW` commands. See the [Alembic worked example](https://github.com/ClickHouse/clickhouse-connect/blob/main/clickhouse_connect/cc_sqlalchemy/alembic/WORKED_EXAMPLE.md) for policy hooks and explicit migrations.
 
 ## Data skipping indexes {#sqlalchemy-skip-indexes}
 
-Declare ClickHouse data skipping indexes as table arguments. This API requires SQLAlchemy, and works without Alembic:
+Declare ClickHouse data skipping indexes as table arguments. This API requires SQLAlchemy, and works without Alembic. Index expressions reach the server as written, so pass a single `%` for a single percent sign:
 
 ```python
 from sqlalchemy import Column, MetaData, Table, inspect
@@ -698,7 +700,7 @@ reflected = Table(
 
 ## Projections {#sqlalchemy-projections}
 
-Declare SELECT projections as table arguments, without requiring Alembic:
+Declare SELECT projections as table arguments, without requiring Alembic. Projection queries reach the server as written, so pass a single `%` for a single percent sign:
 
 ```python
 from sqlalchemy import Column, MetaData, Table, inspect
@@ -785,6 +787,8 @@ ClickHouse-specific `op.*` helpers cover:
 - Materialized view creation with target tables or inner engines, refresh schedules, query and refresh modification, and removal.
 - Dictionary creation, removal, and reload.
 
+All ClickHouse operation helpers preserve percent signs in SQL fragments, comments, settings, and identifiers in online and offline migrations. This also applies to inline index, projection, engine, and other table clauses in `metadata.create_all` and `op.create_table`. Pass SQL as it should reach the server. Pass single percent signs for a single percent. Alembic offline SQL configured with a live pyformat dialect through `dialect=engine.dialect` or `connection=` renders percents as written in every statement. This includes `op.execute` text and raw strings, identifiers, `bulk_insert`, `add_column` defaults and comments, `alter_column`, `rename_table`, and `create_table_comment`. Bind placeholders render as `:x`. Standard `env.py` URL configurations with or without named `dialect_opts`, `dialect_name=`, and server-side parameter configurations also preserve literal percents.
+
 **Upgrade note:** Alembic compares explicit skip indexes and SELECT projections by default. Objects created only by earlier imperative migrations can generate drops when absent from managed table metadata. Before upgrading, declare them with `ClickHouseIndex` or `ClickHouseProjection`, exclude unmanaged objects with `include_name` or `include_object`, or disable the relevant comparison in `context.configure()`:
 
 ```python
@@ -810,7 +814,7 @@ For physical batch recreation with `op.batch_alter_table()`, pass a complete `co
 
 Standard `include_name` and `include_object` hooks receive `type_="index"`. Name filters apply to both reflected and declared candidates so an excluded name remains unmanaged. Object filters receive the usual `reflected` and `compare_to` values. Their index objects expose the definition fields and `.table`. For example, the standard Alembic unmanaged-object recipe, `reflected and compare_to is None`, protects imperative-only indexes. Table filters are respected before index catalog reads. Inline indexes on newly created tables are also filtered before policy hooks.
 
-Comparison uses server formatting and analysis to account for ClickHouse spellings and defaults. Expression analysis uses the current table, server functions, and settings. It requires the analyzer and the expected `EXPLAIN` output. These capabilities were verified against ClickHouse 26.8, with source review at 26.6. The catalog field alone does not establish comparison support on an older server. Changed `ALIAS` definitions that affect an index require an explicit column migration before index comparison.
+Comparison uses server formatting and analysis to account for ClickHouse spellings and defaults. Index comparison preserves literal percents in expressions. Expression analysis uses the current table, server functions, and settings. It requires the analyzer and the expected `EXPLAIN` output. These capabilities were verified against ClickHouse 26.8, with source review at 26.6. The catalog field alone does not establish comparison support on an older server. Changed `ALIAS` definitions that affect an index require an explicit column migration before index comparison.
 
 An index edit can reference a physical column added in the same revision. If analysis reports that scheduled new column as an unknown identifier, autogenerate validates the full expression with the added columns available, then emits the column addition before the index drop and add. Other unknown identifiers, including typos and columns excluded by filters, still raise `IndexComparisonError`.
 
