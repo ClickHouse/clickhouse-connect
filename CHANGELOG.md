@@ -18,6 +18,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - `query_df` is faster when the result arrives in many blocks, for example a `GROUP BY` that uses two-level aggregation and returns 256 blocks. Before, the time to build the DataFrame grew with the number of blocks times the number of columns. Columns of the `object` dtype still use the old path, so their dtypes do not change. Closes [#1203](https://github.com/ClickHouse/clickhouse-connect/issues/1203).
 - The Python codec serializes `UUID` insert columns faster when values are `uuid.UUID` objects, integers or strings, by building the column bytes in one pass instead of per value.
 - `query_np` is faster for results that mix column types and include at least one object column, on the Python and Rust codecs. Each block of the structured array now starts from `np.zeros` instead of `np.empty`, which set every object field to `None` one element at a time. A 1M-row query with 10 columns, 5 of them object columns, takes about 18% less time.
+- The Python codec reads `Decimal` columns with up to 18 digits of precision and a non-zero scale faster. Each value is now multiplied by a precomputed `10**-scale` instead of calling `scaleb(-scale)`, which converted the scale to a `Decimal` for every row. Returned values and their exponents are unchanged.
 
 ## 1.13.0, 2026-11-16
 

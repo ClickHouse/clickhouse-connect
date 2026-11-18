@@ -437,7 +437,8 @@ class Decimal(ClickHouseType):
         scale = self.scale
         if scale == 0:
             return [dec(x) for x in column]
-        return [dec(x).scaleb(-scale) for x in column]
+        scale_unit = dec((0, (1,), -scale))
+        return [dec(x) * scale_unit for x in column]
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         with decimal.localcontext() as dec_ctx:
