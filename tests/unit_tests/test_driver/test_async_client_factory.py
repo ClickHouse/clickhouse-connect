@@ -212,6 +212,20 @@ async def test_connector_options_fall_back_to_defaults(factory_options):
     assert client._backend.connector_kwargs["keepalive_timeout"] == 30.0
 
 
+@pytest.mark.parametrize("client_kind", ("sync", "async"))
+@pytest.mark.asyncio
+async def test_explicit_keyword_options_take_precedence_over_dsn(client_kind):
+    client = await _create_factory_client(
+        client_kind,
+        "dsn",
+        {"query_limit": "5", "query_retries": "9"},
+        query_limit=7,
+    )
+
+    assert client.query_limit == 7
+    assert client.query_retries == 9
+
+
 @pytest.mark.asyncio
 async def test_generic_connector_options_take_precedence_over_dsn():
     dsn_options = urlencode(_SOURCE_CONNECTOR_OPTIONS)

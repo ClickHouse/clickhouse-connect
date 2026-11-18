@@ -1,7 +1,7 @@
 from clickhouse_connect.driver import _parse_connection_params
 
 
-def parse(dsn, *, host=None, username=None, password="", port=None, database=None, interface=None, secure=False):
+def parse(dsn, *, host=None, username=None, password="", port=None, database=None, interface=None, secure=False, kwargs=None):
     return _parse_connection_params(
         host=host,
         username=username,
@@ -11,7 +11,7 @@ def parse(dsn, *, host=None, username=None, password="", port=None, database=Non
         interface=interface,
         secure=secure,
         dsn=dsn,
-        kwargs={},
+        kwargs={} if kwargs is None else kwargs,
     )
 
 
@@ -39,6 +39,18 @@ def test_explicit_params_override_dsn():
         "http://user%40name:pass%20word@host:8123/my%20db", username="u", password="p", database="d"
     )
     assert (username, password, database) == ("u", "p", "d")
+
+
+def test_explicit_keyword_arguments_override_dsn_query_parameters():
+    kwargs = {"query_limit": 7, "client_name": "explicit"}
+    parse("http://host:8123/db?query_limit=5&client_name=from_dsn&connect_timeout=3", kwargs=kwargs)
+    assert kwargs == {"query_limit": 7, "client_name": "explicit", "connect_timeout": "3"}
+
+
+def test_none_keyword_argument_falls_through_to_dsn_query_parameter():
+    kwargs = {"query_limit": None}
+    parse("http://host:8123/db?query_limit=5", kwargs=kwargs)
+    assert kwargs == {"query_limit": "5"}
 
 
 def test_no_dsn_or_explicit_values_keeps_database_none_and_resolves_port():
