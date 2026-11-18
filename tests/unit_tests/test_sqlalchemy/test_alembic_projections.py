@@ -485,3 +485,11 @@ def test_ast_dump_escapes_percent_signs_for_parameterless_driver_sql():
     context.connection.exec_driver_sql.return_value.fetchall.return_value = [("Literal '100%%'",)]
     _ast_dump(context, "SELECT value % 2, '100%%'", ({}, {}))
     assert context.connection.exec_driver_sql.call_args.args[0] == "EXPLAIN AST SELECT value %% 2, '100%%%%' LIMIT 1 FORMAT TabSeparated"
+
+
+@pytest.mark.parametrize("token", ["%", "%%", "%s", "%(name)s"])
+def test_projection_comparison_preserves_literal_percents(token):
+    context = _context()
+    projection = ClickHouseProjection("projection", f"SELECT concat(label, '{token}') AS label ORDER BY label")
+    assert _definitions_match(context, projection, projection)
+    context.connection.execute.assert_not_called()

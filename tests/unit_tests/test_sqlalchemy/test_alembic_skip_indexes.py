@@ -542,3 +542,31 @@ def test_inspector_routes_explicit_index_reflection_through_dialect():
     inspector = ChInspector._construct(ChInspector._init_connection, connection)
     assert inspector.get_clickhouse_indexes("events", "warehouse") == []
     connection.dialect.get_clickhouse_indexes.assert_called_once_with(connection, "events", "warehouse")
+
+
+@pytest.mark.parametrize("paramstyle", ["named", "pyformat"])
+def test_index_analysis_preserves_literal_percents(paramstyle):
+    context = _context()
+    context.dialect = ClickHouseDialect(paramstyle=paramstyle)
+    context.connection.exec_driver_sql.return_value.fetchall.return_value = [("SELECT tuple(value)",)]
+    table = _table()
+    table.name = "events%%"
+    table.append_column(Column("alias%%", UInt32, clickhousedb_alias="% %% %s %(name)s"))
+    _analyzed_expression(context, "tuple(value % 5, 'a%%b', '%s', '%(name)s')", table)
+    sql = context.connection.exec_driver_sql.call_args.args[0]
+    assert "'%% %%%% %%s %%(name)s' AS `alias%%%%`" in sql
+    assert "SELECT tuple(value %% 5, 'a%%%%b', '%%s', '%%(name)s')" in sql
+    assert "FROM `warehouse`.`events%%%%`" in sql
+
+
+def test_index_query_tree_preserves_literal_percents():
+    context = _context()
+    context.connection.exec_driver_sql.return_value.fetchall.return_value = [
+        ("QUERY id: 0",),
+        ("  PROJECTION",),
+        ("    LIST id: 1, nodes: 1",),
+        ("      FUNCTION id: 2, alias: _index, function_name: tuple, function_type: ordinary",),
+    ]
+    assert _key_expression(context, "('a%%b', '%s', '%(name)s')") == "tuple('a%%b', '%s', '%(name)s')"
+    sql = context.connection.exec_driver_sql.call_args.args[0]
+    assert sql == "EXPLAIN QUERY TREE run_passes=0 SELECT ('a%%%%b', '%%s', '%%(name)s') AS _index LIMIT 1"

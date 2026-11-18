@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from copy import copy
 from typing import Any
 
 from sqlalchemy.engine.interfaces import Dialect
@@ -6,6 +7,16 @@ from sqlalchemy.sql.compiler import IdentifierPreparer
 
 from clickhouse_connect.driver.binding import escape_str
 from clickhouse_connect.driver.binding import quote_identifier as ch_quote_identifier
+
+
+def literal_dialect(dialect: Dialect) -> Dialect:
+    """Copy a dialect for SQL rendered without DB-API percent encoding."""
+    rendered = copy(dialect)
+    rendered.paramstyle = "named"
+    rendered.positional = False
+    rendered.identifier_preparer = rendered.preparer(rendered)
+    rendered.__dict__.pop("_type_memos", None)
+    return rendered
 
 
 class ChIdentifierPreparer(IdentifierPreparer):

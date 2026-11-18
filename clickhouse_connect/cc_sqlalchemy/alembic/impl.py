@@ -33,6 +33,7 @@ from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import (
     ClickHouseDDLHelper,
     column_specification,
 )
+from clickhouse_connect.cc_sqlalchemy.sql.preparer import literal_dialect
 from clickhouse_connect.datatypes.dynamic import JSON as ChJSON  # noqa: N811
 from clickhouse_connect.datatypes.registry import parse_name
 from clickhouse_connect.driver.binding import quote_identifier
@@ -135,6 +136,8 @@ class ClickHouseImpl(DefaultImpl):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        if self.as_sql and self.dialect.identifier_preparer._double_percents:
+            self.dialect = literal_dialect(self.dialect)
         self._add_integration_tag()
         if (
             not self.as_sql
@@ -215,7 +218,7 @@ class ClickHouseImpl(DefaultImpl):
         ]
         if if_not_exists:
             sql.append("IF NOT EXISTS")
-        sql.append(column_specification(self.dialect, column))
+        sql.append(column_specification(literal_dialect(self.dialect), column))
         after = kw.get("after") or ClickHouseDDLHelper.get_option(column, "after")
         if after:
             sql.extend(["AFTER", quote_identifier(after)])
@@ -358,7 +361,7 @@ class ClickHouseImpl(DefaultImpl):
                 modify_sql.append("IF EXISTS")
             modify_sql.append(
                 column_specification(
-                    self.dialect,
+                    literal_dialect(self.dialect),
                     Column(
                         column_name,
                         effective_type,

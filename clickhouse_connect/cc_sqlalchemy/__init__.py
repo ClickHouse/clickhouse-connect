@@ -9,6 +9,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl import tableengine as engines
 from clickhouse_connect.cc_sqlalchemy.ddl.dictionary import Dictionary
 from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex
 from clickhouse_connect.cc_sqlalchemy.ddl.projection import ClickHouseProjection
+from clickhouse_connect.cc_sqlalchemy.ddl.refresh import ClickHouseRefresh
 from clickhouse_connect.cc_sqlalchemy.sql import ClickHouseSelect, cte, final, sample, select
 from clickhouse_connect.cc_sqlalchemy.sql.clauses import ArrayJoin, ClickHouseJoin, Lambda, array_join, ch_join, json_subcolumn
 from clickhouse_connect.dbapi.cursor import Cursor
@@ -45,6 +46,7 @@ __all__ = [
     "ClickhouseDictionary",
     "ClickHouseIndex",
     "ClickHouseProjection",
+    "ClickHouseRefresh",
     "engines",
     "types",
     "Cursor",
