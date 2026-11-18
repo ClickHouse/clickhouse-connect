@@ -366,6 +366,8 @@ ClickHouse Connect also supports client-side parameter binding, which can allow 
 
 Note that unlike server-side binding, client-side binding doesn't work for database identifiers such as database, table, or column names, since Python-style formatting can't distinguish between the different types of strings, and they need to be formatted differently (backticks or double quotes for database identifiers, single quotes for data values).
 
+For unknown Python types, client-side binding uses the output of `str()` without quoting or escaping. Convert untrusted values to `str`, `int`, `float`, `date`, or `datetime`, or use server-side binding, which sends values separately.
+
 Because substitution is printf-style, a literal `%` in the query must be written as `%%` whenever `parameters` are passed. A query whose only `{name:Type}` text sits inside a string, quoted identifier, comment, or heredoc takes this client-side path, so an unescaped `%` in such a query raises `ValueError`.
 
 - Example with Python Dictionary, DateTime value and string escaping
@@ -731,7 +733,7 @@ For the common use case of inserting multiple records into ClickHouse, there is 
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `table` | str | Required | Target table. A database-qualified name is permitted. May be omitted when supplied by `context`. |
+| `table` | str | Required | Target table. A database-qualified name such as `db.table` is permitted. Each part is quoted, and parts already quoted with backticks or double quotes are kept as written. Table function targets that start with `FUNCTION` are sent as written. May be omitted when supplied by `context`. |
 | `data` | Sequence of Sequences | Required | Row-oriented or column-oriented data matrix. May be supplied later through an `InsertContext`. |
 | `column_names` | str or Sequence[str] | `"*"` | Ordered columns. `"*"` runs a metadata query to discover every insertable column. |
 | `database` | str or None | Client database | Target database when `table` is not qualified. |

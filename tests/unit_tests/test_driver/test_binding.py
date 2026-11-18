@@ -8,6 +8,7 @@ from clickhouse_connect.driver.binding import (
     MAX_URL_BIND_PARAM_LENGTH,
     _binding_keeps_query_structure,
     _contains_insert_bareword,
+    _qualified_table,
     _query_is_insert,
     _query_is_read_only,
     _sql_opaque_regions,
@@ -71,6 +72,43 @@ def test_quote_identifier_valid_prequoted_passthrough(identifier):
 )
 def test_quote_identifier_invalid_prequoted_escaped_as_raw(identifier, expected):
     assert quote_identifier(identifier) == expected
+
+
+@pytest.mark.parametrize(
+    "table, database, expected",
+    [
+        ("db.table", None, "`db`.`table`"),
+        ("db.table", "other", "`db`.`table`"),
+        ("`db`.`table`", None, "`db`.`table`"),
+        ('"db"."table"', None, '"db"."table"'),
+        ("`a.b`", None, "`a.b`"),
+        ("`a.b`", "db", "`db`.`a.b`"),
+        ("db.`a.b`", None, "`db`.`a.b`"),
+        ("`d``b`.t", None, "`d``b`.`t`"),
+        ("default.my-table", None, "`default`.`my-table`"),
+        ("db . t", None, "`db`.`t`"),
+        ("db.my table (x)", None, "`db`.`my table (x)`"),
+        (
+            "db.other SELECT id FROM db.secret WHERE id NOT IN (SELECT id FROM input('id UInt64')) OR id IN",
+            None,
+            "`db`.`other SELECT id FROM db`.`secret WHERE id NOT IN (SELECT id FROM input(\\'id UInt64\\')) OR id IN`",
+        ),
+        ("`db.t", None, "`\\`db.t`"),
+        ("my-table", None, "`my-table`"),
+        ("user events", "my-db", "`my-db`.`user events`"),
+        ("FUNCTION remote('127.0.0.1', db.t)", None, "FUNCTION remote('127.0.0.1', db.t)"),
+        ("function null('id UInt64')", None, "function null('id UInt64')"),
+        ("  FUNCTION  s3 (...)", None, "  FUNCTION  s3 (...)"),
+        ("FUNCTION remote(...)", "x", "FUNCTION remote(...)"),
+        ("function_log", None, "`function_log`"),
+        ("db.function_log", None, "`db`.`function_log`"),
+        ("FUNCTION", None, "`FUNCTION`"),
+        ("FUNCTIONx(1)", None, "`FUNCTIONx(1)`"),
+        ("FUNCTION 1x(...)", None, "`FUNCTION 1x(`.``.``.`)`"),
+    ],
+)
+def test_qualified_table(table, database, expected):
+    assert _qualified_table(table, database) == expected
 
 
 def test_use_form_encoding_empty():

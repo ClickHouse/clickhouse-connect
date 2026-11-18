@@ -25,6 +25,7 @@ _BYTE_ESCAPES = tuple(f"{BS}x{b:02x}" for b in range(256))
 # a bareword only through ASCII letters, digits, and underscores and never absorb `$`.
 _BIND_NAME_PATTERN = r"(?:[A-Za-z_][A-Za-z0-9_$]*|\$[A-Za-z0-9_][A-Za-z0-9_$]*|[0-9]+[A-Za-z_][A-Za-z0-9_]*)"
 _bind_name_re = re.compile(rf"{_BIND_NAME_PATTERN}\Z")
+_table_function_re = re.compile(r"\s*FUNCTION\s+[A-Za-z_][A-Za-z0-9_]*\s*\(", re.IGNORECASE)
 # Routing keeps the shipped 1.x `\w+` names such as `{13:Int32}` or `{idé:Int32}`
 # in the union for unquoted placeholders. `\w` cannot absorb `$`.
 external_bind_re = re.compile(rf"\{{({_BIND_NAME_PATTERN}|\w+):([^}}]+)\}}")
@@ -816,9 +817,27 @@ def quote_identifier(identifier: str) -> str:
 
 
 def _qualified_table(table: str, database: str | None = None) -> str:
-    # Dotted names stay as-is so existing db.table callers keep working.
-    if "." in table:
+    if _table_function_re.match(table):
         return table
+    # Split qualified names only at dots outside quoted identifiers.
+    parts = []
+    start = index = 0
+    while index < len(table):
+        char = table[index]
+        if char in ("`", '"'):
+            end = _skip_quoted_token(table, index, char)
+            if end == -1:
+                break
+            index = end
+        elif char == ".":
+            parts.append(table[start:index].strip(" \t\n\r\v\f"))
+            index += 1
+            start = index
+        else:
+            index += 1
+    if parts:
+        parts.append(table[start:].strip(" \t\n\r\v\f"))
+        return ".".join(quote_identifier(part) for part in parts)
     if database:
         return f"{quote_identifier(database)}.{quote_identifier(table)}"
     return quote_identifier(table)

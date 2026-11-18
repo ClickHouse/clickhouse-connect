@@ -10,8 +10,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from clickhouse_connect import common
+from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver.binding import finalize_query
 from clickhouse_connect.driver.client import Client
-from clickhouse_connect.driver.exceptions import DataError
+from clickhouse_connect.driver.exceptions import DatabaseError, DataError
 from tests.integration_tests.conftest import TestConfig
 
 HAS_TZSET = hasattr(time_module, "tzset")
@@ -740,3 +742,63 @@ def test_insert_enum_names_with_backslash_escapes(
             f"SELECT toString({leaf}), toInt16({leaf}) FROM test_enum_backslash WHERE id < {len(names)} ORDER BY id",
         )
         assert result.result_rows == list(zip(names, codes))
+
+
+@pytest.mark.parametrize("method", ["insert_arrow", "insert"])
+def test_insert_quotes_qualified_table(param_client: Client, call, table_context, test_db, method):
+    if method == "insert_arrow":
+        pa = pytest.importorskip("pyarrow")
+        arrow_table = pa.table({"id": pa.array([13], type=pa.uint64())})
+    target = "test_qualified_insert_target"
+    source = "test_qualified_insert_source"
+    with (
+        table_context(target, ["id UInt64"], engine="MergeTree"),
+        table_context(source, ["id UInt64"], engine="MergeTree"),
+        table_context("`a.b`", ["id UInt64"], engine="MergeTree"),
+    ):
+        call(param_client.insert, source, [[79]])
+        rider = f"{test_db}.{target} SELECT id FROM {test_db}.{source} WHERE id NOT IN (SELECT id FROM input('id UInt64')) OR id IN"
+        with pytest.raises(DatabaseError):
+            if method == "insert_arrow":
+                call(param_client.insert_arrow, rider, arrow_table)
+            else:
+                call(param_client.insert, rider, [[13]], column_names=["id"], column_types=[get_from_name("UInt64")])
+        assert call(param_client.command, f"SELECT count() FROM {target}") == 0
+
+        call(param_client.insert, f"{test_db}.{target}", [[13]])
+        if method == "insert_arrow":
+            call(param_client.insert_arrow, f"`{test_db}`.`{target}`", arrow_table)
+            call(param_client.insert_arrow, "`a.b`", arrow_table, database=test_db)
+            assert call(param_client.query, "SELECT id FROM `a.b`").result_rows == [(13,)]
+        else:
+            call(param_client.insert, f"`{test_db}`.`{target}`", [[13]])
+        assert call(param_client.command, f"SELECT count() FROM {target}") == 2
+
+
+@pytest.mark.parametrize("method", ["insert_arrow", "insert"])
+@pytest.mark.parametrize("target_kind", ["remote", "null", "function_log"])
+def test_insert_table_function_target(param_client: Client, call, table_context, test_db, test_config, method, target_kind):
+    if method == "insert_arrow":
+        pa = pytest.importorskip("pyarrow")
+        arrow_table = pa.table({"id": pa.array([13], type=pa.uint64())})
+    table = "function_log"
+    with table_context(table, ["id UInt64"], engine="MergeTree"):
+        if target_kind == "remote":
+            if test_config.cloud:
+                pytest.skip("remote() to the server itself needs the native port")
+            host = "127.0.0.1" if test_config.host in ("localhost", "127.0.0.1", "::1") else test_config.host
+            port = call(param_client.command, "SELECT tcpPort()")
+            target = finalize_query(
+                f"FUNCTION remote(%s, {test_db}.{table}, %s, %s)",
+                [f"{host}:{port}", test_config.username, test_config.password],
+            )
+        elif target_kind == "null":
+            target = "FUNCTION null('id UInt64')"
+        else:
+            target = table
+        if method == "insert_arrow":
+            call(param_client.insert_arrow, target, arrow_table)
+        else:
+            call(param_client.insert, target, [[13]], column_names=["id"], column_types=[get_from_name("UInt64")])
+        expected = [] if target_kind == "null" else [(13,)]
+        assert call(param_client.query, f"SELECT id FROM {table}").result_rows == expected
