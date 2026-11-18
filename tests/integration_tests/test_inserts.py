@@ -602,6 +602,7 @@ def test_insert_finite_float_into_int(client_factory, call, client_mode, test_ta
         call(client.command, f"DROP TABLE IF EXISTS {table}")
 
 
+@pytest.mark.local_only
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
 @pytest.mark.parametrize(
     "type_name",
