@@ -181,6 +181,7 @@ def test_string_result(test_engine: Engine, statement):
         assert conn.execute(statement).scalar_one() == "user_1"
 
 
+@mark.local_only
 def test_unicode_column(test_engine: Engine, test_db: str):
     table = Table("select_test_unicode", MetaData(schema=test_db), sa.Column("value", sa.Unicode))
     with test_engine.begin() as conn:
