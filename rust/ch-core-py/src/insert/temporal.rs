@@ -51,7 +51,19 @@ fn parse_timedelta_dtype(dtype: &Bound<'_, PyAny>) -> Option<(NumpyTimedeltaMeta
         unit[..digit_count].parse::<i128>().ok()?
     };
     let base = &unit[digit_count..];
-    let (unit_numerator, denominator) = match base {
+    let (unit_numerator, denominator) = numpy_time_unit_ratio(base)?;
+    Some((
+        NumpyTimedeltaMeta {
+            order,
+            numerator: multiplier.checked_mul(unit_numerator)?,
+            denominator,
+        },
+        false,
+    ))
+}
+
+fn numpy_time_unit_ratio(unit: &str) -> Option<(i128, i128)> {
+    Some(match unit {
         "W" => (604_800, 1),
         "D" => (86_400, 1),
         "h" => (3_600, 1),
@@ -64,15 +76,7 @@ fn parse_timedelta_dtype(dtype: &Bound<'_, PyAny>) -> Option<(NumpyTimedeltaMeta
         "fs" => (1, 1_000_000_000_000_000),
         "as" => (1, 1_000_000_000_000_000_000),
         _ => return None,
-    };
-    Some((
-        NumpyTimedeltaMeta {
-            order,
-            numerator: multiplier.checked_mul(unit_numerator)?,
-            denominator,
-        },
-        false,
-    ))
+    })
 }
 
 /// Non-generic timedelta meta read from a value's `dtype` attribute.
@@ -90,6 +94,93 @@ fn numpy_i64(bytes: &[u8], order: NumpyByteOrder) -> Option<i64> {
         NumpyByteOrder::Little => i64::from_le_bytes(raw),
         NumpyByteOrder::Big => i64::from_be_bytes(raw),
     })
+}
+
+fn numpy_datetime_ticks(
+    value: &Bound<'_, PyAny>,
+    precision: u8,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyResult<Option<i64>> {
+    let py = value.py();
+    let Ok(dtype) = value.getattr(intern!(py, "dtype")) else {
+        return Ok(None);
+    };
+    if !dtype
+        .getattr(intern!(py, "kind"))
+        .and_then(|kind| kind.eq("M"))
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    let Ok(numpy) = py.import(intern!(py, "numpy")) else {
+        return Ok(None);
+    };
+    if !value.is_instance(&numpy.getattr(intern!(py, "datetime64"))?)? {
+        return Ok(None);
+    }
+    let bytes = value.call_method0(intern!(py, "tobytes"))?;
+    let bytes = bytes.cast::<PyBytes>().map_err(|_| {
+        PyValueError::new_err(format!(
+            "column {column:?} row {row} NumPy datetime tobytes() did not return bytes"
+        ))
+    })?;
+    let order = if cfg!(target_endian = "little") {
+        NumpyByteOrder::Little
+    } else {
+        NumpyByteOrder::Big
+    };
+    let raw = numpy_i64(bytes.as_bytes(), order).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "column {column:?} row {row} NumPy datetime scalar is not 8 bytes"
+        ))
+    })?;
+    if raw == i64::MIN {
+        return Err(PyValueError::new_err(format!(
+            "column {column:?} row {row} cannot insert NumPy datetime64 NaT into {type_name}"
+        )));
+    }
+    let (unit, multiplier) = numpy
+        .call_method1(intern!(py, "datetime_data"), (&dtype,))?
+        .extract::<(String, i128)>()?;
+    let overflow = || {
+        PyValueError::new_err(format!(
+            "column {column:?} row {row} {type_name} NumPy datetime64 value is outside range"
+        ))
+    };
+    let (count, unit) = if matches!(unit.as_str(), "Y" | "M") {
+        let days = value.call_method1(intern!(py, "astype"), ("datetime64[D]",))?;
+        let round_trip = days
+            .call_method1(intern!(py, "astype"), (&dtype,))?
+            .call_method1(intern!(py, "astype"), ("int64",))?
+            .extract::<i64>()?;
+        if round_trip != raw {
+            return Err(overflow());
+        }
+        let days = days
+            .call_method1(intern!(py, "astype"), ("int64",))?
+            .extract::<i64>()?;
+        (i128::from(days), "D")
+    } else {
+        (
+            i128::from(raw)
+                .checked_mul(multiplier)
+                .ok_or_else(overflow)?,
+            unit.as_str(),
+        )
+    };
+    let (numerator, denominator) = numpy_time_unit_ratio(unit).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "column {column:?} row {row} unsupported NumPy datetime64 unit {unit:?}"
+        ))
+    })?;
+    let ticks = count
+        .checked_mul(numerator)
+        .and_then(|value| value.checked_mul(i128::from(time64_scale(precision))))
+        .ok_or_else(overflow)?
+        .div_euclid(denominator);
+    i64::try_from(ticks).map(Some).map_err(|_| overflow())
 }
 
 fn numpy_timedelta_scalar_raw(
@@ -694,6 +785,9 @@ pub(super) fn datetime_seconds(
     if let Ok(secs) = value.extract::<i64>() {
         return Ok(secs);
     }
+    if let Some(secs) = numpy_datetime_ticks(value, 0, column, row, "DateTime")? {
+        return Ok(secs);
+    }
     let ts = value
         .call_method0("timestamp")
         .and_then(|o| o.extract::<f64>())
@@ -729,6 +823,11 @@ pub(super) fn datetime64_ticks(
 
     if let Ok(ticks) = value.extract::<i64>() {
         return Ok(ticks);
+    }
+    if !value.is_instance_of::<PyString>() {
+        if let Some(ticks) = numpy_datetime_ticks(value, precision, column, row, "DateTime64")? {
+            return Ok(ticks);
+        }
     }
 
     let value = if let Ok(s) = value.cast::<PyString>() {
