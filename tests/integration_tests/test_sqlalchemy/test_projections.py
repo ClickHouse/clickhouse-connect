@@ -215,16 +215,46 @@ def test_server_normalization_and_replay(run_sqlalchemy, test_db, ch_name, selec
 @pytest.mark.parametrize(
     ("before", "after"),
     [
-        ("SELECT value + 13 AS extra ORDER BY extra", "SELECT value + 79 AS extra ORDER BY extra"),
-        ("SELECT concat(label, ':tag') AS category ORDER BY category", "SELECT concat(label, ':Tag') AS category ORDER BY category"),
-        ("SELECT value AS v ORDER BY v", "SELECT value AS other ORDER BY other"),
-        ("SELECT label, value ORDER BY (label, value)", "SELECT label, value ORDER BY (value, label)"),
-        ("SELECT quantile(0.5)(value) AS total GROUP BY label", "SELECT quantile(0.9)(value) AS total GROUP BY label"),
-        ("SELECT sumIf(value, value > 13) AS total GROUP BY label", "SELECT SumIf(value, value > 13) AS total GROUP BY label"),
-        ("SELECT sumIf(value, value > 13) AS total GROUP BY label", "SELECT sumIf(value, value > 79) AS total GROUP BY label"),
-        ("SELECT sum(value) AS total GROUP BY label", "SELECT sumDistinct(value) AS total GROUP BY label"),
+        pytest.param(
+            "SELECT value + 13 AS extra ORDER BY extra",
+            "SELECT value + 79 AS extra ORDER BY extra",
+            marks=pytest.mark.local_only,
+        ),
+        pytest.param(
+            "SELECT concat(label, ':tag') AS category ORDER BY category",
+            "SELECT concat(label, ':Tag') AS category ORDER BY category",
+            marks=pytest.mark.local_only,
+        ),
+        pytest.param("SELECT value AS v ORDER BY v", "SELECT value AS other ORDER BY other", marks=pytest.mark.local_only),
+        pytest.param(
+            "SELECT label, value ORDER BY (label, value)",
+            "SELECT label, value ORDER BY (value, label)",
+            marks=pytest.mark.local_only,
+        ),
+        pytest.param(
+            "SELECT quantile(0.5)(value) AS total GROUP BY label",
+            "SELECT quantile(0.9)(value) AS total GROUP BY label",
+            marks=pytest.mark.local_only,
+        ),
+        pytest.param(
+            "SELECT sumIf(value, value > 13) AS total GROUP BY label",
+            "SELECT SumIf(value, value > 13) AS total GROUP BY label",
+            marks=pytest.mark.local_only,
+        ),
+        pytest.param(
+            "SELECT sumIf(value, value > 13) AS total GROUP BY label",
+            "SELECT sumIf(value, value > 79) AS total GROUP BY label",
+            marks=pytest.mark.local_only,
+        ),
+        pytest.param(
+            "SELECT sum(value) AS total GROUP BY label",
+            "SELECT sumDistinct(value) AS total GROUP BY label",
+            marks=pytest.mark.local_only,
+        ),
         ("SELECT concat(label, '100%') AS category ORDER BY category", "SELECT concat(label, '200%') AS category ORDER BY category"),
-        ("SELECT value % 2 AS parity ORDER BY parity", "SELECT value % 3 AS parity ORDER BY parity"),
+        pytest.param(
+            "SELECT value % 2 AS parity ORDER BY parity", "SELECT value % 3 AS parity ORDER BY parity", marks=pytest.mark.local_only
+        ),
         ("SELECT (value + 1) * 2 AS extra ORDER BY extra", "SELECT value + 1 * 2 AS extra ORDER BY extra"),
     ],
 )

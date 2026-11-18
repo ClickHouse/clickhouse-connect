@@ -120,6 +120,12 @@ def test_config_fixture() -> Iterator[TestConfig]:
     yield TestConfig(host, port, username, password, docker, test_database, cloud, compress, insert_quorum, proxy_address, native_codec)
 
 
+@fixture(autouse=True)
+def skip_local_only_on_cloud(request: pytest.FixtureRequest, test_config: TestConfig) -> None:
+    if test_config.cloud and request.node.get_closest_marker("local_only") is not None:
+        pytest.skip("Covered by local tests; no Cloud-specific behavior")
+
+
 @fixture(scope="session", name="test_db")
 def test_db_fixture(test_config: TestConfig) -> Iterator[str]:
     yield test_config.test_database or "default"

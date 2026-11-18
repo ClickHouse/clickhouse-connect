@@ -23,6 +23,8 @@ from tests.integration_tests.test_sqlalchemy.test_alembic import _alembic_config
 @pytest.fixture
 def run_sqlalchemy(client_mode, call, test_engine, test_config):
     """Run the same schema workflow through sync and async SQLAlchemy connections."""
+    if test_config.cloud and client_mode == "async":
+        pytest.skip("Covered by local tests; no Cloud-specific behavior")
     if client_mode == "sync":
 
         def run(work, *, database=None, **engine_options):
@@ -465,7 +467,15 @@ def test_autogenerate_shares_catalog_and_analyzer_reads(run_sqlalchemy, test_db,
     run_sqlalchemy(workflow)
 
 
-@pytest.mark.parametrize(("type_", "granularity"), [("minmax", 1), ("set(79)", 1), ("minmax", 4), ("set(79)", 4)])
+@pytest.mark.parametrize(
+    ("type_", "granularity"),
+    [
+        ("minmax", 1),
+        pytest.param("set(79)", 1, marks=pytest.mark.local_only),
+        pytest.param("minmax", 4, marks=pytest.mark.local_only),
+        pytest.param("set(79)", 4, marks=pytest.mark.local_only),
+    ],
+)
 def test_index_edit_can_reference_column_added_in_same_revision(run_sqlalchemy, test_db, tmp_path, ch_name, type_, granularity):
     table_name = ch_name("added_index_column")
     initial = _metadata(table_name, test_db, ClickHouseIndex("value_idx", "value", "minmax"))
@@ -491,8 +501,23 @@ def test_index_edit_can_reference_column_added_in_same_revision(run_sqlalchemy, 
     run_sqlalchemy(workflow)
 
 
-@pytest.mark.parametrize("expression", ["new_vlaue + 13", "new_value + missing", "missing + new_value"])
-@pytest.mark.parametrize(("type_", "granularity"), [("minmax", 1), ("set(79)", 1), ("minmax", 4), ("set(79)", 4)])
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "new_vlaue + 13",
+        pytest.param("new_value + missing", marks=pytest.mark.local_only),
+        pytest.param("missing + new_value", marks=pytest.mark.local_only),
+    ],
+)
+@pytest.mark.parametrize(
+    ("type_", "granularity"),
+    [
+        ("minmax", 1),
+        pytest.param("set(79)", 1, marks=pytest.mark.local_only),
+        pytest.param("minmax", 4, marks=pytest.mark.local_only),
+        pytest.param("set(79)", 4, marks=pytest.mark.local_only),
+    ],
+)
 def test_index_edit_unknown_column_still_raises(run_sqlalchemy, test_db, ch_name, expression, type_, granularity):
     table_name = ch_name("unknown_index_column")
     initial = _metadata(table_name, test_db, ClickHouseIndex("value_idx", "value", "minmax"))
@@ -508,7 +533,15 @@ def test_index_edit_unknown_column_still_raises(run_sqlalchemy, test_db, ch_name
     run_sqlalchemy(workflow)
 
 
-@pytest.mark.parametrize(("type_", "granularity"), [("minmax", 1), ("set(79)", 1), ("minmax", 4), ("set(79)", 4)])
+@pytest.mark.parametrize(
+    ("type_", "granularity"),
+    [
+        ("minmax", 1),
+        pytest.param("set(79)", 1, marks=pytest.mark.local_only),
+        pytest.param("minmax", 4, marks=pytest.mark.local_only),
+        pytest.param("set(79)", 4, marks=pytest.mark.local_only),
+    ],
+)
 def test_index_edit_cannot_reference_filtered_new_column(run_sqlalchemy, test_db, ch_name, type_, granularity):
     table_name = ch_name("filtered_index_column")
     initial = _metadata(table_name, test_db, ClickHouseIndex("value_idx", "value", "minmax"))
