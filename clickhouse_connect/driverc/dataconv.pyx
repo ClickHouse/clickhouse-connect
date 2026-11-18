@@ -427,15 +427,11 @@ def read_nullable_array(ResponseBuffer buffer, array_type: str, unsigned long lo
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def build_nullable_column(source: Sequence, char * null_map, object null_obj):
-    cdef unsigned long long num_rows = len(source), x
-    cdef object column = [], v
-    cdef object app = column.append
-    for x in range(num_rows):
-        if null_map[x] == 0:
-            v = source[x]
-        else:
-            v = null_obj
-        app(v)
+    cdef list column = []
+    cdef Py_ssize_t x = 0
+    for v in source:
+        column.append(null_obj if null_map[x] != 0 else v)
+        x += 1
     return column
 
 
