@@ -138,7 +138,7 @@ def parse_enum(expr) -> tuple[tuple[str, ...], tuple[int, ...]]:
                 key.append(expr[pos])
                 pos += 1
             elif char == "\\" and expr[pos] == "x" and len(hex_code := expr[pos + 1 : pos + 3]) == 2 and "'" not in hex_code:
-                # Like unhex2 on 26.3-26.9 servers, a character that is not a hex digit counts as 0xFF
+                # Like unhex2 before 26.10, a character that is not a hex digit counts as 0xFF
                 # and the sum wraps to a byte (26.10 ORs the digits instead)
                 byte = (_HEX_DIGITS.get(hex_code[0], 0xFF) * 16 + _HEX_DIGITS.get(hex_code[1], 0xFF)) & 0xFF
                 key.append(chr(byte if byte < 0x80 else 0xDC00 + byte))
