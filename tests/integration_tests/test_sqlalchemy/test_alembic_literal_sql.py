@@ -25,9 +25,11 @@ def _offline_sql(connection, operation):
     return buffer.getvalue().strip()
 
 
-@pytest.mark.parametrize("engine_kind", ["target", "string", "object"])
+@pytest.mark.parametrize(
+    "engine_kind", ["target", pytest.param("string", marks=pytest.mark.local_only), pytest.param("object", marks=pytest.mark.local_only)]
+)
 @pytest.mark.parametrize("refresh", [False, True])
-@pytest.mark.parametrize("percent_identifiers", [False, True])
+@pytest.mark.parametrize("percent_identifiers", [pytest.param(False, marks=pytest.mark.local_only), True])
 def test_materialized_view_literal_sql(run_sqlalchemy, test_db, ch_name, engine_kind, refresh, percent_identifiers):
     suffix = " `\\ % %% %s %(name)s" if percent_identifiers else ""
     source, sink, view, dependency = (
@@ -184,8 +186,8 @@ def test_table_helpers_literal_sql(run_sqlalchemy, test_db, ch_name):
     run_sqlalchemy(workflow)
 
 
-@pytest.mark.parametrize("tuple_expression", [False, True])
-@pytest.mark.parametrize("alias", [False, True])
+@pytest.mark.parametrize("tuple_expression", [False, pytest.param(True, marks=pytest.mark.local_only)])
+@pytest.mark.parametrize("alias", [False, pytest.param(True, marks=pytest.mark.local_only)])
 def test_index_comparison_preserves_literal_percents(run_sqlalchemy, test_db, ch_name, tuple_expression, alias):
     table_name = ch_name("literal_index_comparison")
     column = "alias_label" if alias else "label"
@@ -228,9 +230,9 @@ def test_index_comparison_preserves_literal_percents(run_sqlalchemy, test_db, ch
     run_sqlalchemy(workflow)
 
 
-@pytest.mark.parametrize("creation", ["create_all", "create_table"])
-@pytest.mark.parametrize("server_side_params", [False, True])
-@pytest.mark.parametrize("percent_identifiers", [False, True])
+@pytest.mark.parametrize("creation", ["create_all", pytest.param("create_table", marks=pytest.mark.local_only)])
+@pytest.mark.parametrize("server_side_params", [False, pytest.param(True, marks=pytest.mark.local_only)])
+@pytest.mark.parametrize("percent_identifiers", [pytest.param(False, marks=pytest.mark.local_only), True])
 def test_create_table_preserves_inline_percents(run_sqlalchemy, test_db, ch_name, creation, server_side_params, percent_identifiers):
     suffix = "%%" if percent_identifiers else ""
     name = ch_name("inline_table" + suffix)

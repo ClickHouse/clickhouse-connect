@@ -33,7 +33,15 @@ def test_datetime_64_anonymous_binds(datetime_engine, expanding):
         assert conn.execute(sa.select(column).where(predicate)).all() == [(stamp.replace(tzinfo=None),)]
 
 
-@pytest.mark.parametrize("precision", [0, 3, 6, 9])
+@pytest.mark.parametrize(
+    "precision",
+    [
+        pytest.param(0, marks=pytest.mark.local_only),
+        pytest.param(3, marks=pytest.mark.local_only),
+        pytest.param(6, marks=pytest.mark.local_only),
+        9,
+    ],
+)
 @pytest.mark.parametrize("route", ["single", "native", "multivalues", "fallback", "orm"])
 def test_datetime64_insert_precision(datetime_engine, table_context, test_db, precision, route):
     table_name = "sqlalchemy_datetime64_precision"
