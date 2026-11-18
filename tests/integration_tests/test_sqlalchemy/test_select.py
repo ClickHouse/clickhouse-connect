@@ -1,4 +1,5 @@
-from pytest import fixture
+import sqlalchemy as sa
+from pytest import fixture, mark, param
 from sqlalchemy import MetaData, Table, func, literal_column, select, text
 from sqlalchemy.engine import Engine
 
@@ -10,6 +11,8 @@ from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import (
 )
 from clickhouse_connect.cc_sqlalchemy.sql.clauses import ch_join
 from tests.integration_tests.test_sqlalchemy.conftest import verify_tables_ready
+
+SA_14_ONLY = mark.skipif(not sa.__version__.startswith("1.4."), reason="SQLAlchemy 2.x returns FixedString bytes undecoded")
 
 
 @fixture(scope="module", autouse=True)
@@ -154,6 +157,41 @@ def test_tables(test_engine: Engine, test_db: str):
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_argmax"))
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_using_sales"))
         conn.execute(text(f"DROP TABLE IF EXISTS {test_db}.test_using_returns"))
+
+
+@mark.parametrize(
+    "statement",
+    [
+        param(select(sa.literal("user_1")), id="literal"),
+        param(select(sa.bindparam("p", "user_1")), id="bind"),
+        param(select(sa.literal("user_1", type_=sa.Unicode())), id="unicode"),
+        param(select(sa.literal("user_1", type_=sa.UnicodeText())), id="unicode_text"),
+        param(select(sa.literal("user_1", type_=sa.String())), id="string"),
+        param(select(sa.literal("user_1", type_=sa.Text())), id="text"),
+        param(select(sa.literal("user_1", type_=sa.Enum("user_1", "user_2"))), id="enum"),
+        param(text("SELECT 'user_1' AS x").columns(x=sa.Unicode), id="typed_text"),
+        param(text("SELECT toFixedString('user_1', 6) AS x").columns(x=sa.Unicode), id="fixed_string_unicode", marks=SA_14_ONLY),
+        param(
+            text("SELECT toFixedString('user_1', 6) AS x").columns(x=sa.Enum("user_1", "user_2")), id="fixed_string_enum", marks=SA_14_ONLY
+        ),
+    ],
+)
+def test_string_result(test_engine: Engine, statement):
+    with test_engine.connect() as conn:
+        assert conn.execute(statement).scalar_one() == "user_1"
+
+
+@mark.local_only
+def test_unicode_column(test_engine: Engine, test_db: str):
+    table = Table("select_test_unicode", MetaData(schema=test_db), sa.Column("value", sa.Unicode))
+    with test_engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE {test_db}.select_test_unicode (value String) ENGINE MergeTree() ORDER BY tuple()"))
+        try:
+            conn.execute(table.insert(), {"value": "user_1"})
+            verify_tables_ready(conn, {f"{test_db}.select_test_unicode": 1})
+            assert conn.execute(select(table.c.value)).scalar_one() == "user_1"
+        finally:
+            conn.execute(text(f"DROP TABLE {test_db}.select_test_unicode"))
 
 
 def test_basic_select(test_engine: Engine, test_db: str):

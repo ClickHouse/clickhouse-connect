@@ -107,7 +107,8 @@ class ClickHouseDialect(DefaultDialect):
     supports_statement_cache = False
     supports_comments = True
     inline_comments = True
-    returns_unicode_strings = True
+    # SQLAlchemy 1.4 only: decode bytes results such as FixedString, pass str through
+    returns_unicode_strings = getattr(sqltypes.String, "RETURNS_CONDITIONAL", True)
     postfetch_lastrowid = False
     ddl_compiler = ChDDLCompiler
     statement_compiler = ChStatementCompiler
