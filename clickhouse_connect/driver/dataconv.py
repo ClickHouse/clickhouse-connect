@@ -134,13 +134,7 @@ def build_nullable_column(source: Sequence, null_map: bytes, null_obj: Any):
 
 
 def build_lc_nullable_column(index: Sequence, keys: array.array, null_obj: Any):
-    column = []
-    for key in keys:
-        if key == 0:
-            column.append(null_obj)
-        else:
-            column.append(index[key])
-    return column
+    return [null_obj if key == 0 else index[key] for key in keys]
 
 
 def to_numpy_array(column: Sequence):

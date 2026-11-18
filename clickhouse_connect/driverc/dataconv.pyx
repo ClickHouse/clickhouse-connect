@@ -442,17 +442,7 @@ def build_nullable_column(source: Sequence, char * null_map, object null_obj):
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def build_lc_nullable_column(index: Sequence, keys: array.array, object null_obj):
-    cdef unsigned long long num_rows = len(keys), x, y
-    cdef object column = [], v
-    cdef object app = column.append
-    for x in range(num_rows):
-        y = keys[x]
-        if y == 0:
-            v = null_obj
-        else:
-            v = index[y]
-        app(v)
-    return column
+    return [null_obj if key == 0 else index[key] for key in keys]
 
 
 @cython.boundscheck(False)
