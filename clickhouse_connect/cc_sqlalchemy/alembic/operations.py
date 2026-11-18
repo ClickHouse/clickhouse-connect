@@ -3,10 +3,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from alembic.operations import MigrateOperation, Operations
+from alembic.operations import MigrateOperation, Operations, ops
 from alembic.operations.ops import ModifyTableOps
-from sqlalchemy import Column
+from sqlalchemy import Column, Table
 
+from clickhouse_connect.cc_sqlalchemy._schema import validate_setting_name
+from clickhouse_connect.cc_sqlalchemy.alembic.impl import ClickHouseImpl
 from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex, index_definition
 from clickhouse_connect.cc_sqlalchemy.ddl.projection import ClickHouseProjection, projection_definition
 from clickhouse_connect.cc_sqlalchemy.ddl.refresh import ClickHouseRefresh
@@ -44,6 +46,23 @@ __all__ = [
     "ClickHouseProjection",
     "ClickHouseRefresh",
 ]
+
+_DEFAULT_CREATE_TABLE_IMPL = globals().get("_DEFAULT_CREATE_TABLE_IMPL") or Operations._to_impl.dispatch(ops.CreateTableOp)
+
+
+@Operations.implementation_for(ops.CreateTableOp, replace=True)
+def _create_table(operations: Operations, operation: ops.CreateTableOp) -> Table:
+    if not isinstance(operations.impl, ClickHouseImpl):
+        return _DEFAULT_CREATE_TABLE_IMPL(operations, operation)
+    table = operation.to_table(operations.migration_context)
+    for item in operation.columns:
+        if isinstance(item, (TableEngine, ClickHouseIndex, ClickHouseProjection)):
+            item._set_parent_with_dispatch(table, allow_replacements=False)
+    kw = {}
+    if operation.if_not_exists is not None:
+        kw["if_not_exists"] = operation.if_not_exists
+    operations.impl.create_table(table, **kw)
+    return table
 
 
 def _validate_position(first: bool, after_name: str | None, owner: str) -> None:
@@ -749,6 +768,8 @@ class ModifyClickHouseTableSettingsOp(MigrateOperation):
     ) -> None:
         if not settings:
             raise ValueError("modify_clickhouse_table_settings requires at least one setting")
+        for name in settings:
+            validate_setting_name(name)
         self.table_name: str = table_name
         self.settings: Mapping[str, Any] = settings
         self.schema: str | None = schema
@@ -821,6 +842,8 @@ class ResetClickHouseTableSettingsOp(MigrateOperation):
     ) -> None:
         if not names:
             raise ValueError("reset_clickhouse_table_settings requires at least one setting name")
+        for name in names:
+            validate_setting_name(name)
         self.table_name: str = table_name
         self.names: tuple[str, ...] = tuple(names)
         self.schema: str | None = schema

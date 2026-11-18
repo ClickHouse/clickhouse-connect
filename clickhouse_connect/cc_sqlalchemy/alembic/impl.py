@@ -313,6 +313,7 @@ class ClickHouseImpl(DefaultImpl):
         **kw: Any,
     ) -> None:
         """Render ClickHouse column rename, comment, type, default, and nullable alters."""
+        settings = ClickHouseDDLHelper.render_settings(kw.get("clickhouse_settings"))
         if autoincrement is not None or existing_autoincrement is not None:
             return
         if name is not None:
@@ -323,7 +324,6 @@ class ClickHouseImpl(DefaultImpl):
             self._exec(text(" ".join(rename_sql)))
             column_name = name
 
-        settings = ClickHouseDDLHelper.render_settings(kw.get("clickhouse_settings"))
         # Explicit canonical None removes a property, even alongside a legacy value.
         for prop, _ in _REMOVABLE_COLUMN_PROPERTIES:
             if f"clickhousedb_{prop}" in kw:

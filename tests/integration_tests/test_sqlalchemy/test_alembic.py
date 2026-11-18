@@ -54,6 +54,29 @@ def _name(prefix: str) -> str:
     return f"{prefix}_{random.randint(100000, 999999)}_{int(time.time() * 1000)}"
 
 
+@pytest.mark.parametrize("with_definitions", [False, True])
+def test_alembic_create_table_positional_items_live(test_engine, test_db, ch_name, with_definitions):
+    name = ch_name("positional_items")
+    definitions = (
+        [
+            ClickHouseIndex("id_idx", "id", "minmax", 1),
+            ClickHouseProjection("id_projection", "SELECT id ORDER BY id"),
+        ]
+        if with_definitions
+        else []
+    )
+    with test_engine.begin() as connection:
+        operations = Operations(MigrationContext.configure(connection))
+        operations.create_table(name, Column("id", UInt32), MergeTree(order_by="id"), *definitions, schema=test_db)
+        reflected = Table(name, MetaData(), schema=test_db, autoload_with=connection)
+        assert reflected.engine.name == "MergeTree"
+        inspector = inspect(connection)
+        indexes = inspector.get_clickhouse_indexes(name, schema=test_db)
+        projections = inspector.get_clickhouse_projections(name, schema=test_db)
+        assert [index.name for index in indexes] == (["id_idx"] if with_definitions else [])
+        assert [projection.name for projection in projections] == (["id_projection"] if with_definitions else [])
+
+
 @pytest.fixture
 def ch_name(test_engine, test_db):
     """Generates unique names and guarantees cleanup of all created objects after the test."""
