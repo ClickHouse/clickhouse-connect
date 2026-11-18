@@ -444,11 +444,12 @@ class Decimal(ClickHouseType):
             dec_ctx.prec = decimal.MAX_PREC
             dec_ctx.clamp = 0
             dec = decimal.Decimal
-            mult = self._mult
+            mult = dec(self._mult)
             if self.nullable:
-                write_array(self._array_type, [int(dec(str(x)) * mult) if x else 0 for x in column], dest, ctx.column_name)
+                values = [int((x if type(x) is dec else dec(str(x))) * mult) if x else 0 for x in column]
             else:
-                write_array(self._array_type, [int(dec(str(x)) * mult) for x in column], dest, ctx.column_name)
+                values = [int((x if type(x) is dec else dec(str(x))) * mult) for x in column]
+            write_array(self._array_type, values, dest, ctx.column_name)
 
     def _active_null(self, ctx: QueryContext):
         if ctx.use_none:
@@ -486,13 +487,14 @@ class BigDecimal(Decimal, registered=False):
             mult = decimal.Decimal(f"{self._mult}.{'0' * self.scale}")
             sz = self.byte_size
             itb = int.to_bytes
+            dec = decimal.Decimal
             if self.nullable:
                 v = self._zeros
                 for x in column:
-                    dest += v if not x else itb(int(decimal.Decimal(str(x)) * mult), sz, "little", signed=True)
+                    dest += v if not x else itb(int((x if type(x) is dec else dec(str(x))) * mult), sz, "little", signed=True)
             else:
                 for x in column:
-                    dest += itb(int(decimal.Decimal(str(x)) * mult), sz, "little", signed=True)
+                    dest += itb(int((x if type(x) is dec else dec(str(x))) * mult), sz, "little", signed=True)
 
 
 class Decimal32(Decimal):
