@@ -47,7 +47,7 @@ class ByteArraySource(ByteSource):
 
     def read_leb128_str(self) -> str:
         sz = self.read_leb128()
-        return self.read_bytes(sz).decode(self.encoding)
+        return self.read_bytes(sz).decode(self.encoding, "surrogateescape")
 
     def read_uint64(self) -> int:
         return int.from_bytes(self.read_bytes(8), "little", signed=False)
