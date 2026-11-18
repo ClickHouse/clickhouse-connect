@@ -452,8 +452,8 @@ class LimitByClause:
 
     def __init__(self, by_clauses, limit, offset=None):
         self.by_clauses = tuple(by_clauses)
-        self.limit = limit
-        self.offset = offset
+        self.limit = int(limit)
+        self.offset = int(offset) if offset is not None else None
 
 
 class Lambda(ColumnElement):

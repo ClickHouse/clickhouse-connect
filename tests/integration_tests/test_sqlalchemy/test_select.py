@@ -1,3 +1,4 @@
+import pytest
 import sqlalchemy as sa
 from pytest import fixture, mark, param
 from sqlalchemy import MetaData, Table, func, literal_column, select, text
@@ -424,6 +425,23 @@ def test_select_limit_offset(test_engine: Engine, test_db: str):
         assert len(rows) == 2
         assert rows[0].id == 2
         assert rows[1].id == 3
+
+
+@pytest.mark.parametrize(
+    ("limit", "offset", "expected"),
+    [
+        (-1, None, [(103, 1), (102, 2), (104, 3)]),
+        ("1", "0", [(101, 1), (102, 2), (104, 3)]),
+        ("1", "1", [(103, 1)]),
+    ],
+)
+def test_select_limit_by_counts(test_engine: Engine, test_db: str, limit, offset, expected):
+    orders = Table("select_test_orders", MetaData(schema=test_db), autoload_with=test_engine)
+    query = select(orders.c.id, orders.c.user_id).order_by(orders.c.user_id, orders.c.id).limit_by([orders.c.user_id], limit, offset=offset)
+    with test_engine.begin() as conn:
+        if limit == -1 and not conn.connection.driver_connection.client.min_version("26.8"):
+            pytest.skip("Negative LIMIT BY requires ClickHouse 26.8+")
+        assert conn.execute(query).fetchall() == expected
 
 
 def test_reflection_integration(test_engine: Engine, test_db: str):

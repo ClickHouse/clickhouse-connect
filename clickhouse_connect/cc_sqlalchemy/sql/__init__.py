@@ -157,9 +157,10 @@ def limit_by(select_stmt: Select, by_clauses: Any, limit: int, offset: int | Non
     if not by_tuple:
         raise ValueError("limit_by() requires at least one by_clause")
 
+    clause = LimitByClause(by_tuple, limit, offset)
     by_key = ",".join(str(c) for c in by_tuple)
-    new_stmt = select_stmt.with_statement_hint(f"LIMIT_BY:{limit}:{offset}:{by_key}", dialect_name=_CH_MODIFIER_DIALECT)
-    new_stmt._ch_limit_by = LimitByClause(by_tuple, limit, offset)  # type: ignore[attr-defined]
+    new_stmt = select_stmt.with_statement_hint(f"LIMIT_BY:{clause.limit}:{clause.offset}:{by_key}", dialect_name=_CH_MODIFIER_DIALECT)
+    new_stmt._ch_limit_by = clause  # type: ignore[attr-defined]
     return new_stmt
 
 
