@@ -71,6 +71,7 @@ async def test_async_sqlalchemy_alembic_run_sync(test_config: TestConfig) -> Non
             await asyncio.wait_for(engine.dispose(), 10.0)
 
 
+@pytest.mark.local_only
 @pytest.mark.asyncio(loop_scope="function")
 async def test_async_alembic_create_table_positional_items(test_config: TestConfig) -> None:
     engine = create_async_engine(_async_url(test_config))

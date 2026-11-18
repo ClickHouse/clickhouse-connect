@@ -54,7 +54,7 @@ def _name(prefix: str) -> str:
     return f"{prefix}_{random.randint(100000, 999999)}_{int(time.time() * 1000)}"
 
 
-@pytest.mark.parametrize("with_definitions", [False, True])
+@pytest.mark.parametrize("with_definitions", [pytest.param(False, marks=pytest.mark.local_only), True])
 def test_alembic_create_table_positional_items_live(test_engine, test_db, ch_name, with_definitions):
     name = ch_name("positional_items")
     definitions = (
