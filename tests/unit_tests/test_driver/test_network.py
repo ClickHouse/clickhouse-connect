@@ -3,7 +3,7 @@ from ipaddress import IPv4Address, IPv6Address
 from unittest.mock import MagicMock, Mock, patch
 
 from clickhouse_connect.datatypes.base import TypeDef
-from clickhouse_connect.datatypes.network import IPV4_V6_MASK, V6_NULL, IPv6
+from clickhouse_connect.datatypes.network import IPV4_V6_MASK, V6_NULL, IPv4, IPv6
 
 
 class TestIPv6DataType(unittest.TestCase):
@@ -151,6 +151,44 @@ class TestIPv6DataType(unittest.TestCase):
 
         self.assertIn("Failed to parse", str(e.exception))
         self.assertIn("test_ipv6_col", str(e.exception))
+
+
+class TestIPv4DataType(unittest.TestCase):
+    def setUp(self):
+        self.ipv4_type = IPv4(TypeDef())
+        self.mock_context = Mock()
+        self.mock_context.column_name = "test_ipv4_col"
+
+    def write(self, column):
+        dest = bytearray()
+        self.ipv4_type._write_column_binary(column, dest, self.mock_context)
+        return bytes(dest)
+
+    def test_write_ipv4_strings(self):
+        column = ["10.0.0.1", "255.255.255.255", "0.0.0.0", ""]
+        expected = b"".join(int(IPv4Address(ip or "0.0.0.0")).to_bytes(4, "little") for ip in column)
+        self.assertEqual(self.write(column), expected)
+
+    def test_write_ipv4_strings_lenient_parse(self):
+        """Spellings that inet_pton may reject keep the previous per-octet parse."""
+        for ip, expected in [(" 1.2.3.4", "1.2.3.4"), ("1.2.3.4 ", "1.2.3.4"), ("010.0.0.1", "10.0.0.1")]:
+            with self.subTest(ip=ip):
+                self.assertEqual(self.write([ip]), int(IPv4Address(expected)).to_bytes(4, "little"))
+
+    def test_write_ipv4_strings_skips_inet_pton_that_reads_octal(self):
+        with (
+            patch("clickhouse_connect.datatypes.network._INET_PTON_MATCHES_OCTET_PARSE", False),
+            patch("clickhouse_connect.datatypes.network.socket.inet_pton") as inet_pton,
+        ):
+            written = self.write(["010.0.0.1", "1.2.3.4"])
+        inet_pton.assert_not_called()
+        self.assertEqual(written, b"".join(int(IPv4Address(ip)).to_bytes(4, "little") for ip in ["10.0.0.1", "1.2.3.4"]))
+
+    def test_write_invalid_ipv4_string_raises_error(self):
+        for bad in ("1.2.3.x", "1.2.3.4\x00", "1.2.3.\ud800"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "invalid literal for int") as e:
+                self.write(["1.2.3.4", bad])
+            self.assertIs(type(e.exception), ValueError)
 
 
 if __name__ == "__main__":

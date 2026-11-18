@@ -14,6 +14,27 @@ IPV4_V6_MASK = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff"
 V6_NULL = bytes(b"\x00" * 16)
 
 
+def _inet_pton_reads_leading_zeros_as_decimal() -> bool:
+    """True unless this platform's inet_pton reads an octet like '010' as octal, unlike the per-octet parse."""
+    try:
+        return socket.inet_pton(socket.AF_INET, "010.0.0.1") == bytes((10, 0, 0, 1))
+    except OSError:
+        return True
+
+
+_INET_PTON_MATCHES_OCTET_PARSE = _inet_pton_reads_leading_zeros_as_decimal()
+
+
+def _strict_dotted_quads_to_ints(column: Sequence) -> list[int] | None:
+    """Parse dotted-quad IPv4 strings with inet_pton, or return None if inet_pton rejects any of them."""
+    if not _INET_PTON_MATCHES_OCTET_PARSE:
+        return None
+    try:
+        return [int.from_bytes(socket.inet_pton(socket.AF_INET, x), "big") if x else 0 for x in column]
+    except (OSError, TypeError, ValueError):
+        return None
+
+
 class IPv4(ClickHouseType):
     _array_type = "L" if int_size == 2 else "I"
     valid_formats = "string", "native", "int"
@@ -31,9 +52,11 @@ class IPv4(ClickHouseType):
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
         first = first_value(column, self.nullable)
         if isinstance(first, str):
-            fixed = 24, 16, 8, 0
-
-            column = [(sum([int(b) << fixed[ix] for ix, b in enumerate(x.split("."))])) if x else 0 for x in column]
+            addresses = _strict_dotted_quads_to_ints(column)
+            if addresses is None:
+                fixed = 24, 16, 8, 0
+                addresses = [(sum([int(b) << fixed[ix] for ix, b in enumerate(x.split("."))])) if x else 0 for x in column]
+            column = addresses
         else:
             if self.nullable:
                 column = [x._ip if x else 0 for x in column]
