@@ -4,8 +4,11 @@ import pytest
 from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
 
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver._backend.httpcommon import embed_insert_query
+from clickhouse_connect.driver.binding import statement_for_wire
 from clickhouse_connect.driver.buffer import ResponseBuffer as PyResponseBuffer
 from clickhouse_connect.driver.bytesource import ByteArraySource
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.transform import NativeTransform
 from tests.helpers import bytes_source
@@ -108,3 +111,47 @@ def test_insert_writes_valid_utf8_column_names_as_before():
 
     assert payload.startswith("INSERT INTO t (`caf\u00e9`) FORMAT Native\n".encode())
     assert _lp("caf\u00e9".encode()) + _lp(b"UInt8") in payload
+
+
+def test_statement_for_wire_leaves_text_that_encodes_alone():
+    assert statement_for_wire("INSERT INTO t (`caf\u00e9`)") == "INSERT INTO t (`caf\u00e9`)"
+
+
+def test_statement_for_wire_gives_back_the_original_bytes_of_a_non_utf8_name():
+    assert statement_for_wire("INSERT INTO t (`a\udcff`)") == b"INSERT INTO t (`a\xff`)"
+
+
+def test_raw_insert_of_a_text_block_with_a_non_utf8_column_name_is_sent_as_bytes():
+    body, query_param = embed_insert_query("t", ["a\udcff"], "CSV", None, "1,\u00e9\n")
+
+    assert body == b"INSERT INTO t (`a\xff`) FORMAT CSV\n1,\xc3\xa9\n"
+    assert query_param is None
+
+
+def test_raw_insert_of_a_bytes_block_with_a_non_utf8_column_name_is_sent_as_bytes():
+    body, query_param = embed_insert_query("t", ["a\udcff"], "CSV", None, b"1\n")
+
+    assert body == b"INSERT INTO t (`a\xff`) FORMAT CSV\n1\n"
+    assert query_param is None
+
+
+def test_raw_insert_of_a_text_block_keeps_text_when_the_names_encode():
+    body, query_param = embed_insert_query("t", ["caf\u00e9"], "CSV", None, "1\n")
+
+    assert body == "INSERT INTO t (`caf\u00e9`) FORMAT CSV\n1\n"
+    assert query_param is None
+
+
+@pytest.mark.parametrize("compression", ["lz4", "gzip"])
+def test_raw_insert_with_a_non_utf8_column_name_rejects_a_statement_that_must_be_a_url_parameter(compression):
+    with pytest.raises(ProgrammingError, match="not valid UTF-8"):
+        embed_insert_query("t", ["a\udcff"], "CSV", compression, b"1\n")
+    with pytest.raises(ProgrammingError, match="not valid UTF-8"):
+        embed_insert_query("t", ["a\udcff"], "CSV", None, iter([b"1\n"]))
+
+
+def test_raw_insert_statement_for_encodable_names_stays_a_url_parameter_when_streamed():
+    body, query_param = embed_insert_query("t", ["a"], "CSV", "gzip", b"1\n")
+
+    assert body == b"1\n"
+    assert query_param == "INSERT INTO t (`a`) FORMAT CSV"

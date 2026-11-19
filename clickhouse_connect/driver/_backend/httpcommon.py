@@ -26,7 +26,13 @@ if TYPE_CHECKING:
 
 from clickhouse_connect import common
 from clickhouse_connect.driver._backend.models import QueryRuntime
-from clickhouse_connect.driver.binding import _query_has_trailing_limit_zero, _query_is_read_only, quote_identifier, use_form_encoding
+from clickhouse_connect.driver.binding import (
+    _query_has_trailing_limit_zero,
+    _query_is_read_only,
+    quote_identifier,
+    statement_for_wire,
+    use_form_encoding,
+)
 from clickhouse_connect.driver.common import ShowClickHouseErrors, coerce_bool, dict_copy
 from clickhouse_connect.driver.compression import LZ4_MISSING_MESSAGE, _lz4_decompressor, _zstd_decompress, available_compression
 from clickhouse_connect.driver.exceptions import (
@@ -218,10 +224,16 @@ def embed_insert_query(
     """
     cols = f" ({', '.join([quote_identifier(x) for x in column_names])})" if column_names is not None else ""
     query = f"INSERT INTO {table}{cols} FORMAT {fmt}"
+    statement = statement_for_wire(query)
     if not compression and isinstance(insert_block, str):
+        if isinstance(statement, bytes):
+            return statement + b"\n" + insert_block.encode("utf-8"), None
         return query + "\n" + insert_block, None
     if not compression and isinstance(insert_block, (bytes, bytearray)):
         return (query + "\n").encode("utf-8", "surrogateescape") + insert_block, None
+    if isinstance(statement, bytes):
+        # The statement travels as a URL parameter here, which is text
+        raise ProgrammingError("A column name that is not valid UTF-8 needs an uncompressed raw insert block that is not streamed")
     return insert_block, query
 
 

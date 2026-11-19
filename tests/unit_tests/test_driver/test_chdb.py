@@ -533,6 +533,14 @@ class TestChdbInsert:
         assert summary.written_rows == 2
         assert client.command("SELECT count() FROM ins_raw") == 2
 
+    def test_inserts_into_a_column_whose_name_is_not_utf8(self, client):
+        # The name is kept as a surrogate escape, which the engine only takes as bytes. client.command
+        # cannot send it, so the table is created through the engine handle
+        client._backend._handle.conn.query(b"CREATE TABLE ins_non_utf8 (`a\xff` UInt8) ENGINE MergeTree ORDER BY tuple()", "TabSeparated")
+        client.raw_insert("ins_non_utf8", ["a\udcff"], b"1\n", fmt="CSV")
+        client.insert("ins_non_utf8", [[2]], column_names=["a\udcff"])
+        assert client.command("SELECT count() FROM ins_non_utf8") == 2
+
     def test_raw_insert_requires_table(self, client):
         with pytest.raises(ProgrammingError):
             client.raw_insert(None, ["a"], b"1\n", fmt="CSV")

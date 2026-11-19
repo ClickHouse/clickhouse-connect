@@ -807,6 +807,20 @@ class DT64Param:
         return rendered if top_level else f"'{rendered}'"
 
 
+def statement_for_wire(statement: str) -> str | bytes:
+    """Return *statement* unchanged, or as bytes if it holds a non-UTF-8 name.
+
+    A name read from a Native block that is not valid UTF-8 is kept as surrogate escapes, and a
+    strict UTF-8 encode of the statement that names it would fail. Encoding with ``surrogateescape``
+    gives back the bytes the server sent.
+    """
+    try:
+        statement.encode("utf-8")
+    except UnicodeEncodeError:
+        return statement.encode("utf-8", "surrogateescape")
+    return statement
+
+
 def quote_identifier(identifier: str) -> str:
     if len(identifier) >= 2:
         quote = identifier[0]
