@@ -26,10 +26,21 @@ from tests.integration_tests.conftest import TestConfig, nullable_tuple_settings
             {"k": [{"f1": "13"}, {"f1": "x"}]},
             ["13", "x"],
         ),
-        ("Nested(f1 Dynamic, f2 UInt8)", [{"f1": 13, "f2": 79}], "value.f1", [{"f1": "13", "f2": 79}], ["13"]),
-        ("Tuple(a Nested(f1 Dynamic))", {"a": [{"f1": 13}]}, "value.a.f1", {"a": [{"f1": "13"}]}, ["13"]),
+        pytest.param(
+            "Nested(f1 Dynamic, f2 UInt8)",
+            [{"f1": 13, "f2": 79}],
+            "value.f1",
+            [{"f1": "13", "f2": 79}],
+            ["13"],
+            marks=pytest.mark.local_only,
+        ),
+        pytest.param(
+            "Tuple(a Nested(f1 Dynamic))", {"a": [{"f1": 13}]}, "value.a.f1", {"a": [{"f1": "13"}]}, ["13"], marks=pytest.mark.local_only
+        ),
         ("SimpleAggregateFunction(anyLast, Dynamic)", 13, "[value]", "13", ["13"]),
-        ("SimpleAggregateFunction(anyLast, Array(Dynamic))", [13, "x"], "value", ["13", "x"], ["13", "x"]),
+        pytest.param(
+            "SimpleAggregateFunction(anyLast, Array(Dynamic))", [13, "x"], "value", ["13", "x"], ["13", "x"], marks=pytest.mark.local_only
+        ),
     ],
 )
 def test_nested_dynamic_insert(param_client, call, table_context, type_name, value, expression, expected_value, expected):

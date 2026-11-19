@@ -4,8 +4,24 @@ from decimal import Decimal
 import pytest
 
 
-@pytest.mark.parametrize("type_name", ["Int128", "UInt128", "Int256", "UInt256"])
-@pytest.mark.parametrize("representation", ["int64", "uint64", "numpy-first", "int-first"])
+@pytest.mark.parametrize(
+    "type_name",
+    [
+        pytest.param("Int128", marks=pytest.mark.local_only),
+        pytest.param("UInt128", marks=pytest.mark.local_only),
+        pytest.param("Int256", marks=pytest.mark.local_only),
+        "UInt256",
+    ],
+)
+@pytest.mark.parametrize(
+    "representation",
+    [
+        pytest.param("int64", marks=pytest.mark.local_only),
+        pytest.param("uint64", marks=pytest.mark.local_only),
+        pytest.param("numpy-first", marks=pytest.mark.local_only),
+        "int-first",
+    ],
+)
 def test_bigint_numpy_scalars(param_client, call, table_context, type_name, representation):
     np = pytest.importorskip("numpy")
     values = {
@@ -20,6 +36,7 @@ def test_bigint_numpy_scalars(param_client, call, table_context, type_name, repr
         assert result.result_rows == [(int(value),) for value in values]
 
 
+@pytest.mark.local_only
 def test_bfloat16_float32_dataframe(param_client, call, table_context):
     np = pytest.importorskip("numpy")
     pd = pytest.importorskip("pandas")

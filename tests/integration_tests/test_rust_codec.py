@@ -603,17 +603,31 @@ def test_rust_codec_dynamic_insert_parity(client_factory, call, client_mode, nat
 @pytest.mark.parametrize(
     "type_name, rows, query, expected",
     [
-        ("Int256", "numpy_ints", "SELECT value FROM {table} ORDER BY value", [(13,), (2**64 - 1,)]),
-        ("UInt256", "numpy_ints", "SELECT value FROM {table} ORDER BY value", [(13,), (2**64 - 1,)]),
-        ("BFloat16", "float32_frame", "SELECT value FROM {table} ORDER BY value", [(1.5,), (2.0,)]),
+        pytest.param(
+            "Int256", "numpy_ints", "SELECT value FROM {table} ORDER BY value", [(13,), (2**64 - 1,)], marks=pytest.mark.local_only
+        ),
+        pytest.param(
+            "UInt256", "numpy_ints", "SELECT value FROM {table} ORDER BY value", [(13,), (2**64 - 1,)], marks=pytest.mark.local_only
+        ),
+        pytest.param(
+            "BFloat16", "float32_frame", "SELECT value FROM {table} ORDER BY value", [(1.5,), (2.0,)], marks=pytest.mark.local_only
+        ),
         (
             "Map(String, Nested(f1 Dynamic(max_types=1)))",
             [[{"k": [{"f1": 13}, {"f1": "x"}]}]],
             "SELECT value FROM {table}",
             [({"k": [{"f1": "13"}, {"f1": "x"}]},)],
         ),
-        ("SimpleAggregateFunction(anyLast, Dynamic)", [[13]], "SELECT value FROM {table}", [("13",)]),
-        ("SimpleAggregateFunction(anyLast, Array(Dynamic))", [[[13, "x"]]], "SELECT value FROM {table}", [(["13", "x"],)]),
+        pytest.param(
+            "SimpleAggregateFunction(anyLast, Dynamic)", [[13]], "SELECT value FROM {table}", [("13",)], marks=pytest.mark.local_only
+        ),
+        pytest.param(
+            "SimpleAggregateFunction(anyLast, Array(Dynamic))",
+            [[[13, "x"]]],
+            "SELECT value FROM {table}",
+            [(["13", "x"],)],
+            marks=pytest.mark.local_only,
+        ),
     ],
 )
 def test_rust_codec_numpy_and_nested_dynamic_insert_parity(client_factory, call, client_mode, type_name, rows, query, expected):
