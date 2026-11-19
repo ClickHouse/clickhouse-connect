@@ -35,6 +35,7 @@ def test_dictionary_column_expressions_are_strings(definition, key, expression, 
         ("`tags` Array(String) EXPRESSION [name, upper(name)]", "Array(String)", None),
         ("`tags` Array(String) EXPRESSION array(name, upper(name))", "Array(String)", None),
         ("`label` String DEFAULT '[user_1, user_2'", "String", "'[user_1, user_2'"),
+        ("`label` String DEFAULT '\u00df\u00df' INJECTIVE", "String", "'\u00df\u00df'"),
     ],
 )
 def test_dictionary_column_attribute_options(monkeypatch, attribute, type_name, server_default):

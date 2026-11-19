@@ -93,6 +93,7 @@ def test_dictionary_attribute_reflection(run_sqlalchemy, test_db, ch_name, test_
         ("note", "Nullable(String) INJECTIVE", "Nullable(String)", None),
         ("tags", "Array(String) DEFAULT ['user_1', 'user_2']", "Array(String)", "['user_1', 'user_2']"),
         ("names", "Array(String) EXPRESSION [name, upper(name)]", "Array(String)", None),
+        ("title", "String DEFAULT '\u00df\u00df' EXPRESSION name INJECTIVE", "String", "'\u00df\u00df'"),
     ]
     expected = [("id", "UInt64", None)] + [(name, type_name, default) for name, _sql, type_name, default in attributes]
 

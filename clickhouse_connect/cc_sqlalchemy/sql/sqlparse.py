@@ -1,3 +1,10 @@
+import string
+
+# Clause keywords are ASCII. Fold only ASCII letters, so that the indices stay the same as in the source.
+# str.upper() can make the string longer, for example "\u00df" -> "SS".
+_ASCII_UPPER = str.maketrans(string.ascii_lowercase, string.ascii_uppercase)
+
+
 def walk_sql(sql: str, start: int = 0):
     """Yield (index, char, depth) for unquoted chars, tracking paren and bracket depth."""
     depth = 0
@@ -53,7 +60,7 @@ def split_top_level(sql: str, delimiter: str = ",") -> list[str]:
 
 def find_top_level_clause(sql: str, clauses: tuple[str, ...]) -> tuple[int, str | None]:
     """Find the first occurrence of any *clause* at top nesting level."""
-    upper_sql = sql.upper()
+    upper_sql = sql.translate(_ASCII_UPPER)
     for i, _char, depth in walk_sql(sql):
         if depth == 0:
             for clause in clauses:
