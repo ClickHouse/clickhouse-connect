@@ -764,6 +764,48 @@ def _binding_has_binary_values(parameters: Sequence | dict[str, Any] | None) -> 
     return isinstance(parameters, dict) and bool(_binary_bind_values(parameters))
 
 
+def _check_binary_bind_value(key: str, value: Any) -> None:
+    # The server ends a heredoc at the first `$tag$` after the opening one. That text can also
+    # start in the last bytes of the value and end in the closing marker.
+    marker = key.encode()
+    data = value if isinstance(value, (bytes, bytearray)) else memoryview(value).tobytes()
+    if marker in data or marker in data[1 - len(marker) :] + marker[:-1]:
+        raise ProgrammingError(
+            f"The value of binary query parameter {key!r} contains {key!r} or ends with the start of it. "
+            "That ends the heredoc string that carries the value, and ClickHouse reads the text after it "
+            "as SQL. Use a parameter name that does not occur in the value."
+        )
+
+
+def _splice_binary_binds(query: str, binary_binds: dict[str, Any], client_params: dict[str, Any] | None, server_tz: tzinfo | None) -> bytes:
+    # Markers are located in the query template, before client-side formatting, so a marker
+    # inside a bound value stays data. A marker inside a `%(name)s` key is part of that name.
+    values = {k: format_query_value(v, server_tz) for k, v in client_params.items()} if client_params else None
+    key_spans = list(_pyformat_key_spans(query)) if values else []
+    marker_ends: dict[int, str] = {}
+    for key, value in binary_binds.items():
+        found = False
+        index = query.find(key)
+        while index != -1:
+            end = index + len(key)
+            if not any(start <= index and end <= stop for start, stop in key_spans):
+                marker_ends[end] = key
+                found = True
+            index = query.find(key, end)
+        if found:
+            _check_binary_bind_value(key, value)
+    parts: list[Any] = []
+    start = 0
+    for end in sorted(marker_ends):
+        key = marker_ends[end]
+        text = query[start:end]
+        parts += [(text % values if values else text).encode(), binary_binds[key], key.encode()]
+        start = end
+    text = query[start:]
+    parts.append((text % values if values else text).encode())
+    return b"".join(parts)
+
+
 def _heredoc_collision_error(key: str) -> ProgrammingError:
     return ProgrammingError(
         f"Query parameter name {key!r} also appears elsewhere in the query text, and ClickHouse "
@@ -998,9 +1040,8 @@ def _promote_datetime64(type_str: str, value):
         return value
 
 
-def _pyformat_bind_names(query: str) -> set[str]:
-    """Read mapping keys using Python percent formatting rules."""
-    names: set[str] = set()
+def _pyformat_key_spans(query: str) -> Iterator[tuple[int, int]]:
+    """Locate mapping keys using Python percent formatting rules."""
     index = query.find("%")
     end = len(query)
     while index != -1:
@@ -1019,9 +1060,13 @@ def _pyformat_bind_names(query: str) -> set[str]:
                     depth -= 1
                 index += 1
             if depth == 0:
-                names.add(query[start : index - 1])
+                yield start, index - 1
         index = query.find("%", index)
-    return names
+
+
+def _pyformat_bind_names(query: str) -> set[str]:
+    """Read mapping keys using Python percent formatting rules."""
+    return {query[start:stop] for start, stop in _pyformat_key_spans(query)}
 
 
 def bind_query(
@@ -1034,6 +1079,7 @@ def bind_query(
         return query, {}
 
     binary_binds = None
+    client_params: dict[str, Any] | None = None
     bound_params: dict[str, str] = {}
 
     if isinstance(parameters, dict):
@@ -1090,7 +1136,11 @@ def bind_query(
                     v = DT64Param(v) if isinstance(v, datetime) else [DT64Param(x) for x in v]
             final_params[k] = v
         if not matches:
-            query, bound_params = finalize_query(query, final_params, server_tz), {}
+            if binary_binds:
+                client_params = final_params
+            else:
+                query = finalize_query(query, final_params, server_tz)
+            bound_params = {}
         else:
             param_types = {}
             for name, matched_type in matches:
@@ -1110,25 +1160,7 @@ def bind_query(
     else:
         query, bound_params = finalize_query(query, parameters, server_tz), {}
     if binary_binds:
-        binary_query = query.encode()
-        binary_indexes = {}
-        for k, v in binary_binds.items():
-            key = k.encode()
-            item_index = 0
-            while True:
-                item_index = binary_query.find(key, item_index)
-                if item_index == -1:
-                    break
-                binary_indexes[item_index + len(key)] = key, v
-                item_index += len(key)
-        binary_out = b""
-        start = 0
-        for loc in sorted(binary_indexes.keys()):
-            key, value = binary_indexes[loc]
-            binary_out += binary_query[start:loc] + value + key
-            start = loc
-        binary_out += binary_query[start:]
-        return binary_out, bound_params
+        return _splice_binary_binds(query, binary_binds, client_params, server_tz), bound_params
     return query, bound_params
 
 
