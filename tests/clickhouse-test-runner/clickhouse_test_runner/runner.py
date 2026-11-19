@@ -273,11 +273,12 @@ def write_rows(result: Any, fmt: OutputFormat) -> str:
     lines: list[str] = []
     if types:
         writers = [ColumnWriter(t.name) for t in types]
-        if fmt.names:
-            lines.append("\t".join(escape_string(n, False) for n in names) + "\n")
-        if fmt.types:
-            lines.append("\t".join(escape_string(t.name, False) for t in types) + "\n")
         raw = fmt.raw
+        # A Raw format writes the header without escapes, as its rows (TabSeparatedRowOutputFormat::writeLine).
+        if fmt.names:
+            lines.append("\t".join(n if raw else escape_string(n, False) for n in names) + "\n")
+        if fmt.types:
+            lines.append("\t".join(t.name if raw else escape_string(t.name, False) for t in types) + "\n")
         for row in result.result_rows:
             line = "\t".join([w.write(v, raw) for w, v in zip(writers, row)])
             if not fmt.discard:

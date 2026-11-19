@@ -398,7 +398,8 @@ requests that change this directory or the workflow.
 - Each job starts the stock server image of the pinned version with
   `CLICKHOUSE_SKIP_USER_SETUP=1` and the host name of the runner, as in step
   2 of "Run the tests locally".
-- CI does not set `RETRY_FAILED`: each failed test fails its job. A failed
+- CI does not set `RETRY_FAILED`: each failed test fails its job. The script
+  also turns off the runner's own retries (`--dont_retry_failures`). A failed
   job uploads an artifact. It has the output of the runner with the diffs,
   the `.stdout` and `.stderr` files of the failed tests, and the log of the
   program (`CLICKHOUSE_CLIENT_CLI_LOG`).

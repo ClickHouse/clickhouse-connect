@@ -85,7 +85,7 @@ def is_clause_keyword(word: str) -> bool:
 
 
 def top_level_words(sql: str) -> list[str]:
-    """Return the words of sql outside quotes, comments and parentheses."""
+    """Return the words of sql outside quotes, heredocs, comments and parentheses."""
     words = []
     depth = 0
     i = 0
@@ -98,6 +98,9 @@ def top_level_words(sql: str) -> list[str]:
             i = skip_line_comment(sql, i)
         elif sql.startswith("/*", i):
             i = skip_block_comment(sql, i)
+        elif c == "$":
+            end = heredoc_end(sql, i)
+            i = end if end > 0 else i + 1
         elif c in "([":
             depth += 1
             i += 1

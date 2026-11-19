@@ -262,6 +262,15 @@ def test_output_formats():
     assert out == b"x\ty\nUInt8\tString\n1\ta\\tb\na\tb\n"
 
 
+# The header of a Raw format has no escapes, as its rows. Contrast: TSVWithNames escapes the header.
+@pytest.mark.parametrize("fmt", ["TSVWithNames", "TSVRawWithNames", "TabSeparatedRawWithNamesAndTypes"])
+def test_header_of_format(fmt):
+    query = f"SELECT 1 AS `a\\tb\\\\c'd`, 'x' AS `é\\nf` FORMAT {fmt}"
+    out, err, code = run_shim(query)
+    assert (code, err) == (0, "")
+    assert out == server_tsv(query)
+
+
 def test_format_null_reads_no_rows():
     # With FORMAT Null, the statement goes to the server as it is, and the server sends no rows. The client
     # reads no values, so a type that it cannot read (AggregateFunction) does not fail.

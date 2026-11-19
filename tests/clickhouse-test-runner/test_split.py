@@ -3,7 +3,7 @@
 import pytest
 from clickhouse_test_runner.hint import parse_test_hint
 from clickhouse_test_runner.lexer import leading_keyword
-from clickhouse_test_runner.split import split_statements
+from clickhouse_test_runner.split import split_statements, top_level_words
 
 
 @pytest.mark.parametrize(
@@ -42,6 +42,11 @@ from clickhouse_test_runner.split import split_statements
             "INSERT INTO t SELECT x FROM s WHERE format GLOBAL IN (1);\nSELECT 1;",
             ["INSERT INTO t SELECT x FROM s WHERE format GLOBAL IN (1);", "SELECT 1;"],
         ),
+        # The FROM in the heredoc is not the FROM of the SELECT.
+        (
+            "INSERT INTO t SELECT $$x FROM y$$ AS a, format x FROM s;\nSELECT 1;",
+            ["INSERT INTO t SELECT $$x FROM y$$ AS a, format x FROM s;", "SELECT 1;"],
+        ),
         # INSERT ... SELECT ... FROM input(...) FORMAT has inline data.
         (
             "INSERT INTO t SELECT x FROM input('x UInt8') FORMAT TSV\n1;\n2\n\nSELECT 1;",
@@ -64,6 +69,19 @@ from clickhouse_test_runner.split import split_statements
 )
 def test_split_statements(text, expected):
     assert [s.sql for s in split_statements(text)] == expected
+
+
+@pytest.mark.parametrize(
+    "sql, expected",
+    [
+        ("SELECT a, 'b c', `d`, \"e\", $$f g$$, $t$h$t$ -- i\nFROM (SELECT j) /* k */", ["SELECT", "a", "FROM"]),
+        ("INSERT INTO t SELECT $$x FROM y$$ FROM (SELECT z)", ["INSERT", "INTO", "t", "SELECT", "FROM"]),
+        # A `$` that starts no complete heredoc is skipped as one character, as in the splitter.
+        ("SELECT $a$b$ FROM t", ["SELECT", "a", "b", "FROM", "t"]),
+    ],
+)
+def test_top_level_words(sql, expected):
+    assert top_level_words(sql) == expected
 
 
 def test_trailing_hint_belongs_to_the_statement():
