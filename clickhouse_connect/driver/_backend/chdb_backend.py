@@ -667,7 +667,7 @@ class ChdbBackend:
         cols = ", ".join(quote_identifier(name) for name in context.column_names)
         # build_insert prepends this exact statement to its first chunk for
         # the HTTP request body; INFILE wants only the Native bytes
-        body_prefix = f"INSERT INTO {context.table} ({cols}) FORMAT Native\n".encode()
+        body_prefix = f"INSERT INTO {context.table} ({cols}) FORMAT Native\n".encode("utf-8", "surrogateescape")
         tmp = tempfile.NamedTemporaryFile(suffix=".native", delete=False)  # noqa: SIM115
         try:
             try:

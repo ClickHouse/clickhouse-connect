@@ -166,7 +166,7 @@ class NativeTransform:
                 write_leb128(block.column_count, output)
                 write_leb128(block.row_count, output)
                 for col_name, col_type, data in zip(block.column_names, block.column_types, block.column_data):
-                    col_enc = col_name.encode()
+                    col_enc = col_name.encode("utf-8", "surrogateescape")
                     write_leb128(len(col_enc), output)
                     output += col_enc
                     col_enc = col_type.insert_name.encode()

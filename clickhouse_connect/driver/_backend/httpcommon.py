@@ -221,7 +221,7 @@ def embed_insert_query(
     if not compression and isinstance(insert_block, str):
         return query + "\n" + insert_block, None
     if not compression and isinstance(insert_block, (bytes, bytearray)):
-        return (query + "\n").encode() + insert_block, None
+        return (query + "\n").encode("utf-8", "surrogateescape") + insert_block, None
     return insert_block, query
 
 

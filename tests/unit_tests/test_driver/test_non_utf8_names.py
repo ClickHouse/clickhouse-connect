@@ -6,6 +6,7 @@ from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
 from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver.buffer import ResponseBuffer as PyResponseBuffer
 from clickhouse_connect.driver.bytesource import ByteArraySource
+from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.transform import NativeTransform
 from tests.helpers import bytes_source
 
@@ -89,3 +90,21 @@ def test_byte_array_source_reads_names_that_are_not_utf8():
 
     assert src.read_leb128_str() == "a\udcffb"
     assert src.read_leb128_str() == "\u00e9"
+
+
+def test_insert_writes_a_column_name_that_is_not_utf8_as_its_original_bytes():
+    context = InsertContext("t", ["a\udcff"], [get_from_name("UInt8")], [[7]], column_oriented=True)
+
+    payload = b"".join(NativeTransform.build_insert(context))
+
+    assert payload.startswith(b"INSERT INTO t (`a\xff`) FORMAT Native\n")
+    assert _lp(b"a\xff") + _lp(b"UInt8") in payload
+
+
+def test_insert_writes_valid_utf8_column_names_as_before():
+    context = InsertContext("t", ["caf\u00e9"], [get_from_name("UInt8")], [[7]], column_oriented=True)
+
+    payload = b"".join(NativeTransform.build_insert(context))
+
+    assert payload.startswith("INSERT INTO t (`caf\u00e9`) FORMAT Native\n".encode())
+    assert _lp("caf\u00e9".encode()) + _lp(b"UInt8") in payload
