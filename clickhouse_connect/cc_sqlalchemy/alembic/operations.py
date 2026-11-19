@@ -12,7 +12,7 @@ from clickhouse_connect.cc_sqlalchemy.ddl.projection import ClickHouseProjection
 from clickhouse_connect.cc_sqlalchemy.ddl.refresh import ClickHouseRefresh
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import TableEngine
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
-from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import column_specification, render_settings
+from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import check_dictionary_column, column_specification, render_settings
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import literal_dialect
 from clickhouse_connect.driver.binding import format_str, quote_identifier
 
@@ -66,11 +66,6 @@ def _exec_sql(operations: Operations, sql: str) -> None:
 def _settings_suffix(clickhouse_settings: Mapping[str, Any] | None) -> str:
     rendered = render_settings(clickhouse_settings)
     return f" SETTINGS {rendered}" if rendered else ""
-
-
-def _render_column_list(operations: Operations, columns: Sequence[Column[Any]]) -> str:
-    dialect = literal_dialect(operations.get_context().dialect)
-    return ", ".join(column_specification(dialect, column) for column in columns)
 
 
 def _render_add_index(index: ClickHouseIndex) -> str:
@@ -1290,9 +1285,13 @@ class CreateClickHouseDictionaryOp(MigrateOperation):
 def _create_clickhouse_dictionary(operations: Operations, operation: CreateClickHouseDictionaryOp) -> Any:
     exists = " IF NOT EXISTS" if operation.if_not_exists else ""
     layout = operation.layout if "(" in operation.layout else f"{operation.layout}()"
+    for column in operation.columns:
+        check_dictionary_column(column, operation.name)
+    dialect = literal_dialect(operations.get_context().dialect)
+    columns = ", ".join(column_specification(dialect, column) for column in operation.columns)
     sql = (
         f"CREATE DICTIONARY{exists} {full_table(operation.name, operation.schema)} "
-        f"({_render_column_list(operations, operation.columns)}) "
+        f"({columns}) "
         f"PRIMARY KEY {operation.primary_key} SOURCE({operation.source}) "
         f"LAYOUT({layout}) LIFETIME({operation.lifetime})"
     )

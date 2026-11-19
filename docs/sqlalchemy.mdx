@@ -585,6 +585,21 @@ with Session(engine) as session:
     session.commit()
 ```
 
+## Dictionaries {#sqlalchemy-dictionaries}
+
+`Dictionary` from `clickhouse_connect.cc_sqlalchemy.ddl.dictionary` supports
+`metadata.create_all()`, `metadata.drop_all()`, individual create and drop methods
+with `checkfirst=True`, and `select(dictionary)`. For async DDL, use
+`await connection.run_sync(metadata.create_all)` or the same call with `metadata.drop_all`.
+
+Call `dictionary.add_is_dependent_on(source_table)` when both use the same metadata,
+so the source is created first and the dictionary is dropped first.
+Columns support names, types, and a literal `server_default`. Column comments, `CODEC`, `TTL`,
+`MATERIALIZED`, and `ALIAS` raise `sqlalchemy.exc.CompileError` before execution,
+including in Alembic offline output. Dictionary-level `comment` is supported.
+These restrictions also apply to the `Table(..., clickhousedb_table_type="dictionary")`
+and `op.create_clickhouse_dictionary(...)` forms.
+
 ## Views and SQL functions {#sqlalchemy-views-functions}
 
 Alembic provides explicit create, replace, and drop helpers for ordinary views and SQL user-defined functions:
