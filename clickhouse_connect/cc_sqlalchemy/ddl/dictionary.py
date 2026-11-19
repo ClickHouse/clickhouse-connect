@@ -40,8 +40,6 @@ class Dictionary(Table):
     We override both to handle either path.
     """
 
-    __visit_name__ = "dictionary"
-
     def __init__(self, name, metadata, *args, **kwargs):
         popped = _pop_dictionary_kwargs(kwargs)
         super().__init__(name, metadata, *args, **kwargs)
