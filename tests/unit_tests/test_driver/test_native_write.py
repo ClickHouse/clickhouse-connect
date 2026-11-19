@@ -674,3 +674,72 @@ def test_uuid_native_write_invalid_values(column, error):
     ch_type = get_from_name("UUID")
     with pytest.raises(error):
         ch_type.write_column(column, bytearray(), InsertContext("table", ["value"], [ch_type]))
+
+
+UUID_COLUMN_SHAPES = pytest.mark.parametrize(
+    "type_name, build",
+    [
+        ("UUID", lambda vals: vals),
+        ("Nullable(UUID)", lambda vals: vals),
+        ("Array(UUID)", lambda vals: [vals]),
+        ("Tuple(UUID, String)", lambda vals: [(v, "user_1") for v in vals]),
+    ],
+    ids=["scalar", "nullable", "array", "tuple"],
+)
+
+
+@pytest.mark.parametrize("convert", [bytes, bytearray, memoryview], ids=["bytes", "bytearray", "memoryview"])
+def test_uuid_native_write_binary(convert):
+    ch_type = get_from_name("UUID")
+    dest = bytearray()
+    ch_type.write_column([convert(u.bytes) for u in UUID_VALUES] + [b""], dest, InsertContext("table", ["value"], [ch_type]))
+
+    assert bytes(dest) == b"".join(_uuid_wire(u) for u in UUID_VALUES) + _uuid_wire(None)
+
+
+@UUID_COLUMN_SHAPES
+@pytest.mark.parametrize(
+    "value",
+    [b"\x01" * 15, b"\x01" * 17, b"\x01" * 32, bytearray(b"\x01" * 31), memoryview(b"\x01")],
+    ids=["short", "long", "two_uuids", "bytearray", "memoryview"],
+)
+def test_uuid_native_write_rejects_binary_of_wrong_length(type_name, build, value):
+    # A UUID is 16 bytes on the wire, so any other length moves every value that follows in the block
+    ch_type = get_from_name(type_name)
+    column = build([UUID_VALUES[0].bytes, value, UUID_VALUES[2].bytes])
+    with pytest.raises(DataError, match=f"UUID bytes length is {len(value)}, expected 16"):
+        ch_type.write_column(column, bytearray(), InsertContext("table", ["value"], [ch_type]))
+
+
+@pytest.mark.parametrize(
+    "convert",
+    [lambda u: u, str, lambda u: u.int, lambda u: u.bytes],
+    ids=["uuid", "str", "int", "bytes"],
+)
+def test_uuid_native_write_leading_none(convert):
+    # None in a non-nullable column is the zero UUID. Its position must not change the other rows
+    ch_type = get_from_name("UUID")
+    dest = bytearray()
+    column = [None, convert(UUID_VALUES[0]), None, convert(UUID_VALUES[2])]
+    ch_type.write_column(column, dest, InsertContext("table", ["value"], [ch_type]))
+
+    assert bytes(dest) == b"".join(_uuid_wire(u) for u in (None, UUID_VALUES[0], None, UUID_VALUES[2]))
+
+
+@pytest.mark.parametrize("value", [None, float("nan"), 1.5], ids=["none", "nan", "float"])
+def test_uuid_native_write_no_supported_value(value):
+    ch_type = get_from_name("UUID")
+    dest = bytearray()
+    ch_type.write_column([value, value], dest, InsertContext("table", ["value"], [ch_type]))
+
+    assert bytes(dest) == _uuid_wire(None) * 2
+
+
+@UUID_COLUMN_SHAPES
+@pytest.mark.parametrize("value", [float("nan"), 1.5, [13, 79], {"id": 13}], ids=["nan", "float", "list", "dict"])
+def test_uuid_native_write_unsupported_first_value(type_name, build, value):
+    # The value raises as it does in any other row. It must not turn the UUIDs after it into zero UUIDs
+    ch_type = get_from_name(type_name)
+    column = build([value, UUID_VALUES[0], UUID_VALUES[2]])
+    with pytest.raises(AttributeError):
+        ch_type.write_column(column, bytearray(), InsertContext("table", ["value"], [ch_type]))

@@ -6,7 +6,6 @@ from uuid import UUID as PYUUID
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef, UnsupportedType, _TypeArgs
 from clickhouse_connect.datatypes.registry import _canonicalize_variant_name, get_from_name
 from clickhouse_connect.driver import options
-from clickhouse_connect.driver.common import first_value
 from clickhouse_connect.driver.ctypes import data_conv
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
@@ -48,7 +47,9 @@ class UUID(ClickHouseType):
         return column
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
-        first = first_value(column, self.nullable)
+        # The first value of a supported type selects the writer. A leading None or a value of
+        # another type must not select it for the rows that follow.
+        first = next((v for v in column if isinstance(v, (str, int, PYUUID, bytes, bytearray, memoryview))), None)
         empty = empty_uuid_b
         if isinstance(first, str) or self.write_format(ctx) == "string":
             _write_big_endian_uuids([int(v.replace("-", ""), 16).to_bytes(16, "big") if v else empty for v in column], dest)
@@ -59,10 +60,12 @@ class UUID(ClickHouseType):
             _write_big_endian_uuids([v.bytes if v else empty for v in column], dest)
         elif isinstance(first, (bytes, bytearray, memoryview)):
             for v in column:
-                if v:
-                    dest += bytes(reversed(v[:8])) + bytes(reversed(v[8:]))
-                else:
+                if not v:
                     dest += empty
+                elif len(v) != 16:
+                    raise ctx.data_error(f"UUID bytes length is {len(v)}, expected 16")
+                else:
+                    dest += bytes(reversed(v[:8])) + bytes(reversed(v[8:]))
         else:
             dest += empty * len(column)
 
