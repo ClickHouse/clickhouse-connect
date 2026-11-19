@@ -601,6 +601,8 @@ Columns support names, types, and a literal `server_default`. Column comments, `
 including in Alembic offline output. Dictionary-level `comment` is supported.
 These restrictions also apply to the `Table(..., clickhousedb_table_type="dictionary")`
 and `op.create_clickhouse_dictionary(...)` forms.
+Reflection of a dictionary returns the column names, types, and `server_default`. It does not keep
+the attribute options `EXPRESSION`, `HIERARCHICAL`, `BIDIRECTIONAL`, `INJECTIVE`, and `IS_OBJECT_ID`.
 
 ## Views and SQL functions {#sqlalchemy-views-functions}
 

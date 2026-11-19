@@ -1,5 +1,5 @@
 def walk_sql(sql: str, start: int = 0):
-    """Yield (index, char, depth) for unquoted chars, tracking paren depth."""
+    """Yield (index, char, depth) for unquoted chars, tracking paren and bracket depth."""
     depth = 0
     quote_char = None
     escape = False
@@ -17,9 +17,9 @@ def walk_sql(sql: str, start: int = 0):
         if char in {"'", '"', "`"}:
             quote_char = char
             continue
-        if char == "(":
+        if char in "([":
             depth += 1
-        elif char == ")":
+        elif char in ")]":
             depth -= 1
         yield i, char, depth
 
