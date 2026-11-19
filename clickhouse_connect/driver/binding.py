@@ -25,9 +25,6 @@ _BYTE_ESCAPES = tuple(f"{BS}x{b:02x}" for b in range(256))
 # a bareword only through ASCII letters, digits, and underscores and never absorb `$`.
 _BIND_NAME_PATTERN = r"(?:[A-Za-z_][A-Za-z0-9_$]*|\$[A-Za-z0-9_][A-Za-z0-9_$]*|[0-9]+[A-Za-z_][A-Za-z0-9_]*)"
 _bind_name_re = re.compile(rf"{_BIND_NAME_PATTERN}\Z")
-_table_function_re = re.compile(r"\s*(?:TABLE\s+)?FUNCTION\s+[A-Za-z_][A-Za-z0-9_]*\s*\(", re.IGNORECASE | re.ASCII)
-_table_keyword_re = re.compile(r"TABLE\s+", re.IGNORECASE | re.ASCII)
-_SQL_WHITESPACE = " \t\n\r\v\f"
 # Routing keeps the shipped 1.x `\w+` names such as `{13:Int32}` or `{idé:Int32}`
 # in the union for unquoted placeholders. `\w` cannot absorb `$`.
 external_bind_re = re.compile(rf"\{{({_BIND_NAME_PATTERN}|\w+):([^}}]+)\}}")
@@ -41,6 +38,9 @@ _SQL_WHITESPACE = (
     "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u200b\u200c\u200d"
     "\u2028\u2029\u202f\u205f\u2060\u3000\ufeff"
 )
+_SQL_WS = f"[{re.escape(_SQL_WHITESPACE)}]"
+_table_function_re = re.compile(rf"{_SQL_WS}*(?:TABLE{_SQL_WS}+)?FUNCTION{_SQL_WS}+[A-Za-z_][A-Za-z0-9_]*{_SQL_WS}*\(", re.IGNORECASE)
+_table_keyword_re = re.compile(rf"TABLE{_SQL_WS}+", re.IGNORECASE)
 
 
 def _skip_quoted_token(query: str, index: int, quote: str) -> int:
