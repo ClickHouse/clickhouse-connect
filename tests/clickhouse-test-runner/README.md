@@ -37,12 +37,17 @@ curl and Docker. Run the commands from the repository root.
 
    ```bash
    pip install "cython==3.2.5" "setuptools>=77.0.3" jinja2 pytest pytest-xdist
-   CLICKHOUSE_CONNECT_SKIP_CYTHON=1 pip install -e .
+   CLICKHOUSE_CONNECT_SKIP_CYTHON=1 pip install -e ".[tzdata]"
    CLICKHOUSE_CONNECT_REQUIRE_C=1 python setup.py build_ext --inplace
    ```
 
    Without `CLICKHOUSE_CONNECT_REQUIRE_C=1`, a failed compile continues
-   with pure Python, and the run script then stops.
+   with pure Python, and the run script then stops. The `tzdata` extra
+   gives Python `zoneinfo` all time zone names. Some tests use old names
+   (`US/Samoa`, `Cuba`, `Asia/Calcutta`) that a system zoneinfo can lack
+   (on Ubuntu, they are in the `tzdata-legacy` package). Without them,
+   clickhouse-connect fails a column with such a time zone, and it reads a
+   value in such a `session_timezone` in the server time zone.
 
 2. Start the pinned ClickHouse server. The version is in
    [`clickhouse-version`](clickhouse-version):

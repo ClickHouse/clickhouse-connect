@@ -65,12 +65,14 @@ jobs:
       # fail the step: without it, setup.py continues with pure Python. The
       # program does not use pandas, numpy or Arrow, so it needs only the
       # dependencies of clickhouse-connect itself. jinja2 is a dependency of
-      # tests/clickhouse-test.
+      # tests/clickhouse-test. The `tzdata` extra gives Python zoneinfo all
+      # time zone names: the system zoneinfo of the runner does not have the
+      # old names (US/Samoa, Cuba, Asia/Calcutta) that some tests use.
       - name: Install clickhouse-connect and build the Cython extensions
         run: |
           python -m pip install --upgrade pip
           pip install "cython==3.2.5" "setuptools>=77.0.3" jinja2 pytest pytest-xdist
-          CLICKHOUSE_CONNECT_SKIP_CYTHON=1 pip install -e .
+          CLICKHOUSE_CONNECT_SKIP_CYTHON=1 pip install -e ".[tzdata]"
           CLICKHOUSE_CONNECT_REQUIRE_C=1 python setup.py build_ext --inplace
 
       # The server version and the upstream tests are pinned together in

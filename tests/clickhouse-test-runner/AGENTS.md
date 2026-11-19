@@ -107,7 +107,12 @@ these:
   `INTO OUTFILE`, `FROM INFILE`, client-side parsing of `INSERT` data, the
   progress and profile-event output, and client-only settings.
 - The tz database. ClickHouse and Python can give different historical
-  offsets for the same zone.
+  offsets for the same zone. Python `zoneinfo` also needs the zone name:
+  `Column timezone <name> is not recognized`, or a value in a
+  `session_timezone` read in the server time zone, means that the Python
+  environment does not have that name. Install the `tzdata` extra, as the
+  README and CI do; the system zoneinfo of Ubuntu does not have old names
+  such as `US/Samoa`, `Cuba` and `CET` without `tzdata-legacy`.
 - Tests that conflict with other tests of the set: a fixed table UUID, or
   server state that a test leaves behind (failpoints that a failed test did
   not disable, row policies). Such a test passes alone on a fresh server and
