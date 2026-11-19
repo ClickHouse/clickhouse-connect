@@ -25,7 +25,9 @@ _BYTE_ESCAPES = tuple(f"{BS}x{b:02x}" for b in range(256))
 # a bareword only through ASCII letters, digits, and underscores and never absorb `$`.
 _BIND_NAME_PATTERN = r"(?:[A-Za-z_][A-Za-z0-9_$]*|\$[A-Za-z0-9_][A-Za-z0-9_$]*|[0-9]+[A-Za-z_][A-Za-z0-9_]*)"
 _bind_name_re = re.compile(rf"{_BIND_NAME_PATTERN}\Z")
-_table_function_re = re.compile(r"\s*FUNCTION\s+[A-Za-z_][A-Za-z0-9_]*\s*\(", re.IGNORECASE)
+_table_function_re = re.compile(r"\s*(?:TABLE\s+)?FUNCTION\s+[A-Za-z_][A-Za-z0-9_]*\s*\(", re.IGNORECASE | re.ASCII)
+_table_keyword_re = re.compile(r"TABLE\s+", re.IGNORECASE | re.ASCII)
+_SQL_WHITESPACE = " \t\n\r\v\f"
 # Routing keeps the shipped 1.x `\w+` names such as `{13:Int32}` or `{idé:Int32}`
 # in the union for unquoted placeholders. `\w` cannot absorb `$`.
 external_bind_re = re.compile(rf"\{{({_BIND_NAME_PATTERN}|\w+):([^}}]+)\}}")
@@ -830,14 +832,22 @@ def _qualified_table(table: str, database: str | None = None) -> str:
                 break
             index = end
         elif char == ".":
-            parts.append(table[start:index].strip(" \t\n\r\v\f"))
+            parts.append(table[start:index].strip(_SQL_WHITESPACE))
             index += 1
             start = index
         else:
             index += 1
     if parts:
-        parts.append(table[start:].strip(" \t\n\r\v\f"))
+        parts.append(table[start:].strip(_SQL_WHITESPACE))
+        keyword = _table_keyword_re.match(parts[0])
+        if keyword:
+            parts[0] = parts[0][keyword.end() :]
         return ".".join(quote_identifier(part) for part in parts)
+    stripped = table.strip(_SQL_WHITESPACE)
+    keyword = _table_keyword_re.match(stripped)
+    candidate = stripped[keyword.end() :] if keyword else stripped
+    if candidate != table and quote_identifier(candidate) == candidate:
+        table = candidate
     if database:
         return f"{quote_identifier(database)}.{quote_identifier(table)}"
     return quote_identifier(table)

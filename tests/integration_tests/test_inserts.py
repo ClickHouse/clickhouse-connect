@@ -765,14 +765,14 @@ def test_insert_quotes_qualified_table(param_client: Client, call, table_context
                 call(param_client.insert, rider, [[13]], column_names=["id"], column_types=[get_from_name("UInt64")])
         assert call(param_client.command, f"SELECT count() FROM {target}") == 0
 
-        call(param_client.insert, f"{test_db}.{target}", [[13]])
+        call(param_client.insert, f"{test_db}.{target}", [[12]])
         if method == "insert_arrow":
             call(param_client.insert_arrow, f"`{test_db}`.`{target}`", arrow_table)
             call(param_client.insert_arrow, "`a.b`", arrow_table, database=test_db)
             assert call(param_client.query, "SELECT id FROM `a.b`").result_rows == [(13,)]
         else:
             call(param_client.insert, f"`{test_db}`.`{target}`", [[13]])
-        assert call(param_client.command, f"SELECT count() FROM {target}") == 2
+        assert call(param_client.query, f"SELECT id FROM {target} ORDER BY id").result_rows == [(12,), (13,)]
 
 
 @pytest.mark.parametrize(
@@ -780,6 +780,10 @@ def test_insert_quotes_qualified_table(param_client: Client, call, table_context
     [
         pytest.param("remote", "insert_arrow", marks=pytest.mark.local_only),
         pytest.param("remote", "insert", marks=pytest.mark.local_only),
+        pytest.param("table_remote", "insert_arrow", marks=pytest.mark.local_only),
+        pytest.param("table_remote", "insert", marks=pytest.mark.local_only),
+        pytest.param("table_keyword", "insert_arrow", marks=pytest.mark.local_only),
+        pytest.param("table_keyword", "insert", marks=pytest.mark.local_only),
         ("null", "insert_arrow"),
         pytest.param("null", "insert", marks=pytest.mark.local_only),
         pytest.param("function_log", "insert_arrow", marks=pytest.mark.local_only),
@@ -792,13 +796,17 @@ def test_insert_table_function_target(param_client: Client, call, table_context,
         arrow_table = pa.table({"id": pa.array([13], type=pa.uint64())})
     table = "function_log"
     with table_context(table, ["id UInt64"], engine="MergeTree"):
-        if target_kind == "remote":
+        if target_kind in ("remote", "table_remote"):
             host = "127.0.0.1" if test_config.host in ("localhost", "127.0.0.1", "::1") else test_config.host
             port = call(param_client.command, "SELECT tcpPort()")
             target = finalize_query(
                 f"FUNCTION remote(%s, {test_db}.{table}, %s, %s)",
                 [f"{host}:{port}", test_config.username, test_config.password],
             )
+            if target_kind == "table_remote":
+                target = f"TABLE {target}"
+        elif target_kind == "table_keyword":
+            target = f"TABLE {test_db}.{table}"
         elif target_kind == "null":
             target = "FUNCTION null('id UInt64')"
         else:

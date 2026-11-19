@@ -733,7 +733,7 @@ For the common use case of inserting multiple records into ClickHouse, there is 
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `table` | str | Required | Target table. A database-qualified name such as `db.table` is permitted. Each part is quoted, and parts already quoted with backticks or double quotes are kept as written. Table function targets that start with `FUNCTION` are sent as written. May be omitted when supplied by `context`. |
+| `table` | str | Required | Target table. A database-qualified name such as `db.table` is permitted. Each part is quoted, and parts already quoted with backticks or double quotes are kept as written. A leading `TABLE` keyword before a qualified or quoted table name is accepted. Table function targets that start with `FUNCTION` or `TABLE FUNCTION` are SQL and are sent as written, so do not pass untrusted text in them. May be omitted when supplied by `context`. |
 | `data` | Sequence of Sequences | Required | Row-oriented or column-oriented data matrix. May be supplied later through an `InsertContext`. |
 | `column_names` | str or Sequence[str] | `"*"` | Ordered columns. `"*"` runs a metadata query to discover every insertable column. |
 | `database` | str or None | Client database | Target database when `table` is not qualified. |
