@@ -63,6 +63,7 @@ module = [
 ignore_errors = true
 
 [tool.pytest.ini_options]
+markers = ["local_only: skipped on ClickHouse Cloud"]
 log_cli = true
 log_cli_level = "INFO"
 env_files = ["test.env"]

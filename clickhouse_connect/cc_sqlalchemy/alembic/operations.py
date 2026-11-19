@@ -3,16 +3,18 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from alembic.operations import MigrateOperation, Operations
+from alembic.operations import MigrateOperation, Operations, ops
 from alembic.operations.ops import ModifyTableOps
-from sqlalchemy import Column
+from sqlalchemy import Column, Table
 
+from clickhouse_connect.cc_sqlalchemy._schema import validate_setting_name
+from clickhouse_connect.cc_sqlalchemy.alembic.impl import ClickHouseImpl
 from clickhouse_connect.cc_sqlalchemy.ddl.index import ClickHouseIndex, index_definition
 from clickhouse_connect.cc_sqlalchemy.ddl.projection import ClickHouseProjection, projection_definition
 from clickhouse_connect.cc_sqlalchemy.ddl.refresh import ClickHouseRefresh
 from clickhouse_connect.cc_sqlalchemy.ddl.tableengine import TableEngine
 from clickhouse_connect.cc_sqlalchemy.sql import full_table
-from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import column_specification, render_settings
+from clickhouse_connect.cc_sqlalchemy.sql.ddlcompiler import check_dictionary_column, column_specification, render_settings
 from clickhouse_connect.cc_sqlalchemy.sql.preparer import literal_dialect
 from clickhouse_connect.driver.binding import format_str, quote_identifier
 
@@ -45,6 +47,25 @@ __all__ = [
     "ClickHouseRefresh",
 ]
 
+# Held on the module so importlib.reload does not capture our own implementation and recurse.
+# _create_table follows Alembic's toimpl.create_table and adds only the attach loop.
+_DEFAULT_CREATE_TABLE_IMPL = globals().get("_DEFAULT_CREATE_TABLE_IMPL") or Operations._to_impl.dispatch(ops.CreateTableOp)
+
+
+@Operations.implementation_for(ops.CreateTableOp, replace=True)
+def _create_table(operations: Operations, operation: ops.CreateTableOp) -> Table:
+    if not isinstance(operations.impl, ClickHouseImpl):
+        return _DEFAULT_CREATE_TABLE_IMPL(operations, operation)
+    table = operation.to_table(operations.migration_context)
+    for item in operation.columns:
+        if isinstance(item, (TableEngine, ClickHouseIndex, ClickHouseProjection)):
+            item._set_parent_with_dispatch(table, allow_replacements=False)
+    kw = {}
+    if operation.if_not_exists is not None:
+        kw["if_not_exists"] = operation.if_not_exists
+    operations.impl.create_table(table, **kw)
+    return table
+
 
 def _validate_position(first: bool, after_name: str | None, owner: str) -> None:
     if first and after_name is not None:
@@ -66,11 +87,6 @@ def _exec_sql(operations: Operations, sql: str) -> None:
 def _settings_suffix(clickhouse_settings: Mapping[str, Any] | None) -> str:
     rendered = render_settings(clickhouse_settings)
     return f" SETTINGS {rendered}" if rendered else ""
-
-
-def _render_column_list(operations: Operations, columns: Sequence[Column[Any]]) -> str:
-    dialect = literal_dialect(operations.get_context().dialect)
-    return ", ".join(column_specification(dialect, column) for column in columns)
 
 
 def _render_add_index(index: ClickHouseIndex) -> str:
@@ -754,6 +770,8 @@ class ModifyClickHouseTableSettingsOp(MigrateOperation):
     ) -> None:
         if not settings:
             raise ValueError("modify_clickhouse_table_settings requires at least one setting")
+        for name in settings:
+            validate_setting_name(name)
         self.table_name: str = table_name
         self.settings: Mapping[str, Any] = settings
         self.schema: str | None = schema
@@ -826,6 +844,8 @@ class ResetClickHouseTableSettingsOp(MigrateOperation):
     ) -> None:
         if not names:
             raise ValueError("reset_clickhouse_table_settings requires at least one setting name")
+        for name in names:
+            validate_setting_name(name)
         self.table_name: str = table_name
         self.names: tuple[str, ...] = tuple(names)
         self.schema: str | None = schema
@@ -1290,9 +1310,13 @@ class CreateClickHouseDictionaryOp(MigrateOperation):
 def _create_clickhouse_dictionary(operations: Operations, operation: CreateClickHouseDictionaryOp) -> Any:
     exists = " IF NOT EXISTS" if operation.if_not_exists else ""
     layout = operation.layout if "(" in operation.layout else f"{operation.layout}()"
+    for column in operation.columns:
+        check_dictionary_column(column, operation.name)
+    dialect = literal_dialect(operations.get_context().dialect)
+    columns = ", ".join(column_specification(dialect, column) for column in operation.columns)
     sql = (
         f"CREATE DICTIONARY{exists} {full_table(operation.name, operation.schema)} "
-        f"({_render_column_list(operations, operation.columns)}) "
+        f"({columns}) "
         f"PRIMARY KEY {operation.primary_key} SOURCE({operation.source}) "
         f"LAYOUT({layout}) LIFETIME({operation.lifetime})"
     )

@@ -8,21 +8,11 @@ import pytest
 import sqlalchemy as sa
 
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import DateTime64
-from clickhouse_connect.cc_sqlalchemy.dialect import _SQLALCHEMY_MAJOR_VERSION, ClickHouseDialect
+from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
 from clickhouse_connect.cc_sqlalchemy.sql import cte
 from clickhouse_connect.dbapi.cursor import Cursor
 
 _DIALECT = ClickHouseDialect()
-
-
-def _resolves_to_enum(result_type):
-    resolved = result_type.dialect_impl(_DIALECT)
-    if type(resolved) is sa.Enum:
-        return True
-    if isinstance(resolved, sa.TypeDecorator):
-        impl = resolved.impl_instance if _SQLALCHEMY_MAJOR_VERSION >= 2 else resolved.impl
-        return _resolves_to_enum(impl)
-    return False
 
 
 class _ArrayResultType(sa.types.UserDefinedType):
@@ -217,8 +207,6 @@ if hasattr(sa, "Uuid"):
 @pytest.mark.parametrize("empty", [True, False], ids=["empty", "populated"])
 @pytest.mark.parametrize("result_type, type_code, value, expected", _SAFE_RESULT_CASES)
 def test_safe_result_processors_skip_metadata_probe(no_parameters, empty, result_type, type_code, value, expected):
-    if not empty and sa.__version__.startswith("1.4.") and _resolves_to_enum(result_type):
-        pytest.skip("SQLAlchemy 1.4 Enum processors require bytes with this dialect's existing Unicode configuration")
     _check_safe_result_processor(no_parameters, empty, result_type, type_code, value, expected)
 
 
