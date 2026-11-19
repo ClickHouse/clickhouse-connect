@@ -1,11 +1,15 @@
+from decimal import Decimal
+
 import pytest
-from sqlalchemy import Column, MetaData, Table, select
+from sqlalchemy import Column, MetaData, Table, bindparam, literal_column, select
 from sqlalchemy.dialects import registry
 
 # Import sql module so Select.prewhere / Select.limit_by monkey-patches are installed.
 import clickhouse_connect.cc_sqlalchemy.sql  # noqa: F401
 from clickhouse_connect.cc_sqlalchemy import dialect_name
+from clickhouse_connect.cc_sqlalchemy import select as ch_select
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Bool, String, UInt32
+from clickhouse_connect.cc_sqlalchemy.sql.clauses import LimitByClause
 
 dialect = registry.load(dialect_name)()
 metadata = MetaData()
@@ -97,6 +101,63 @@ def test_limit_by_with_offset():
     stmt = select(events).limit_by([events.c.user_id], 5, offset=2)
     sql = compile_sql(stmt)
     assert "LIMIT 2, 5 BY" in sql
+
+
+@pytest.mark.parametrize("select_factory", [select, ch_select], ids=["sqlalchemy", "clickhouse"])
+@pytest.mark.parametrize("argument", ["limit", "offset"])
+@pytest.mark.parametrize(
+    ("value", "error"),
+    [
+        ("1 BY number UNION ALL SELECT 79 --", ValueError),
+        ("abc", ValueError),
+        (bindparam("count", 5), TypeError),
+        (literal_column("5"), TypeError),
+    ],
+)
+def test_limit_by_rejects_invalid_counts(select_factory, argument, value, error):
+    counts = {"limit": 5, argument: value}
+    with pytest.raises(error):
+        select_factory(events).limit_by([events.c.user_id], **counts)
+
+
+@pytest.mark.parametrize("select_factory", [select, ch_select], ids=["sqlalchemy", "clickhouse"])
+def test_limit_by_rejects_none_limit(select_factory):
+    with pytest.raises(TypeError):
+        select_factory(events).limit_by([events.c.user_id], None)
+
+
+@pytest.mark.parametrize("select_factory", [select, ch_select], ids=["sqlalchemy", "clickhouse"])
+@pytest.mark.parametrize(("value", "expected"), [("5", 5), (True, 1), (5.7, 5), (Decimal(5), 5), (-1, -1)])
+@pytest.mark.parametrize(("offset", "prefix"), [("2", "2, "), (0, "0, "), (None, "")])
+def test_limit_by_converts_counts_to_int(select_factory, value, expected, offset, prefix):
+    stmt = select_factory(events).limit_by([events.c.user_id], value, offset=offset)
+    assert f"LIMIT {prefix}{expected} BY" in compile_sql(stmt)
+    assert type(stmt._ch_limit_by.limit) is int
+    assert stmt._ch_limit_by.offset is None or type(stmt._ch_limit_by.offset) is int
+    normalized = select_factory(events).limit_by([events.c.user_id], expected, offset=None if offset is None else int(offset))
+    assert stmt._generate_cache_key().key == normalized._generate_cache_key().key
+
+
+@pytest.mark.parametrize("select_factory", [select, ch_select], ids=["sqlalchemy", "clickhouse"])
+def test_limit_by_accepts_numpy_integer(select_factory):
+    np = pytest.importorskip("numpy")
+    stmt = select_factory(events).limit_by([events.c.user_id], np.int64(5))
+    assert "LIMIT 5 BY" in compile_sql(stmt)
+    assert type(stmt._ch_limit_by.limit) is int
+
+
+@pytest.mark.parametrize("argument", ["limit", "offset"])
+def test_limit_by_clause_rejects_invalid_counts(argument):
+    counts = {"limit": 5, argument: "1 BY x --"}
+    with pytest.raises(ValueError):
+        LimitByClause((events.c.user_id,), **counts)
+
+
+@pytest.mark.parametrize("select_factory", [select, ch_select], ids=["sqlalchemy", "clickhouse"])
+def test_limit_by_cache_key_uses_integer_counts(select_factory):
+    stmt = select_factory(events).limit_by([events.c.user_id], "05", offset="02")
+    normalized = select_factory(events).limit_by([events.c.user_id], 5, offset=2)
+    assert stmt._generate_cache_key().key == normalized._generate_cache_key().key
 
 
 def test_limit_by_multiple_columns():
