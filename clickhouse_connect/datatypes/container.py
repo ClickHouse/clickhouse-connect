@@ -17,6 +17,18 @@ from clickhouse_connect.json_impl import any_to_json
 logger = logging.getLogger(__name__)
 
 
+def _contains_dynamic(ch_type: ClickHouseType) -> bool:
+    from clickhouse_connect.datatypes.dynamic import Dynamic
+
+    if isinstance(ch_type, Dynamic):
+        return True
+    for attribute in ("element_type", "key_type", "value_type"):
+        element = getattr(ch_type, attribute, None)
+        if element is not None and _contains_dynamic(element):
+            return True
+    return any(_contains_dynamic(element) for element in getattr(ch_type, "element_types", ()))
+
+
 def _nested_identifier(name: str) -> str:
     if name and ("A" <= name[0] <= "Z" or "a" <= name[0] <= "z" or name[0] == "_"):
         if all("A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9" or char in "_$" for char in name[1:]):
@@ -346,14 +358,21 @@ class Map(ClickHouseType):
 
 
 class Nested(ClickHouseType):
-    __slots__ = "tuple_array", "element_names", "element_types"
+    __slots__ = "tuple_array", "element_names", "element_types", "_has_dynamic"
     python_type = Sequence[dict]
     _type_args = _TypeArgs(1, None, variadic_nested=0)
+
+    @property
+    def insert_name(self) -> str:
+        if self._has_dynamic:
+            return self.tuple_array.insert_name
+        return self.name
 
     def __init__(self, type_def):
         self.element_names = type_def.keys
         self.tuple_array = get_from_name(f"Array(Tuple({','.join(type_def.values)}))")
         self.element_types = self.tuple_array.element_type.element_types
+        self._has_dynamic = _contains_dynamic(self.tuple_array)
         element_values = tuple(
             _canonicalize_variant_name(name, element_type) for name, element_type in zip(type_def.values, self.element_types)
         )

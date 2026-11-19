@@ -148,3 +148,21 @@ def test_arrow_datetime_create_and_insert(param_client: Client, call):
     assert str(rows[1][1]) == "2025-01-02"
 
     call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.local_only
+def test_arrow_create_table_quotes_columns(param_client: Client, call):
+    table_name = "test_arrow_quoted_columns"
+    schema = pa.schema([(name, pa.int64()) for name in ["my col", "x`y", "a.b", "select"]])
+    call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        ddl = create_table_from_arrow_schema(table_name, schema, "MergeTree", {"ORDER BY": "tuple()"})
+        call(param_client.command, ddl)
+        arrow_table = pa.table({name: [13] for name in schema.names}, schema=schema)
+        call(param_client.insert_arrow, table_name, arrow_table)
+
+        result = call(param_client.query, f"SELECT * FROM {table_name}")
+        assert result.column_names == tuple(schema.names)
+        assert result.result_rows == [(13, 13, 13, 13)]
+    finally:
+        call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")

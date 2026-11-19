@@ -177,7 +177,7 @@ client.insert_df_arrow("users", df)
 
 ### Create a table from a PyArrow schema {#create-table-from-pyarrow-schema}
 
-`create_table_from_arrow_schema` builds a `CREATE TABLE` statement from common scalar Arrow fields. The mapping covers signed and unsigned integers, floating-point values, booleans, strings, dates, and timestamps. It intentionally creates non-nullable ClickHouse columns and raises `TypeError` for unsupported Arrow types, so review the generated DDL before executing it.
+`create_table_from_arrow_schema` builds a `CREATE TABLE` statement from common scalar Arrow fields. The mapping covers signed and unsigned integers, floating-point values, booleans, strings, dates, and timestamps. It intentionally creates non-nullable ClickHouse columns and raises `TypeError` for unsupported Arrow types, so review the generated DDL before executing it. Column names are quoted. `table_name`, `engine`, and `engine_params` are SQL fragments inserted as written.
 
 ```python
 import clickhouse_connect
@@ -310,11 +310,11 @@ assert returned.tzinfo == ZoneInfo("America/Los_Angeles")
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `client` | `Client` | Required | Synchronous client used for the insert. |
-| `table` | str | Required | Simple or database-qualified target table. |
+| `table` | str | Required | Simple or database-qualified target table. Each part is quoted, and parts already quoted with backticks or double quotes are kept as written. When `database` is set, `table` is one table name and is not split. Without `database`, table function targets that start with `FUNCTION` or `TABLE FUNCTION` are SQL and are sent as written, so do not pass untrusted text in them. |
 | `file_path` | str | Required | Local path to the input file. |
 | `fmt` | str | `"CSV"` or `"CSVWithNames"` | Input format. Defaults to `"CSV"` when `column_names` is supplied and `"CSVWithNames"` otherwise. |
 | `column_names` | Sequence[str] | `None` | Columns represented by the file. Not required for formats that include names. |
-| `database` | str | `None` | Target database when the table is not qualified. |
+| `database` | str | `None` | Target database. When set, `table` is used as one table name. |
 | `settings` | dict | `None` | See [Settings argument](/integrations/language-clients/python/driver-api#settings-argument-1). |
 | `compression` | str | `None` | Existing file compression, such as `"zstd"`, `"lz4"`, or `"gzip"`. gzip is inferred from `.gz` and `.gzip` filenames. |
 
