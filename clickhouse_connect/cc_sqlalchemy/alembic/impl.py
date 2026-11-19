@@ -316,6 +316,9 @@ class ClickHouseImpl(DefaultImpl):
         settings = ClickHouseDDLHelper.render_settings(kw.get("clickhouse_settings"))
         if autoincrement is not None or existing_autoincrement is not None:
             return
+        has_default_value = server_default is not False and server_default is not None
+        if type_ is None and existing_type is None and (nullable is not None or has_default_value):
+            raise CommandError(f"ClickHouse alter_column requires existing_type for {table_name}.{column_name}")
         if name is not None:
             rename_sql = ["ALTER TABLE", full_table(table_name, schema), "RENAME COLUMN"]
             if if_exists:
@@ -344,7 +347,6 @@ class ClickHouseImpl(DefaultImpl):
             else:
                 passthrough[canonical] = value
 
-        has_default_value = server_default is not False and server_default is not None
         modify_needed = type_ is not None or nullable is not None or has_default_value or bool(passthrough)
 
         if comment is not False and not modify_needed:
@@ -352,8 +354,6 @@ class ClickHouseImpl(DefaultImpl):
 
         if modify_needed:
             effective_type = type_ if type_ is not None else existing_type
-            if effective_type is None and (type_ is not None or nullable is not None or has_default_value):
-                raise CommandError(f"ClickHouse alter_column requires existing_type for {table_name}.{column_name}")
             if nullable is not None:
                 effective_type = self._set_type_nullable(effective_type, nullable)
             modify_sql = ["ALTER TABLE", full_table(table_name, schema), "MODIFY COLUMN"]

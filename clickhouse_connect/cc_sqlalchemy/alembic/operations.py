@@ -47,6 +47,8 @@ __all__ = [
     "ClickHouseRefresh",
 ]
 
+# Held on the module so importlib.reload does not capture our own implementation and recurse.
+# _create_table follows Alembic's toimpl.create_table and adds only the attach loop.
 _DEFAULT_CREATE_TABLE_IMPL = globals().get("_DEFAULT_CREATE_TABLE_IMPL") or Operations._to_impl.dispatch(ops.CreateTableOp)
 
 
