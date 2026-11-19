@@ -49,7 +49,7 @@ def test_bigint_numpy_native_bytes(type_name, nullable, representation):
 @pytest.mark.parametrize("representation", ["float", "decimal"])
 @pytest.mark.parametrize("int_first", [False, True])
 def test_bigint_rejects_noninteger(type_name, nullable, representation, int_first):
-    value = {"float": 13.5, "decimal": Decimal("13")}[representation]
+    value = {"float": 13.5, "decimal": Decimal("13.5")}[representation]
     if nullable:
         type_name = f"Nullable({type_name})"
     values = [13, value] if int_first else [value]
@@ -59,14 +59,15 @@ def test_bigint_rejects_noninteger(type_name, nullable, representation, int_firs
 
 
 @pytest.mark.parametrize("values", [[1.5, 2.0], []])
-def test_bfloat16_numpy_native_bytes(values):
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_bfloat16_numpy_native_bytes(values, dtype):
     np = pytest.importorskip("numpy")
     ch_type = get_from_name("BFloat16")
     ctx = InsertContext("table", ["value"], [ch_type])
     expected = bytearray()
     ch_type.write_column(values, expected, ctx)
     dest = bytearray()
-    ch_type.write_column(np.array(values, dtype=np.float32), dest, ctx)
+    ch_type.write_column(np.array(values, dtype=dtype), dest, ctx)
     assert dest == expected
 
 

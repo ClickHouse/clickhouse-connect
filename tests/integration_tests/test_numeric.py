@@ -37,11 +37,12 @@ def test_bigint_numpy_scalars(param_client, call, table_context, type_name, repr
 
 
 @pytest.mark.local_only
-def test_bfloat16_float32_dataframe(param_client, call, table_context):
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_bfloat16_numpy_dataframe(param_client, call, table_context, dtype):
     np = pytest.importorskip("numpy")
     pd = pytest.importorskip("pandas")
     with table_context("bf16_float32", ["value BFloat16"]):
-        call(param_client.insert_df, "bf16_float32", pd.DataFrame({"value": np.array([1.5, 2.0], dtype=np.float32)}))
+        call(param_client.insert_df, "bf16_float32", pd.DataFrame({"value": np.array([1.5, 2.0], dtype=dtype)}))
         assert call(param_client.query, "SELECT value FROM bf16_float32 ORDER BY value").result_rows == [(1.5,), (2.0,)]
 
 
