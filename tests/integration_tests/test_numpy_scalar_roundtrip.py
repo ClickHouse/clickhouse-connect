@@ -47,7 +47,7 @@ def test_numpy_named_tuple_json(param_client, call, test_config, query, output):
     assert actual == expected
 
 
-@pytest.mark.parametrize("type_name", ["JSON", "Nullable(JSON)"])
+@pytest.mark.parametrize("type_name", ["JSON", pytest.param("Nullable(JSON)", marks=pytest.mark.local_only)])
 def test_numpy_json_insert(param_client, call, table_context, type_name):
     value = {
         "n": np.int64(13),
@@ -70,6 +70,7 @@ def test_numpy_json_insert(param_client, call, table_context, type_name):
 
 DATETIME_TYPES = ["DateTime", "DateTime('Asia/Tokyo')", "DateTime64(3)", "DateTime64(6, 'UTC')", "DateTime64(9)", "DateTime64(2)"]
 DATETIME_UNITS = ["Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns", "ps", "fs", "as", "3ms"]
+SHAPE_CLOUD_CASES = {("DateTime", "s"), ("DateTime64(3)", "ms")}
 
 
 def _ticks(unit, scale):
@@ -96,8 +97,14 @@ def _ticks(unit, scale):
     return 13 * numerator * 10**scale // denominator
 
 
-@pytest.mark.parametrize("type_name", DATETIME_TYPES)
-@pytest.mark.parametrize("unit", DATETIME_UNITS)
+@pytest.mark.parametrize(
+    "type_name,unit",
+    [
+        pytest.param(t, u, id=f"{u}-{t}", marks=() if (t, u) in SHAPE_CLOUD_CASES else pytest.mark.local_only)
+        for u in DATETIME_UNITS
+        for t in DATETIME_TYPES
+    ],
+)
 def test_numpy_datetime_scalar_shapes(param_client, call, table_context, type_name, unit):
     scale = int(type_name.split("(")[1].split(",")[0].rstrip(")")) if type_name.startswith("DateTime64") else 0
     value = np.datetime64(13, unit)
@@ -140,7 +147,15 @@ def test_numpy_datetime_scalar_shapes(param_client, call, table_context, type_na
         )
 
 
-@pytest.mark.parametrize("scale", [2, 3, 6, 9])
+@pytest.mark.parametrize(
+    "scale",
+    [
+        2,
+        pytest.param(3, marks=pytest.mark.local_only),
+        pytest.param(6, marks=pytest.mark.local_only),
+        pytest.param(9, marks=pytest.mark.local_only),
+    ],
+)
 @pytest.mark.parametrize("value", [np.datetime64(-13, "ns"), np.datetime64("2500-01-02T03:04:05.123456", "us")])
 def test_numpy_datetime64_floor_and_range(param_client, call, table_context, scale, value):
     if scale == 9 and str(value).startswith("2500"):
@@ -162,6 +177,7 @@ def test_numpy_datetime64_floor_and_range(param_client, call, table_context, sca
         )
 
 
+@pytest.mark.local_only
 @pytest.mark.parametrize("type_name", ["DateTime", "Nullable(DateTime64(3))"])
 def test_numpy_datetime_nat(param_client, call, table_context, type_name):
     with table_context("numpy_datetime_nat", ["id UInt8", f"v {type_name}"]):
@@ -172,6 +188,7 @@ def test_numpy_datetime_nat(param_client, call, table_context, type_name):
             call(param_client.insert, "numpy_datetime_nat", rows)
 
 
+@pytest.mark.local_only
 def test_numpy_datetime_array_roundtrip(param_client, call, table_context):
     with (
         table_context("numpy_datetime_source", ["id UInt8", "v Array(DateTime)"]),
@@ -204,7 +221,7 @@ def test_numpy_datetime_typed_variant(param_client, call, table_context, type_na
         )
 
 
-@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("nullable", [False, pytest.param(True, marks=pytest.mark.local_only)])
 def test_numpy_datetime_low_cardinality(param_client, call, table_context, nullable):
     type_name = "Nullable(DateTime)" if nullable else "DateTime"
     with table_context("numpy_datetime_lc", ["id UInt8", f"v LowCardinality({type_name})"]):
@@ -216,7 +233,7 @@ def test_numpy_datetime_low_cardinality(param_client, call, table_context, nulla
         assert result == ([(0, None)] if nullable else []) + [(1, 1), (2, 1)]
 
 
-@pytest.mark.parametrize("setting", ["local", "server"])
+@pytest.mark.parametrize("setting", ["local", pytest.param("server", marks=pytest.mark.local_only)])
 def test_numpy_datetime_utc_epoch(param_client, call, table_context, test_config, setting):
     if setting == "server" and test_config.native_codec == "rust_strict":
         pytest.skip("rust_strict does not support naive_datetime_insert=server")
@@ -230,6 +247,7 @@ def test_numpy_datetime_utc_epoch(param_client, call, table_context, test_config
         common.set_setting("naive_datetime_insert", previous)
 
 
+@pytest.mark.local_only
 @pytest.mark.parametrize("ticks", [-1, 2**32])
 def test_numpy_datetime_out_of_range(param_client, call, table_context, ticks):
     with table_context("numpy_datetime_range", ["id UInt8", "v DateTime"]):
@@ -239,6 +257,7 @@ def test_numpy_datetime_out_of_range(param_client, call, table_context, ticks):
             call(param_client.insert, "numpy_datetime_range", [[1, np.datetime64(ticks, "s")]])
 
 
+@pytest.mark.local_only
 @pytest.mark.parametrize("type_name", ["DateTime", "DateTime64(0)", "DateTime64(9)"])
 def test_numpy_datetime_calendar_overflow(param_client, call, table_context, type_name):
     with table_context("numpy_datetime_calendar_overflow", ["id UInt8", f"v {type_name}"]):
