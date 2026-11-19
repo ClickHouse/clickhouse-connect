@@ -150,6 +150,7 @@ def test_arrow_datetime_create_and_insert(param_client: Client, call):
     call(param_client.command, f"DROP TABLE IF EXISTS {table_name}")
 
 
+@pytest.mark.local_only
 def test_arrow_create_table_quotes_columns(param_client: Client, call):
     table_name = "test_arrow_quoted_columns"
     schema = pa.schema([(name, pa.int64()) for name in ["my col", "x`y", "a.b", "select"]])
