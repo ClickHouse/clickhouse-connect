@@ -1,0 +1,153 @@
+name: Upstream SQL tests
+
+# Runs a curated subset of the ClickHouse core SQL tests
+# (tests/queries/0_stateless) through clickhouse-connect. See
+# tests/clickhouse-test-runner/README.md.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      clickhouse_version:
+        description: "ClickHouse version to try: a full version with four numbers, for example 26.11.1.10 (default: tests/clickhouse-test-runner/clickhouse-version)"
+        required: false
+        default: ""
+        type: string
+  schedule:
+    - cron: "0 4 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - "tests/clickhouse-test-runner/**"
+      - ".github/workflows/upstream-sql-tests.yml"
+  pull_request:
+    paths:
+      - "tests/clickhouse-test-runner/**"
+      - ".github/workflows/upstream-sql-tests.yml"
+
+# A new push to a pull request cancels the older run of that pull request.
+# Nightly, manual and push runs each get a group of their own, so that they
+# do not cancel each other.
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}"
+  cancel-in-progress: true
+
+jobs:
+  upstream-sql-tests:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    name: Upstream SQL tests (shard ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Round-robin shards of the allowlist, about 1,020 tests each. The
+        # per-test times of a full run add up to about 155 minutes, which is
+        # about 44 minutes at -j 4 on one runner (about 380 tests run one at
+        # a time). Most of it is the start of the Python program for each
+        # test. So a shard takes about 5 to 10 minutes on a 4-vCPU runner.
+        # Change SHARD_TOTAL below together with this list.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # The program runs clickhouse-connect from this checkout, with the
+      # Cython extensions that a normal install builds, built in place as in
+      # on_push.yml. CLICKHOUSE_CONNECT_REQUIRE_C=1 makes a failed compile
+      # fail the step: without it, setup.py continues with pure Python. The
+      # program does not use pandas, numpy or Arrow, so it needs only the
+      # dependencies of clickhouse-connect itself. jinja2 is a dependency of
+      # tests/clickhouse-test.
+      - name: Install clickhouse-connect and build the Cython extensions
+        run: |
+          python -m pip install --upgrade pip
+          pip install "cython==3.2.5" "setuptools>=77.0.3" jinja2 pytest pytest-xdist
+          CLICKHOUSE_CONNECT_SKIP_CYTHON=1 pip install -e .
+          CLICKHOUSE_CONNECT_REQUIRE_C=1 python setup.py build_ext --inplace
+
+      # The server version and the upstream tests are pinned together in
+      # tests/clickhouse-test-runner/clickhouse-version: the `.reference`
+      # files of another release do not match the output of the server. A
+      # new server release changes nothing here until a pull request bumps
+      # the pin. The `clickhouse_version` input of a manual run tries
+      # another version without a commit.
+      - name: Select the ClickHouse version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.clickhouse_version }}
+        run: |
+          version="${INPUT_VERSION:-$(tests/clickhouse-test-runner/scripts/pinned-version.sh)}"
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::clickhouse_version must be a full version such as 26.10.4.207 (got: '${version}')"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      # CLICKHOUSE_SKIP_USER_SETUP: without it, the default user of the image
+      # accepts connections from localhost in the container only. With it,
+      # the default user of the image's users.xml applies. That user has the
+      # access management and named collection control that some tests
+      # need. --hostname: tests/clickhouse-test replaces the host name of its
+      # own machine with `localhost` in the output of each test, and some
+      # `.reference` files have `localhost` for hostName().
+      - name: Start ClickHouse ${{ steps.version.outputs.version }}
+        env:
+          CLICKHOUSE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker run -d --name clickhouse-upstream-tests --hostname "$(hostname)" \
+            -p 8123:8123 -p 9000:9000 \
+            -e CLICKHOUSE_SKIP_USER_SETUP=1 --ulimit nofile=262144:262144 \
+            "clickhouse/clickhouse-server:${CLICKHOUSE_VERSION}"
+          for _ in $(seq 1 60); do
+            if curl -fsS "localhost:8123/ping" > /dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
+          docker logs clickhouse-upstream-tests
+          exit 1
+
+      # Also generates clickhouse_test_runner/errorcodes.py from the same checkout.
+      - name: Get the upstream tests of ClickHouse ${{ steps.version.outputs.version }}
+        id: upstream
+        run: tests/clickhouse-test-runner/scripts/fetch-upstream.sh "${{ steps.version.outputs.version }}"
+
+      # No RETRY_FAILED: no known bug of clickhouse-connect makes random
+      # tests fail, so each failed test fails the job. The runner prints the
+      # diff of each failed test; upstream-tests.log keeps that output for the
+      # artifact. `shell: bash` sets pipefail, so the exit code of the runner
+      # stays the result of the step.
+      - name: Run upstream SQL tests
+        shell: bash
+        env:
+          CLICKHOUSE_CLIENT_CLI_LOG: ${{ github.workspace }}/upstream-run.log
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_TOTAL: 10
+        run: tests/clickhouse-test-runner/scripts/run-upstream-tests.sh -j 4 2>&1 | tee upstream-tests.log
+
+      # After the upstream tests, so that a failed live test does not stop
+      # the upstream tests of this shard.
+      - name: Unit and live tests of the harness
+        if: ${{ !cancelled() && matrix.shard == 1 && steps.upstream.outcome == 'success' }}
+        env:
+          CLICKHOUSE_TEST_RUNNER_LIVE: "1"
+        run: pytest -n 0 tests/clickhouse-test-runner
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: upstream-sql-tests-${{ steps.upstream.outputs.ref }}-shard-${{ matrix.shard }}
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            upstream-tests.log
+            upstream-run.log
+            tests/clickhouse-test-runner/.upstream/ClickHouse/tests/queries/**/*.stdout
+            tests/clickhouse-test-runner/.upstream/ClickHouse/tests/queries/**/*.stderr
