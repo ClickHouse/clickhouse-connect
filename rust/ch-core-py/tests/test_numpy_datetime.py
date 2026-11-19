@@ -90,5 +90,41 @@ class TestNumpyDatetimeScalar:
         value = np.datetime64("NaT") if unit == "generic" else np.datetime64("NaT", unit)
         if nullable:
             type_name = f"Nullable({type_name})"
+            expected = build_native_block([("t", type_name, [None, None])])
+            assert self._encode(type_name, [value, value]) == expected
+            assert self._encode(type_name, _NdarrayLikeColumn([value, value]), 2) == expected
+            assert self._encode(type_name, np.array([value, value], dtype=object)) == expected
+            return
         with pytest.raises(ValueError, match="NaT"):
             self._encode(type_name, [value])
+
+    @pytest.mark.parametrize(
+        "type_name",
+        ["DateTime", "DateTime64(0)", "DateTime64(2)", "DateTime64(3)", "DateTime64(6)", "DateTime64(9)"],
+    )
+    @pytest.mark.parametrize(
+        "template,wrap",
+        [
+            ("Nullable({})", lambda values: values),
+            ("Array(Nullable({}))", lambda values: [values]),
+            ("Tuple(Nullable({}))", lambda values: [(value,) for value in values]),
+            ("Array(Tuple(Nullable({})))", lambda values: [[(value,) for value in values]]),
+            ("Map(String, Nullable({}))", lambda values: [{str(index): value for index, value in enumerate(values)}]),
+            ("SimpleAggregateFunction(anyLast, Nullable({}))", lambda values: values),
+        ],
+    )
+    def test_numpy_datetime_nat_nullable_positions(self, type_name, template, wrap):
+        np = pytest.importorskip("numpy")
+        values = wrap([None, 13, np.datetime64("NaT"), 79, np.datetime64("NaT", "ns"), None])
+        type_name = template.format(type_name)
+        expected = build_native_block([("t", type_name, wrap([None, 13, None, 79, None, None]))])
+        assert self._encode(type_name, values) == expected
+        assert self._encode(type_name, _NdarrayLikeColumn(values), len(values)) == expected
+
+    def test_numpy_datetime_nat_low_cardinality_nullable(self):
+        np = pytest.importorskip("numpy")
+        type_name = "LowCardinality(Nullable(DateTime))"
+        values = [None, np.datetime64("NaT"), np.datetime64(13, "s"), np.datetime64("NaT", "ns")]
+        expected = build_native_block([("t", type_name, [None, None, 13, None])])
+        assert self._encode(type_name, values) == expected
+        assert self._encode(type_name, _NdarrayLikeColumn(values), len(values)) == expected

@@ -178,14 +178,54 @@ def test_numpy_datetime64_floor_and_range(param_client, call, table_context, sca
 
 
 @pytest.mark.local_only
-@pytest.mark.parametrize("type_name", ["DateTime", "Nullable(DateTime64(3))"])
-def test_numpy_datetime_nat(param_client, call, table_context, type_name):
-    with table_context("numpy_datetime_nat", ["id UInt8", f"v {type_name}"]):
-        rows = [[1, np.datetime64("NaT")]]
-        if type_name.startswith("Nullable"):
-            rows.insert(0, [0, None])
-        with pytest.raises(DataError, match="column.*v.*NaT"):
+@pytest.mark.parametrize("type_name", ["DateTime", "DateTime64(3)"])
+@pytest.mark.parametrize("nullable", [False, True])
+def test_numpy_datetime_nat(param_client, call, table_context, type_name, nullable):
+    if nullable:
+        type_name = f"Nullable({type_name})"
+    columns = [
+        "id UInt8",
+        f"v {type_name}",
+        f"a Array({type_name})",
+        f"t Tuple(String, {type_name})",
+        f"at Array(Tuple(String, {type_name}))",
+    ]
+    with table_context("numpy_datetime_nat", columns):
+        values = [np.datetime64("NaT"), np.datetime64(13, "s")]
+        if nullable:
+            values.insert(0, None)
+        rows = [[i, v, [v], ("user_1", v), [("user_1", v)]] for i, v in enumerate(values)]
+        if nullable:
             call(param_client.insert, "numpy_datetime_nat", rows)
+            result = call(param_client.query, "SELECT v,a,t,at FROM numpy_datetime_nat ORDER BY id").result_rows
+            null_row = (None, [None], ("user_1", None), [("user_1", None)])
+            assert result[:2] == [null_row] * 2
+            assert result[2][0] is not None
+            nat = np.datetime64("NaT")
+            call(param_client.insert, "numpy_datetime_nat", [[3, nat, [nat], ("user_1", nat), [("user_1", nat)]]])
+            assert call(param_client.query, "SELECT v,a,t,at FROM numpy_datetime_nat WHERE id=3").result_rows == [null_row]
+        else:
+            with pytest.raises(DataError, match="column.*v.*NaT"):
+                call(param_client.insert, "numpy_datetime_nat", rows)
+
+
+@pytest.mark.local_only
+@pytest.mark.parametrize("use_extended_dtypes", [False, True])
+def test_numpy_datetime_nullable_df_roundtrip(param_client, call, table_context, use_extended_dtypes):
+    frame = call(
+        param_client.query_df,
+        "SELECT number AS id, CAST(if(number=0, NULL, 13), 'Nullable(DateTime)') AS v FROM numbers(2) ORDER BY id",
+        use_extended_dtypes=use_extended_dtypes,
+    )
+    values = frame["v"].to_numpy()
+    assert np.isnat(values[0])
+    with table_context("numpy_datetime_nullable_df", ["id UInt8", "v Nullable(DateTime)"]):
+        call(param_client.insert, "numpy_datetime_nullable_df", [[i, v] for i, v in enumerate(values)])
+        result = call(
+            param_client.query,
+            "SELECT id,isNull(v),toUnixTimestamp(v) FROM numpy_datetime_nullable_df ORDER BY id",
+        ).result_rows
+        assert result == [(0, 1, None), (1, 0, 13)]
 
 
 @pytest.mark.local_only
@@ -228,9 +268,10 @@ def test_numpy_datetime_low_cardinality(param_client, call, table_context, nulla
         values = [[1, np.datetime64(1379, "ms")], [2, np.datetime64(1379, "ms")]]
         if nullable:
             values.insert(0, [0, None])
+            values.append([3, np.datetime64("NaT")])
         call(param_client.insert, "numpy_datetime_lc", values)
         result = call(param_client.query, "SELECT id, toUnixTimestamp(v) FROM numpy_datetime_lc ORDER BY id").result_rows
-        assert result == ([(0, None)] if nullable else []) + [(1, 1), (2, 1)]
+        assert result == ([(0, None)] if nullable else []) + [(1, 1), (2, 1)] + ([(3, None)] if nullable else [])
 
 
 @pytest.mark.parametrize("setting", ["local", pytest.param("server", marks=pytest.mark.local_only)])

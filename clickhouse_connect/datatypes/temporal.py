@@ -207,6 +207,11 @@ class DateTimeBase(ClickHouseType, registered=False):
     valid_formats = "native", "int"
     python_type = datetime
 
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        if self.nullable and options.np is not None and isinstance(first_value(column, True), options.np.datetime64):
+            column = [None if value is not None and options.np.isnat(value) else value for value in column]
+        super().write_column_data(column, dest, ctx)
+
     @property
     def pandas_dtype(self):
         """Sets dtype for pandas datetime objects"""

@@ -346,7 +346,7 @@ pub(super) fn nullable_scalar_column<'py, R: RowAccess<'py>>(
 ) -> PyResult<Column> {
     let mut null_map = Vec::with_capacity(row_count);
     let mut scalars = Vec::with_capacity(row_count);
-    let mut time_probe = TimeScalarProbe::new(inner);
+    let mut time_probe = TemporalScalarProbe::new(inner);
     for row in 0..row_count {
         let value = rows.value(row)?;
         if value.is_none() {
@@ -363,7 +363,7 @@ pub(super) fn nullable_scalar_column<'py, R: RowAccess<'py>>(
                 }
                 Some(TimeProbe::Ticks(ticks)) => {
                     null_map.push(0);
-                    scalars.push(time_ticks_scalar(inner, ticks, name, row)?);
+                    scalars.push(temporal_ticks_scalar(inner, ticks, name, row)?);
                     continue;
                 }
                 None => {}
@@ -1152,7 +1152,8 @@ fn seq_values<T: FastValue, S: FastSeq>(
 ) -> PyResult<(Vec<T>, Option<Bitmap>)> {
     let mut values = Vec::with_capacity(row_count);
     let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
-    let mut time_probe = TimeScalarProbe::new(ch_type);
+    let mut time_probe = TemporalScalarProbe::new(ch_type)
+        .filter(|_| nullable || matches!(ch_type, ChType::Time | ChType::Time64 { .. }));
     let fast_limit = match ch_type {
         ChType::Time => MAX_TIME_SECONDS,
         ChType::Time64 { precision } => max_time64_ticks(*precision),
@@ -1199,7 +1200,7 @@ fn seq_values<T: FastValue, S: FastSeq>(
                                 values.push(T::DEFAULT);
                             }
                             TimeProbe::Ticks(ticks) => {
-                                let scalar = time_ticks_scalar(ch_type, ticks, name, row)?;
+                                let scalar = temporal_ticks_scalar(ch_type, ticks, name, row)?;
                                 values.push(T::from_scalar(scalar)?);
                             }
                         }

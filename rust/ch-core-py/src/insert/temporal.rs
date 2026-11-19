@@ -102,7 +102,7 @@ fn numpy_datetime_ticks(
     column: &str,
     row: usize,
     type_name: &str,
-) -> PyResult<Option<i64>> {
+) -> PyResult<Option<TimeProbe>> {
     let py = value.py();
     let Ok(dtype) = value.getattr(intern!(py, "dtype")) else {
         return Ok(None);
@@ -137,9 +137,7 @@ fn numpy_datetime_ticks(
         ))
     })?;
     if raw == i64::MIN {
-        return Err(PyValueError::new_err(format!(
-            "column {column:?} row {row} cannot insert NumPy datetime64 NaT into {type_name}"
-        )));
+        return Ok(Some(TimeProbe::Nat));
     }
     let (unit, multiplier) = numpy
         .call_method1(intern!(py, "datetime_data"), (&dtype,))?
@@ -180,7 +178,9 @@ fn numpy_datetime_ticks(
         .and_then(|value| value.checked_mul(i128::from(time64_scale(precision))))
         .ok_or_else(overflow)?
         .div_euclid(denominator);
-    i64::try_from(ticks).map(Some).map_err(|_| overflow())
+    i64::try_from(ticks)
+        .map(|ticks| Some(TimeProbe::Ticks(ticks)))
+        .map_err(|_| overflow())
 }
 
 fn numpy_timedelta_scalar_raw(
@@ -241,18 +241,17 @@ fn is_pandas_nat(value: &Bound<'_, PyAny>) -> bool {
     name == b"NaTType" || name.ends_with(b".NaTType")
 }
 
-/// Non-null outcome of probing one Time/Time64 cell.
+/// Outcome of probing one temporal cell.
 pub(super) enum TimeProbe {
     Nat,
     Ticks(i64),
 }
 
-/// Per-column state for probing Time/Time64 cells that are not one of the
-/// exact fast types. The parsed dtype and unit ratio are cached and reused
-/// while subsequent cells carry an identical or equal dtype object.
-pub(super) struct TimeScalarProbe {
+/// Per-column temporal scalar probe. Time/Time64 dtype metadata is cached.
+pub(super) struct TemporalScalarProbe {
     precision: u8,
     fractional: bool,
+    datetime: bool,
     type_name: &'static str,
     cache: Option<TimeDtypeCache>,
 }
@@ -264,35 +263,56 @@ struct TimeDtypeCache {
     ratio: NumpyTimeRatio,
 }
 
-impl TimeScalarProbe {
+impl TemporalScalarProbe {
     pub(super) fn new(ch_type: &ChType) -> Option<Self> {
         match ch_type {
             ChType::Time => Some(Self {
                 precision: 0,
                 fractional: false,
+                datetime: false,
                 type_name: "Time",
                 cache: None,
             }),
             ChType::Time64 { precision } => Some(Self {
                 precision: *precision,
                 fractional: true,
+                datetime: false,
                 type_name: "Time64",
+                cache: None,
+            }),
+            ChType::DateTime { .. } => Some(Self {
+                precision: 0,
+                fractional: false,
+                datetime: true,
+                type_name: "DateTime",
+                cache: None,
+            }),
+            ChType::DateTime64 { precision, .. } => Some(Self {
+                precision: *precision,
+                fractional: true,
+                datetime: true,
+                type_name: "DateTime64",
                 cache: None,
             }),
             _ => None,
         }
     }
 
-    /// Probe one cell. `Ok(None)` means the value is neither a NumPy
-    /// timedelta scalar nor pandas NaT; the caller converts it normally.
+    /// Return `None` when the caller must use its normal scalar conversion.
     pub(super) fn probe(
         &mut self,
         value: &Bound<'_, PyAny>,
         column: &str,
         row: usize,
     ) -> PyResult<Option<TimeProbe>> {
+        if self.datetime && value.is_instance_of::<PyDateTime>() {
+            return Ok(None);
+        }
         if !should_probe_numpy_timedelta(value) {
             return Ok(None);
+        }
+        if self.datetime {
+            return numpy_datetime_ticks(value, self.precision, column, row, self.type_name);
         }
         let py = value.py();
         let Ok(dtype) = value.getattr(intern!(py, "dtype")) else {
@@ -349,21 +369,29 @@ impl TimeScalarProbe {
     }
 }
 
-/// Build the Time/Time64 scalar for probed ticks.
-pub(super) fn time_ticks_scalar(
+/// Build the temporal scalar for probed ticks.
+pub(super) fn temporal_ticks_scalar(
     ch_type: &ChType,
     ticks: i64,
     column: &str,
     row: usize,
 ) -> PyResult<Scalar> {
     match ch_type {
+        ChType::DateTime { .. } => Ok(Scalar::DateTime(u32::try_from(ticks).map_err(|_| {
+            PyValueError::new_err(format!(
+                "column {column:?} row {row} DateTime value {ticks} is outside UInt32 range"
+            ))
+        })?)),
+        ChType::DateTime64 { .. } => Ok(Scalar::DateTime64(ticks)),
         ChType::Time => {
             Ok(Scalar::Time(i32::try_from(ticks).map_err(|_| {
                 time_range_error(column, row, "Time", ticks)
             })?))
         }
         ChType::Time64 { .. } => Ok(Scalar::Time64(ticks)),
-        _ => Err(PyValueError::new_err("internal Time scalar type mismatch")),
+        _ => Err(PyValueError::new_err(
+            "internal temporal scalar type mismatch",
+        )),
     }
 }
 
@@ -785,8 +813,13 @@ pub(super) fn datetime_seconds(
     if let Ok(secs) = value.extract::<i64>() {
         return Ok(secs);
     }
-    if let Some(secs) = numpy_datetime_ticks(value, 0, column, row, "DateTime")? {
-        return Ok(secs);
+    if let Some(probe) = numpy_datetime_ticks(value, 0, column, row, "DateTime")? {
+        return match probe {
+            TimeProbe::Ticks(secs) => Ok(secs),
+            TimeProbe::Nat => Err(PyValueError::new_err(format!(
+                "column {column:?} row {row} cannot insert NumPy datetime64 NaT into DateTime"
+            ))),
+        };
     }
     let ts = value
         .call_method0("timestamp")
@@ -825,8 +858,13 @@ pub(super) fn datetime64_ticks(
         return Ok(ticks);
     }
     if !value.is_instance_of::<PyString>() {
-        if let Some(ticks) = numpy_datetime_ticks(value, precision, column, row, "DateTime64")? {
-            return Ok(ticks);
+        if let Some(probe) = numpy_datetime_ticks(value, precision, column, row, "DateTime64")? {
+            return match probe {
+                TimeProbe::Ticks(ticks) => Ok(ticks),
+                TimeProbe::Nat => Err(PyValueError::new_err(format!(
+                    "column {column:?} row {row} cannot insert NumPy datetime64 NaT into DateTime64"
+                ))),
+            };
         }
     }
 
