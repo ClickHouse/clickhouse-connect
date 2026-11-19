@@ -141,7 +141,7 @@ directory.
 | `RETRY_FAILED` | `0` | Run the failed tests again, at most this many times. Do not use it to grow or check the allowlist. |
 | `CLICKHOUSE_TEST_RUNNER_PYTHON` | `python3` | The Python interpreter of the program and of the runner. |
 | `CLICKHOUSE_CONNECT_USE_C` | `1` | `0` tests the pure Python decoding of clickhouse-connect instead of the Cython extensions. |
-| `CLICKHOUSE_CLIENT_CLI_LOG` | (none) | A file. Each invocation of the program adds its arguments, statements, errors and the log records of clickhouse-connect to it. |
+| `CLICKHOUSE_CLIENT_CLI_LOG` | (none) | A file. Each invocation of the program adds its arguments (the `--password` value hidden), statements, errors and the log records of clickhouse-connect to it. |
 | `CLICKHOUSE_HOST` | `localhost` | The server host. The runner gives it to the program as `--host`. |
 | `CLICKHOUSE_PORT_TCP`, `CLICKHOUSE_PORT_HTTP` | `9000`, `8123` | The ports of the server. The runner gives `--port=$CLICKHOUSE_PORT_TCP` (the native port); the program uses `CLICKHOUSE_PORT_HTTP` for it. |
 | `CLICKHOUSE_PORT_TCP_SECURE`, `CLICKHOUSE_PORT_HTTPS` | `9440`, `8443` | The same mapping for `--secure`. |

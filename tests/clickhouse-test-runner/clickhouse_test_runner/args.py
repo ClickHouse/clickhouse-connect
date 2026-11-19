@@ -165,6 +165,23 @@ def parse_args(argv: list[str]) -> Options:
     return opts
 
 
+def redact_password(argv: list[str]) -> list[str]:
+    """Return the arguments with the value of --password replaced by ***, for the log: CI keeps the log as an
+    artifact. parse_args always takes the argument after --password as its value, so each argument after a
+    --password argument is hidden. This is also the case when parse_args read that --password as the value
+    of another option: the log can then hide a value that is not the password, but never shows the
+    password."""
+    redacted: list[str] = []
+    for i, arg in enumerate(argv):
+        if i > 0 and argv[i - 1] == "--password":
+            redacted.append("***")
+        elif arg.startswith("--password="):
+            redacted.append("--password=***")
+        else:
+            redacted.append(arg)
+    return redacted
+
+
 def extract_from_config(argv: list[str]) -> str:
     """Answer `clickhouse extract-from-config --key <key>`, which tests/clickhouse-test runs to read the
     server config. Only listen_host has an answer; for other keys the output is empty, as for a key that

@@ -11,7 +11,7 @@ import sys
 import traceback
 from typing import BinaryIO, TextIO
 
-from .args import USAGE, ArgsError, extract_from_config, parse_args
+from .args import USAGE, ArgsError, extract_from_config, parse_args, redact_password
 from .log import InvocationLog, LogHandler
 
 
@@ -28,7 +28,7 @@ def main(argv: list[str], stdin: BinaryIO, stdout: BinaryIO, stderr: TextIO) -> 
 
 
 def _run(argv: list[str], stdin: BinaryIO, stdout: BinaryIO, stderr: TextIO, log: InvocationLog) -> int:
-    log.add("argv", " ".join(argv))
+    log.add("argv", " ".join(redact_password(argv)))
     try:
         opts = parse_args(argv)
     except ArgsError as ex:

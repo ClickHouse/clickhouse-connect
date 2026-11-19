@@ -12,6 +12,7 @@ import uuid
 
 import pytest
 from clickhouse_test_runner.__main__ import main
+from clickhouse_test_runner.log import LOG_PATH_ENV
 
 LIVE_ENV = "CLICKHOUSE_TEST_RUNNER_LIVE"
 HOST = os.environ.get("CLICKHOUSE_HOST", "localhost")
@@ -238,6 +239,20 @@ def test_session_timezone():
     )
     assert (code, err) == (0, "")
     assert out == b"2020-01-01 00:00:00\t2020-01-01 00:00:00.5\tAsia/Tokyo\t1\n"
+
+
+@pytest.mark.parametrize("option, redacted", [("--password {}", "--password ***"), ("--password={}", "--password=***")])
+def test_log_hides_the_password(option, redacted, tmp_path, monkeypatch):
+    # CI keeps the log as an artifact. Only the log is checked: the server can refuse the password, and the
+    # error text and the traceback then go to the log too.
+    path = tmp_path / "cli.log"
+    monkeypatch.setenv(LOG_PATH_ENV, str(path))
+    password = f"password_{uuid.uuid4().hex}"
+    argv = ["--host", HOST, "--port", PORT, *option.format(password).split(), "--query", "SELECT 1"]
+    main(argv, io.BytesIO(), io.BytesIO(), io.StringIO())
+    log = path.read_text()
+    assert redacted in log and "address=" in log
+    assert password not in log
 
 
 def test_errors():

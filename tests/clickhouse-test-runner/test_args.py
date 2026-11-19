@@ -4,7 +4,7 @@ import io
 
 import pytest
 from clickhouse_test_runner.__main__ import main
-from clickhouse_test_runner.args import ArgsError, Options, parse_args
+from clickhouse_test_runner.args import ArgsError, Options, parse_args, redact_password
 from clickhouse_test_runner.formats import split_output_format
 from clickhouse_test_runner.log import InvocationLog
 from clickhouse_test_runner.runner import Runner, http_port, parse_set_assignments, parse_use_database
@@ -45,6 +45,16 @@ def test_short_options():
 def test_setting_values():
     opts = parse_args(["--max_threads", "-1", "--max-insert-threads", "2", "--query=SELECT 1"])
     assert opts.settings == {"max_threads": "-1", "max_insert_threads": "2"}
+
+
+def test_redact_password():
+    argv = ["--user", "u", "--password", "secret", "--password=secret2", "--query", "SELECT 1", "--password"]
+    assert redact_password(argv) == ["--user", "u", "--password", "***", "--password=***", "--query", "SELECT 1", "--password"]
+    # The parser reads the first --password as the user name, and the value after the second one as the
+    # password.
+    argv = ["-u", "--password", "--password", "secret"]
+    assert parse_args(argv).password == "secret"
+    assert redact_password(argv) == ["-u", "--password", "***", "***"]
 
 
 @pytest.mark.parametrize("argv", [["--port=abc"], ["--query"]])
