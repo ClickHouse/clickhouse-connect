@@ -100,6 +100,17 @@ def test_build_map_rows_parity(keys, values, offsets, map_type, expected, offset
     assert build_map_rows(keys, values, offsets_cls(offsets), map_type) == expected
 
 
+@pytest.mark.parametrize("map_type", [dict, list], ids=["dict", "pairs"])
+@pytest.mark.parametrize("build_map_rows", [py_build_map_rows, c_build_map_rows], ids=["python", "cython"])
+def test_build_map_rows_parity_keeps_element_objects(map_type, build_map_rows):
+    keys = list(np.array([13, 79, 80], dtype=np.uint64))
+    values = list(np.array([1.5, 2.5, 3.5]))
+    rows = build_map_rows(keys, values, array.array("Q", [2, 3]), map_type)
+    pairs = [pair for row in rows for pair in (row.items() if map_type is dict else row)]
+    assert pairs == list(zip(keys, values))
+    assert all(k is keys[ix] and v is values[ix] for ix, (k, v) in enumerate(pairs))
+
+
 def test_read_nullable_array_parity():
     payload = bytes([0, 1, 0]) + np.array([10, 20, 30], dtype=np.uint16).tobytes()
     py_source = bytes_source(payload, cls=PyResponseBuffer)
