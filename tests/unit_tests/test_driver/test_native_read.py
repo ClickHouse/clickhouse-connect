@@ -416,6 +416,24 @@ def test_decimal_alias_canonical_precision(size, precision):
 
 
 @pytest.mark.parametrize(
+    "type_name, raw, expected",
+    [
+        ("Decimal(9, 4)", [12345, 100, 0, -100, -1], ["1.2345", "0.0100", "0.0000", "-0.0100", "-0.0001"]),
+        ("Decimal(18, 2)", [10**18 - 1, -(10**18 - 1)], ["9999999999999999.99", "-9999999999999999.99"]),
+        ("Decimal(38, 10)", [10**38 - 1, -500], ["9999999999999999999999999999.9999999999", "-5.00E-8"]),
+        ("Decimal(76, 30)", [10**76 - 1, 10**30], ["9" * 46 + "." + "9" * 30, "1." + "0" * 30]),
+    ],
+)
+@pytest.mark.parametrize("buffer_cls", [CResponseBuffer, PyResponseBuffer], ids=["cython", "python"])
+def test_decimal_read_keeps_scale_exponent(type_name, raw, expected, buffer_cls):
+    ch_type = registry.get_from_name(type_name)
+    payload = b"".join(x.to_bytes(ch_type.byte_size, "little", signed=True) for x in raw)
+    result = ch_type.read_column(bytes_source(payload, cls=buffer_cls), len(raw), QueryContext())
+    assert [str(x) for x in result] == expected
+    assert all(x.as_tuple().exponent == -ch_type.scale for x in result)
+
+
+@pytest.mark.parametrize(
     "element_type, value",
     [
         ("UInt64", None),
