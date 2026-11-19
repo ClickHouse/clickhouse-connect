@@ -1339,7 +1339,7 @@ class Client(ABC):
     ) -> QuerySummary:
         """
         Insert data already formatted in a bytes object
-        :param table: Table name (whether qualified with the database name or not)
+        :param table: Table SQL inserted as written, without quoting. Quote identifiers as needed. Do not pass untrusted text.
         :param column_names: Sequence of column names
         :param insert_block: Binary or string data already in a recognized ClickHouse format
         :param settings:  Optional dictionary of ClickHouse settings (key/string values)

@@ -129,7 +129,7 @@ def test_create_table_from_arrow_schema_builds_expected_ddl():
         engine_params={"ORDER BY": "id"},
     )
 
-    assert ddl == "CREATE TABLE arrow_basic_test (id Int64, name String, score Float32, flag Bool) ENGINE MergeTree  ORDER BY id"
+    assert ddl == "CREATE TABLE arrow_basic_test (`id` Int64, `name` String, `score` Float32, `flag` Bool) ENGINE MergeTree  ORDER BY id"
 
 
 def test_create_table_from_arrow_schema_matches_manual_create_table():
@@ -157,3 +157,11 @@ def test_create_table_from_arrow_schema_matches_manual_create_table():
     )
 
     assert ddl_manual == ddl_wrapper
+
+
+def test_create_table_from_arrow_schema_quotes_column_names():
+    schema = pa.schema([(name, pa.int64()) for name in ["my col", "x`y", "a.b", "select"]])
+
+    ddl = create_table_from_arrow_schema("db.t", schema, "MergeTree", {"ORDER BY": "tuple()"})
+
+    assert ddl == "CREATE TABLE db.t (`my col` Int64, `x\\`y` Int64, `a.b` Int64, `select` Int64) ENGINE MergeTree  ORDER BY tuple()"
