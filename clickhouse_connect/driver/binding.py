@@ -3,6 +3,7 @@ import ipaddress
 import re
 import uuid
 import zoneinfo
+from bisect import bisect_right
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from enum import Enum
@@ -785,13 +786,16 @@ def _splice_binary_binds(query: str, binary_binds: dict[str, Any], client_params
     # inside a bound value stays data. A marker inside a `%(name)s` key is part of that name.
     values = {k: format_query_value(v, server_tz) for k, v in client_params.items()} if client_params else None
     key_spans = list(_pyformat_key_spans(query)) if values else []
+    span_starts = [start for start, _ in key_spans]
     marker_ends: dict[int, str] = {}
     for key, value in binary_binds.items():
         found = False
         index = query.find(key)
         while index != -1:
             end = index + len(key)
-            if not any(start <= index and end <= stop for start, stop in key_spans):
+            # Key spans are ordered and do not overlap, so only the last one that starts at or before the marker can hold it.
+            span = bisect_right(span_starts, index) - 1
+            if span < 0 or key_spans[span][1] < end:
                 marker_ends[end] = key
                 found = True
             index = query.find(key, end)
