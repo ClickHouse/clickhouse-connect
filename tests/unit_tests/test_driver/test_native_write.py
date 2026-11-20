@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 
 from clickhouse_connect.datatypes.registry import get_from_name
+from clickhouse_connect.driver import options
 from clickhouse_connect.driver.exceptions import DataError, ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
@@ -777,7 +778,6 @@ def test_uuid_native_write_binary(convert):
     ids=["short", "long", "two_uuids", "bytearray", "memoryview"],
 )
 def test_uuid_native_write_rejects_binary_of_wrong_length(type_name, build, value):
-    # A UUID is 16 bytes on the wire, so any other length moves every value that follows in the block
     ch_type = get_from_name(type_name)
     column = build([UUID_VALUES[0].bytes, value, UUID_VALUES[2].bytes])
     with pytest.raises(DataError, match=f"UUID bytes length is {len(value)}, expected 16"):
@@ -785,21 +785,35 @@ def test_uuid_native_write_rejects_binary_of_wrong_length(type_name, build, valu
 
 
 @pytest.mark.parametrize(
+    "type_name, build",
+    [
+        ("UUID", lambda vals: vals),
+        ("Array(UUID)", lambda vals: [vals]),
+        ("Tuple(UUID, String)", lambda vals: [(v, "user_1") for v in vals]),
+        ("LowCardinality(UUID)", lambda vals: vals),
+        ("Map(String, UUID)", lambda vals: [{"value": v} for v in vals]),
+    ],
+    ids=["scalar", "array", "tuple", "low_cardinality", "map"],
+)
+@pytest.mark.parametrize(
     "convert",
     [lambda u: u, str, lambda u: u.int, lambda u: u.bytes],
     ids=["uuid", "str", "int", "bytes"],
 )
-def test_uuid_native_write_leading_none(convert):
-    # None in a non-nullable column is the zero UUID. Its position must not change the other rows
-    ch_type = get_from_name("UUID")
+def test_uuid_native_write_leading_none(type_name, build, convert):
+    # None in a non-nullable column is the zero UUID in that row
+    ch_type = get_from_name(type_name)
     dest = bytearray()
-    column = [None, convert(UUID_VALUES[0]), None, convert(UUID_VALUES[2])]
+    column = build([None, convert(UUID_VALUES[0]), None, convert(UUID_VALUES[2])])
     ch_type.write_column(column, dest, InsertContext("table", ["value"], [ch_type]))
 
-    assert bytes(dest) == b"".join(_uuid_wire(u) for u in (None, UUID_VALUES[0], None, UUID_VALUES[2]))
+    expected = bytearray()
+    zero_column = build([convert(UUID(int=0)), convert(UUID_VALUES[0]), convert(UUID(int=0)), convert(UUID_VALUES[2])])
+    ch_type.write_column(zero_column, expected, InsertContext("table", ["value"], [ch_type]))
+    assert dest == expected
 
 
-@pytest.mark.parametrize("value", [None, float("nan"), 1.5], ids=["none", "nan", "float"])
+@pytest.mark.parametrize("value", [None, float("nan")], ids=["none", "nan"])
 def test_uuid_native_write_no_supported_value(value):
     ch_type = get_from_name("UUID")
     dest = bytearray()
@@ -808,10 +822,62 @@ def test_uuid_native_write_no_supported_value(value):
     assert bytes(dest) == _uuid_wire(None) * 2
 
 
+@pytest.mark.parametrize("missing_name", ["np.nan", "pd.NA", "pd.NaT"])
+def test_uuid_native_write_optional_missing_values(missing_name):
+    if missing_name == "np.nan":
+        np = pytest.importorskip("numpy")
+        value = np.float64("nan")
+    else:
+        pd = pytest.importorskip("pandas")
+        value = pd.NA if missing_name == "pd.NA" else pd.NaT
+    ch_type = get_from_name("UUID")
+    dest = bytearray()
+    ch_type.write_column([None, value], dest, InsertContext("table", ["value"], [ch_type]))
+    assert bytes(dest) == _uuid_wire(None) * 2
+
+
+@pytest.mark.parametrize("value", [None, float("nan"), 1.5], ids=["none", "nan", "unsupported"])
+def test_uuid_native_write_without_pandas(monkeypatch, value):
+    monkeypatch.setattr(options, "pd", None)
+    ch_type = get_from_name("UUID")
+    ctx = InsertContext("table", ["value"], [ch_type])
+    dest = bytearray()
+    if value == 1.5:
+        with pytest.raises(DataError, match="Unsupported UUID value type: float"):
+            ch_type.write_column([value], dest, ctx)
+    else:
+        ch_type.write_column([value], dest, ctx)
+        assert bytes(dest) == _uuid_wire(None)
+
+
+class UUIDBytesDuck:
+    bytes = UUID_VALUES[0].bytes
+
+
+class UUIDIntDuck:
+    int = UUID_VALUES[0].int
+
+
+@UUID_COLUMN_SHAPES
+@pytest.mark.parametrize("with_none", [False, True])
+@pytest.mark.parametrize(
+    "value",
+    [1.5, float("inf"), Decimal("13"), Decimal("NaN"), [13, 79], {"id": 13}, UUIDBytesDuck(), UUIDIntDuck(), "np.int64"],
+    ids=["float", "inf", "decimal", "decimal_nan", "list", "dict", "bytes_duck", "int_duck", "numpy_int"],
+)
+def test_uuid_native_write_rejects_unsupported_only(type_name, build, with_none, value):
+    if isinstance(value, str):
+        value = pytest.importorskip("numpy").int64(13)
+    ch_type = get_from_name(type_name)
+    column = build([None, value] if with_none else [value, value])
+    with pytest.raises(DataError, match=f"Unsupported UUID value type: {type(value).__name__}"):
+        ch_type.write_column(column, bytearray(), InsertContext("table", ["value"], [ch_type]))
+
+
 @UUID_COLUMN_SHAPES
 @pytest.mark.parametrize("value", [float("nan"), 1.5, [13, 79], {"id": 13}], ids=["nan", "float", "list", "dict"])
 def test_uuid_native_write_unsupported_first_value(type_name, build, value):
-    # The value raises as it does in any other row. It must not turn the UUIDs after it into zero UUIDs
+    # An unsupported value before a supported one raises
     ch_type = get_from_name(type_name)
     column = build([value, UUID_VALUES[0], UUID_VALUES[2]])
     with pytest.raises(AttributeError):

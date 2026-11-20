@@ -13,6 +13,7 @@ from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
 
 empty_uuid_b = bytes(b"\x00" * 16)
+_UUID_INPUT_TYPES = (str, int, PYUUID, bytes, bytearray, memoryview)
 
 
 def _write_big_endian_uuids(values: list[bytes], dest: bytearray):
@@ -48,9 +49,8 @@ class UUID(ClickHouseType):
         return column
 
     def _write_column_binary(self, column: Sequence | MutableSequence, dest: bytearray, ctx: InsertContext):
-        # The first value of a supported type selects the writer. A leading None or a value of
-        # another type must not select it for the rows that follow.
-        first = next((v for v in column if isinstance(v, (str, int, PYUUID, bytes, bytearray, memoryview))), None)
+        # The first str, int, UUID or binary value selects the writer
+        first = next((v for v in column if v is not None and isinstance(v, _UUID_INPUT_TYPES)), None)
         empty = empty_uuid_b
         if isinstance(first, str) or self.write_format(ctx) == "string":
             _write_big_endian_uuids([int(v.replace("-", ""), 16).to_bytes(16, "big") if v else empty for v in column], dest)
@@ -68,6 +68,13 @@ class UUID(ClickHouseType):
                 else:
                     dest += bytes(reversed(v[:8])) + bytes(reversed(v[8:]))
         else:
+            for v in column:
+                if (
+                    v is not None
+                    and not (isinstance(v, float) and v != v)
+                    and not (options.pd is not None and (v is options.pd.NA or v is options.pd.NaT))
+                ):
+                    raise ctx.data_error(f"Unsupported UUID value type: {type(v).__name__}")
             dest += empty * len(column)
 
 
