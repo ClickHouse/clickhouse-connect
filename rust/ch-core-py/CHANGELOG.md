@@ -7,6 +7,10 @@ Driver integration changes and core version requirements belong in the [driver c
 
 ## UNRELEASED
 
+### Bug Fixes
+
+- DateTime and DateTime64 inserts now accept NumPy datetime64 scalars, including nested and nullable values. Conversion uses exact UTC epoch ticks. NaT is NULL in a Nullable column and an error otherwise.
+
 ## 0.2.3, 2026-10-16
 
 ### Improvements

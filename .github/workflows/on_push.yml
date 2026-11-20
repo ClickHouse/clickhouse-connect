@@ -23,6 +23,10 @@ on:
       - 'publish.yaml'
       - '.github/workflows/clickhouse_ci.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   clickhouse-versions:
     uses: ./.github/workflows/clickhouse-versions.yml
@@ -350,7 +354,7 @@ jobs:
 
   check-secret:
     runs-on: ubuntu-26.04
-    needs: [bare-import-test, tests, pandas-3x-compat-test, no-lz4-test, sqlalchemy-1x-compat-test]
+    needs: [lint, typecheck]
     outputs:
       has_secrets: ${{ steps.has_secrets.outputs.HAS_SECRETS }}
     steps:

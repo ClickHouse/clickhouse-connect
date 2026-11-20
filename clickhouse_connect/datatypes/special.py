@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID as PYUUID
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef, UnsupportedType, _TypeArgs
+from clickhouse_connect.datatypes.container import _contains_dynamic
 from clickhouse_connect.datatypes.registry import _canonicalize_variant_name, get_from_name
 from clickhouse_connect.driver import options
 from clickhouse_connect.driver.ctypes import data_conv
@@ -90,6 +91,15 @@ class Nothing(ArrayType):
 class SimpleAggregateFunction(ClickHouseType):
     _slots = ("element_type",)
     _type_args = _TypeArgs(2, 2, nested=(1,))
+
+    @property
+    def insert_name(self) -> str:
+        if _contains_dynamic(self.element_type):
+            name = self.element_type.insert_name
+            for wrapper in reversed(self.wrappers):
+                name = f"{wrapper}({name})"
+            return name
+        return self.name
 
     def __init__(self, type_def: TypeDef):
         self.element_type: ClickHouseType = get_from_name(type_def.values[1])

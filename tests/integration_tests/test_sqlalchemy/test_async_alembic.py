@@ -15,7 +15,7 @@ from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from clickhouse_connect.cc_sqlalchemy import engines, types
-from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseImpl, include_object
+from clickhouse_connect.cc_sqlalchemy.alembic import ClickHouseImpl, ClickHouseIndex, ClickHouseProjection, include_object
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from tests.integration_tests.conftest import TestConfig
 
@@ -67,6 +67,37 @@ async def test_async_sqlalchemy_alembic_run_sync(test_config: TestConfig) -> Non
             async with engine.begin() as connection:
                 await connection.exec_driver_sql(f"DROP TABLE IF EXISTS `{table_name}`")
                 await connection.exec_driver_sql(f"DROP TABLE IF EXISTS `{version_table}`")
+        finally:
+            await asyncio.wait_for(engine.dispose(), 10.0)
+
+
+@pytest.mark.local_only
+@pytest.mark.asyncio(loop_scope="function")
+async def test_async_alembic_create_table_positional_items(test_config: TestConfig) -> None:
+    engine = create_async_engine(_async_url(test_config))
+    table_name = f"test_async_positional_items_{uuid.uuid4().hex}"
+    try:
+        async with engine.begin() as connection:
+
+            def create_and_reflect(sync_connection):
+                Operations(MigrationContext.configure(sync_connection)).create_table(
+                    table_name,
+                    sa.Column("id", types.UInt32),
+                    engines.MergeTree(order_by="id"),
+                    ClickHouseIndex("id_idx", "id", "minmax", 1),
+                    ClickHouseProjection("id_projection", "SELECT id ORDER BY id"),
+                )
+                reflected = sa.Table(table_name, sa.MetaData(), autoload_with=sync_connection)
+                assert reflected.engine.name == "MergeTree"
+                inspector = sa.inspect(sync_connection)
+                assert [index.name for index in inspector.get_clickhouse_indexes(table_name)] == ["id_idx"]
+                assert [projection.name for projection in inspector.get_clickhouse_projections(table_name)] == ["id_projection"]
+
+            await connection.run_sync(create_and_reflect)
+    finally:
+        try:
+            async with engine.begin() as connection:
+                await connection.exec_driver_sql(f"DROP TABLE IF EXISTS `{table_name}`")
         finally:
             await asyncio.wait_for(engine.dispose(), 10.0)
 

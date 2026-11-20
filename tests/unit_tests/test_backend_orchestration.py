@@ -270,7 +270,7 @@ def test_insert_context_sequence_skips_describe_with_explicit_types():
     )
 
     assert backend.operations == []
-    assert context.table == "db2.target_table"
+    assert context.table == "`db2`.`target_table`"
     assert [t.name for t in context.column_types] == ["UInt32"]
 
 

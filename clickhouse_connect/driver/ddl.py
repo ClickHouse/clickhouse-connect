@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, NamedTuple, Protocol
 
+from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.options import check_arrow
 
 if TYPE_CHECKING:
@@ -28,13 +29,14 @@ class TableColumnDef(NamedTuple):
 
     @property
     def col_expr(self):
-        expr = f"{self.name} {self.ch_type.name}"
+        expr = f"{quote_identifier(self.name)} {self.ch_type.name}"
         if self.expr_type:
             expr += f" {self.expr_type} {self.expr}"
         return expr
 
 
 def create_table(table_name: str, columns: Sequence[TableColumnDef], engine: str, engine_params: dict):
+    """Quote column names. table_name, engine, engine_params, expr_type and expr are SQL fragments used as written."""
     stmt = f"CREATE TABLE {table_name} ({', '.join(col.col_expr for col in columns)}) ENGINE {engine} "
     if engine_params:
         for key, value in engine_params.items():
@@ -165,10 +167,9 @@ def create_table_from_arrow_schema(
     engine_params: dict,
 ) -> str:
     """
-    Helper function to build a CREATE TABLE statement from a PyArrow Schema.
+    Build CREATE TABLE with quoted column names.
 
-    Internally:
-      schema -> arrow_schema_to_column_defs -> create_table(...)
+    table_name, engine and engine_params are SQL fragments used as written.
     """
     col_defs = arrow_schema_to_column_defs(schema)
     return create_table(table_name, col_defs, engine, engine_params)
