@@ -9,9 +9,71 @@ import pytest
 
 from clickhouse_connect.datatypes.dynamic import TypedVariant, typed_variant
 from clickhouse_connect.datatypes.format import set_write_format
+from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver import Client
 from clickhouse_connect.driver.exceptions import DataError
-from tests.integration_tests.conftest import TestConfig
+from clickhouse_connect.driver.insert import InsertContext
+from tests.integration_tests.conftest import TestConfig, nullable_tuple_settings, type_available
+
+
+@pytest.mark.parametrize(
+    "type_name, value, expression, expected_value, expected",
+    [
+        (
+            "Map(String, Nested(f1 Dynamic(max_types=1)))",
+            {"k": [{"f1": 13}, {"f1": "x"}]},
+            "arrayMap(x -> tupleElement(x, 1), value['k'])",
+            {"k": [{"f1": "13"}, {"f1": "x"}]},
+            ["13", "x"],
+        ),
+        pytest.param(
+            "Nested(f1 Dynamic, f2 UInt8)",
+            [{"f1": 13, "f2": 79}],
+            "value.f1",
+            [{"f1": "13", "f2": 79}],
+            ["13"],
+            marks=pytest.mark.local_only,
+        ),
+        pytest.param(
+            "Tuple(a Nested(f1 Dynamic))", {"a": [{"f1": 13}]}, "value.a.f1", {"a": [{"f1": "13"}]}, ["13"], marks=pytest.mark.local_only
+        ),
+        ("SimpleAggregateFunction(anyLast, Dynamic)", 13, "[value]", "13", ["13"]),
+        pytest.param(
+            "SimpleAggregateFunction(anyLast, Array(Dynamic))", [13, "x"], "value", ["13", "x"], ["13", "x"], marks=pytest.mark.local_only
+        ),
+    ],
+)
+def test_nested_dynamic_insert(param_client, call, table_context, type_name, value, expression, expected_value, expected):
+    type_available(param_client, "dynamic")
+    with table_context("nested_dynamic_insert", [f"value {type_name}"], order_by="tuple()", settings={"flatten_nested": 0}):
+        call(param_client.insert, "nested_dynamic_insert", [[value]])
+        result = call(
+            param_client.query,
+            f"SELECT value, {expression}, arrayMap(x -> dynamicType(x), {expression}) FROM nested_dynamic_insert",
+        )
+        assert result.result_rows == [(expected_value, expected, ["String"] * len(expected))]
+
+
+def test_nullable_simple_aggregate_dynamic_insert(param_client, call, table_context, test_config):
+    if test_config.cloud:
+        pytest.skip("Nullable tuple settings are locked in ClickHouse Cloud")
+    type_available(param_client, "dynamic")
+    settings = nullable_tuple_settings(param_client)
+    with table_context(
+        "nullable_saf_dynamic",
+        ["id UInt8", "value Nullable(SimpleAggregateFunction(anyLast, Tuple(Dynamic)))"],
+        settings=settings,
+    ):
+        context = InsertContext(
+            "nullable_saf_dynamic",
+            ["id", "value"],
+            [get_from_name("UInt8"), get_from_name("Nullable(SimpleAggregateFunction(anyLast, Tuple(Dynamic)))")],
+            [[13, None], [79, (13,)]],
+            block_size=2,
+        )
+        call(param_client.insert, context=context)
+        result = call(param_client.query, "SELECT value FROM nullable_saf_dynamic ORDER BY id")
+        assert result.result_rows == [(None,), (("13",),)]
 
 
 def test_variant(param_client: Client, call, table_context: Callable):

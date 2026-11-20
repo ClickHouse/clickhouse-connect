@@ -135,6 +135,7 @@ def retry_proxy(param_client, client_factory, test_create_client):
         assert not proxy.errors, proxy.errors
 
 
+@pytest.mark.local_only
 @pytest.mark.parametrize("fault", _FAULTS)
 @pytest.mark.parametrize("method", ["command", "query", "raw_query", "raw_stream"])
 def test_sql_write_is_not_replayed_after_delivery(retry_proxy, param_client, call, consume_stream, table_context, method, fault):
@@ -156,6 +157,7 @@ def test_sql_write_is_not_replayed_after_delivery(retry_proxy, param_client, cal
         assert isinstance(error, OperationalError if fault in _REMOTE_CLOSE_FAULTS else DatabaseError)
 
 
+@pytest.mark.local_only
 @pytest.mark.parametrize("fault", _FAULTS)
 @pytest.mark.parametrize("client_mode", ["sync"], indirect=True)
 def test_dbapi_write_is_not_replayed_after_delivery(retry_proxy, param_client, call, table_context, fault):
@@ -173,6 +175,7 @@ def test_dbapi_write_is_not_replayed_after_delivery(retry_proxy, param_client, c
         assert isinstance(error, OperationalError if fault in _REMOTE_CLOSE_FAULTS else DatabaseError)
 
 
+@pytest.mark.local_only
 @pytest.mark.parametrize("fault", _FAULTS)
 @pytest.mark.parametrize("method", ["command", "query", "raw_query", "raw_stream"])
 def test_read_retries_after_delivery(retry_proxy, call, consume_stream, method, fault):
@@ -198,9 +201,24 @@ def test_read_retries_after_delivery(retry_proxy, call, consume_stream, method, 
     assert proxy.statuses == [200, 200]
 
 
-@pytest.mark.parametrize("method", ["insert", "insert_df", "raw_insert", "raw_insert_preframed"])
-@pytest.mark.parametrize("deduplicate", [False, True], ids=["at_least_once", "dedup_window"])
-@pytest.mark.parametrize("fault", _REMOTE_CLOSE_FAULTS)
+@pytest.mark.parametrize(
+    "method",
+    [
+        "insert",
+        pytest.param("insert_df", marks=pytest.mark.local_only),
+        pytest.param("raw_insert", marks=pytest.mark.local_only),
+        pytest.param("raw_insert_preframed", marks=pytest.mark.local_only),
+    ],
+)
+@pytest.mark.parametrize("deduplicate", [pytest.param(False, marks=pytest.mark.local_only), True], ids=["at_least_once", "dedup_window"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "disconnect",
+        pytest.param("progress_headers", marks=pytest.mark.local_only),
+        pytest.param("status_only", marks=pytest.mark.local_only),
+    ],
+)
 def test_insert_data_retries_after_delivery(retry_proxy, param_client, call, table_context, method, deduplicate, fault):
     if method == "insert_df" and pd is None:
         pytest.skip("pandas not available")

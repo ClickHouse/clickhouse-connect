@@ -84,19 +84,15 @@ def test_connection_refused_error(client_factory, test_config: TestConfig, caplo
     caplog.set_level(logging.CRITICAL)
 
     try:
-        # Use a port that shouldn't have anything listening
-        unused_port = 45678
-
-        # Try connecting to an unused port - should fail with connection refused
+        # Below every ephemeral port range, so it is never picked as a source port
         with pytest.raises(OperationalError) as excinfo:
-            client_factory(port=unused_port)
+            client_factory(host="127.0.0.1", port=1)
 
         error_message = str(excinfo.value)
         assert (
             "Connection refused" in error_message
             or "Failed to establish a new connection" in error_message
             or "Cannot connect to host" in error_message
-            or "Connection aborted" in error_message  # Port occasionally occupied in CI, apparently
         )
     finally:
         # Restore the original logging level

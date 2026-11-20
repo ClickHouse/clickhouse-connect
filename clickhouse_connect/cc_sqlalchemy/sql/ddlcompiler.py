@@ -9,6 +9,7 @@ from sqlalchemy.sql import sqltypes
 from sqlalchemy.sql.compiler import DDLCompiler
 from sqlalchemy.sql.visitors import Visitable
 
+from clickhouse_connect.cc_sqlalchemy._schema import validate_setting_name
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
 from clickhouse_connect.cc_sqlalchemy.ddl.index import index_definition, table_indexes
@@ -30,6 +31,8 @@ def render_setting_value(value: Any) -> str:
 def render_settings(settings: Mapping[str, Any] | None) -> str:
     if not settings:
         return ""
+    for key in settings:
+        validate_setting_name(key)
     return ", ".join(f"{key} = {render_setting_value(value)}" for key, value in settings.items())
 
 
@@ -59,7 +62,7 @@ class ClickHouseDDLHelper:
 
     @classmethod
     def is_dictionary(cls, table: Any) -> bool:
-        return getattr(table, "__visit_name__", None) == "dictionary" or cls.get_option(table, "table_type") == "dictionary"
+        return cls.get_option(table, "table_type") == "dictionary"
 
     @classmethod
     def dictionary_option(cls, table: Any, name: str) -> Any:
@@ -127,6 +130,14 @@ def column_specification(dialect, column: Column, *, include_type: bool = True) 
     return compiler.get_column_specification(column, include_type=include_type)
 
 
+def check_dictionary_column(column: Column, dictionary_name: str) -> None:
+    if column.comment:
+        raise CompileError(f"Dictionary {dictionary_name!r} column {column.name!r} does not support COMMENT")
+    for option in ("codec", "ttl", "materialized", "alias"):
+        if ClickHouseDDLHelper.get_option(column, option) is not None:
+            raise CompileError(f"Dictionary {dictionary_name!r} column {column.name!r} does not support {option.upper()}")
+
+
 class ChDDLCompiler(DDLCompiler):
     preparer: ChIdentifierPreparer
 
@@ -165,7 +176,9 @@ class ChDDLCompiler(DDLCompiler):
 
     def _visit_create_dictionary(self, create, dictionary, if_not_exists: str):
         text = f"CREATE DICTIONARY{if_not_exists} {self.preparer._escape_percents(format_table(dictionary))} ("
-        text += ", ".join([self.get_column_specification(c.element) for c in create.columns])
+        for c in create.columns:
+            check_dictionary_column(c.element, dictionary.name)
+        text += ", ".join(self.get_column_specification(c.element) for c in create.columns)
         text += ")"
 
         primary_key = ClickHouseDDLHelper.dictionary_option(dictionary, "primary_key")

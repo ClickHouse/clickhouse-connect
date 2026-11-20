@@ -67,8 +67,8 @@ Direct inserts into 8-64-bit integer columns reject float NaN and infinity with 
 | Enum[8,16]            | str or int              |                   | Insert labels as strings or integer codes. Labels and codes can be mixed in the same column.                |
 | Date                  | datetime.date or datetime.datetime | int      | Integer values are interpreted as days since 1970-01-01.                                                    |
 | Date32                | datetime.date or datetime.datetime | int      | Integer values are interpreted as signed day offsets.                                                       |
-| DateTime              | datetime.datetime       | int               | Integer values are interpreted as epoch seconds.                                                            |
-| DateTime64            | datetime.datetime       | int               | Integer values are interpreted as ticks at the column precision.                                            |
+| DateTime              | datetime.datetime       | int, numpy.datetime64 | Integer values are interpreted as epoch seconds. NumPy `datetime64` values convert to UTC epoch seconds. `NaT` is NULL in a Nullable column and an error otherwise. |
+| DateTime64            | datetime.datetime       | int, numpy.datetime64 | Integer values are interpreted as ticks at the column precision. NumPy `datetime64` values convert to UTC epoch ticks at the column precision. `NaT` is NULL in a Nullable column and an error otherwise. |
 | Time                  | datetime.timedelta      | int, string, time | Integer values are interpreted as seconds.                                                                  |
 | Time64                | datetime.timedelta      | int, string, time | Scales 0 through 9 are supported. Integer values are interpreted as ticks at the column precision. NumPy timedelta values and DataFrame inserts work at every scale. Python time types are limited to microseconds. |
 | IPv4                  | `ipaddress.IPv4Address` | string            | Properly formatted strings can be inserted as IPv4 addresses                                                |
@@ -77,7 +77,7 @@ Direct inserts into 8-64-bit integer columns reject float NaN and infinity with 
 | Map                   | dict                    |                   | The `pairs` read format doesn't change insert inputs. Use Arrow to round trip duplicate keys without loss.    |
 | Nested                | Sequence[dict]          |                   |                                                                                                             |
 | UUID                  | uuid.UUID               | string            | Properly formatted strings can be inserted as ClickHouse UUIDs                                              |
-| JSON                  | dict                    | string            | Dictionaries and JSON object strings are supported. The legacy `Object('json')` type is not supported.      |
+| JSON                  | dict                    | string            | Dictionaries and JSON object strings are supported. Dictionary values can be NumPy integers, floats, bools and arrays, and `pd.NA` is written as null. The legacy `Object('json')` type is not supported. |
 | Variant               | object                  |                   | Values use native member serialization. Use `clickhouse_connect.datatypes.dynamic.typed_variant` when Python types are ambiguous. |
 | Dynamic               | object                  |                   | Values are currently inserted through their String representation.                                          |
 | MultiPoint            | Sequence[tuple]         |                   | Each point is a 2-tuple. Inserting MultiPoint values requires ClickHouse 26.8 or later.                       |
@@ -177,7 +177,7 @@ client.insert_df_arrow("users", df)
 
 ### Create a table from a PyArrow schema {#create-table-from-pyarrow-schema}
 
-`create_table_from_arrow_schema` builds a `CREATE TABLE` statement from common scalar Arrow fields. The mapping covers signed and unsigned integers, floating-point values, booleans, strings, dates, and timestamps. It intentionally creates non-nullable ClickHouse columns and raises `TypeError` for unsupported Arrow types, so review the generated DDL before executing it.
+`create_table_from_arrow_schema` builds a `CREATE TABLE` statement from common scalar Arrow fields. The mapping covers signed and unsigned integers, floating-point values, booleans, strings, dates, and timestamps. It intentionally creates non-nullable ClickHouse columns and raises `TypeError` for unsupported Arrow types, so review the generated DDL before executing it. Column names are quoted. `table_name`, `engine`, and `engine_params` are SQL fragments inserted as written.
 
 ```python
 import clickhouse_connect
@@ -261,7 +261,7 @@ With `"server"`, ClickHouse Connect attaches the target `tzinfo` before converti
 
 Nonexistent spring gap wall times may not round trip through a wall-mode query parameter because ClickHouse text parsing can select a different offset. Use an aware `datetime` or a valid wall time when the instant matters.
 
-The option only applies to native Python object inserts of `datetime` values and naive ISO strings accepted by `DateTime64`. Naive `datetime64`-dtype NumPy and Pandas columns keep their existing UTC wall time conversion.
+The option only applies to native Python object inserts of `datetime` values and naive ISO strings accepted by `DateTime64`. Naive `datetime64`-dtype NumPy and Pandas columns and NumPy `datetime64` scalars use UTC wall time.
 
 To represent a specific instant independent of either mode, attach the intended timezone or provide an epoch integer explicitly.
 
@@ -310,11 +310,11 @@ assert returned.tzinfo == ZoneInfo("America/Los_Angeles")
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `client` | `Client` | Required | Synchronous client used for the insert. |
-| `table` | str | Required | Simple or database-qualified target table. |
+| `table` | str | Required | Simple or database-qualified target table. Each part is quoted, and parts already quoted with backticks or double quotes are kept as written. When `database` is set, `table` is one table name and is not split. Without `database`, table function targets that start with `FUNCTION` or `TABLE FUNCTION` are SQL and are sent as written, so do not pass untrusted text in them. |
 | `file_path` | str | Required | Local path to the input file. |
 | `fmt` | str | `"CSV"` or `"CSVWithNames"` | Input format. Defaults to `"CSV"` when `column_names` is supplied and `"CSVWithNames"` otherwise. |
 | `column_names` | Sequence[str] | `None` | Columns represented by the file. Not required for formats that include names. |
-| `database` | str | `None` | Target database when the table is not qualified. |
+| `database` | str | `None` | Target database. When set, `table` is used as one table name. |
 | `settings` | dict | `None` | See [Settings argument](/integrations/language-clients/python/driver-api#settings-argument-1). |
 | `compression` | str | `None` | Existing file compression, such as `"zstd"`, `"lz4"`, or `"gzip"`. gzip is inferred from `.gz` and `.gzip` filenames. |
 

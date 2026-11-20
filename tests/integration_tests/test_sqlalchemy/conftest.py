@@ -1,12 +1,39 @@
+import sys
+import sysconfig
 import time
 from collections.abc import Iterator
+from pathlib import Path
 
+import pytest
 from pytest import fixture
 from sqlalchemy import text
 from sqlalchemy.engine import create_engine
 from sqlalchemy.engine.base import Connection, Engine
 
 from tests.integration_tests.conftest import TestConfig
+
+# greenlet hides suspended frames from the free-threaded GC before 3.15, so asyncio SQLAlchemy can use freed memory
+_GREENLET_FRAMES_HIDDEN_FROM_GC = bool(sysconfig.get_config_var("Py_GIL_DISABLED")) and sys.version_info < (3, 15)
+_CLIENT_ONLY_FIXTURES = {"param_client", "client_factory"}
+
+
+def _uses_async_sqlalchemy(item: pytest.Item) -> bool:
+    if item.get_closest_marker("asyncio") is not None:
+        return True
+    callspec = getattr(item, "callspec", None)
+    if callspec is None or callspec.params.get("client_mode") != "async":
+        return False
+    return not _CLIENT_ONLY_FIXTURES.intersection(getattr(item, "fixturenames", ()))
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    if not _GREENLET_FRAMES_HIDDEN_FROM_GC:
+        return
+    here = Path(__file__).parent
+    skip = pytest.mark.skip(reason="asyncio SQLAlchemy crashes on free-threaded 3.14, see python/cpython#150766")
+    for item in items:
+        if item.path.parent == here and _uses_async_sqlalchemy(item):
+            item.add_marker(skip)
 
 
 @fixture(scope="module", name="test_engine")

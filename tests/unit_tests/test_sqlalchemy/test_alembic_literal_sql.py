@@ -54,7 +54,7 @@ def _literal_operations(token):
             name,
             [
                 Column(name, UInt64),
-                Column("value", String, server_default=token, comment=token),
+                Column("value", String, server_default=token),
                 Column("generic", sa.String, server_default=token),
             ],
             primary_key=quote_identifier(name),
@@ -148,14 +148,14 @@ def test_offline_dictionary_percent_literals(paramstyle, token):
     context = MigrationContext.configure(dialect=ClickHouseDialect(paramstyle=paramstyle), opts={"as_sql": True, "output_buffer": buffer})
     Operations(context).create_clickhouse_dictionary(
         "dictionary%%",
-        [Column("value%%", String, server_default=token, comment=token)],
+        [Column("value%%", String, server_default=token)],
         primary_key="`value%%`",
         source="CLICKHOUSE(TABLE 'source')",
         layout="FLAT",
         lifetime="0",
     )
     assert buffer.getvalue().strip() == (
-        f"CREATE DICTIONARY `dictionary%%` (`value%%` String DEFAULT '{token}' COMMENT '{token}') "
+        f"CREATE DICTIONARY `dictionary%%` (`value%%` String DEFAULT '{token}') "
         "PRIMARY KEY `value%%` SOURCE(CLICKHOUSE(TABLE 'source')) LAYOUT(FLAT()) LIFETIME(0);"
     )
 

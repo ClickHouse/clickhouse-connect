@@ -62,7 +62,7 @@ def test_create_dictionary_literal_fragments(token, mode):
     table = Dictionary(
         f"dictionary{token}",
         sa.MetaData(),
-        sa.Column(f"key{token}", String, server_default=token, comment=token),
+        sa.Column(f"key{token}", String, server_default=token),
         primary_key=f"`key{token}`",
         source=f"CLICKHOUSE(QUERY 'SELECT {token}')",
         layout=f"FLAT(/* {token} */)",
@@ -70,7 +70,7 @@ def test_create_dictionary_literal_fragments(token, mode):
         comment=token,
     )
     expected = (
-        f"CREATE DICTIONARY `dictionary{token}` (`key{token}` String DEFAULT '{token}' COMMENT '{token}') "
+        f"CREATE DICTIONARY `dictionary{token}` (`key{token}` String DEFAULT '{token}') "
         f"PRIMARY KEY `key{token}` SOURCE(CLICKHOUSE(QUERY 'SELECT {token}')) "
         f"LAYOUT(FLAT(/* {token} */)) LIFETIME(0 /* {token} */) COMMENT '{token}'"
     )
