@@ -1032,6 +1032,26 @@ class TestBindQueryDollarInParamName:
         assert q == b"SELECT " + expected + b", $x$' OR 1 -- $x$, " + expected
         assert params == {}
 
+    @pytest.mark.parametrize(
+        "query, parameters, expected",
+        [
+            (
+                "SELECT %(a)s %% 5, $x$, 7 %% 3, $x$, %(d)s",
+                {"a": 13, "$x$": b"user_1", "d_64": datetime(2023, 6, 1, 7, 40, 2, 250306)},
+                b"SELECT 13 % 5, $x$user_1$x$, 7 % 3, $x$user_1$x$, '2023-06-01 07:40:02.250306'",
+            ),
+            (
+                "SELECT 13 %% 5, $x$, 7 %% 3, $x$",
+                {"$x$": b"user_1"},
+                b"SELECT 13 %% 5, $x$user_1$x$, 7 %% 3, $x$user_1$x$",
+            ),
+        ],
+    )
+    def test_binary_binds_preserve_pyformat_behavior(self, query, parameters, expected):
+        q, params = bind_query(query, parameters)
+        assert q == expected
+        assert params == {}
+
     def test_binary_marker_in_server_bound_value_is_data(self):
         q, params = bind_query("SELECT {a:String}, $x$", {"$x$": b"user_1", "a": "$x$"})
         assert q == b"SELECT {a:String}, $x$user_1$x$"

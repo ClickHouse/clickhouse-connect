@@ -266,6 +266,36 @@ def test_server_bind_between_repeated_binary_markers(param_client: Client, call)
     assert row == ("user_1", 13, "user_1")
 
 
+def test_binary_marker_in_client_bound_value_is_data(param_client: Client, call):
+    row = call(
+        param_client.query,
+        "SELECT %(a)s AS a, $x$ AS v",
+        parameters={"a": "$x$", "$x$": b"user_2's"},
+    ).first_row
+    assert row == ("$x$", "user_2's")
+
+
+@pytest.mark.parametrize(
+    "name, value",
+    [
+        ("$x$", b"user_1$x$user_2"),
+        ("$x$", b"user_1$x$"),
+        ("$x$", b"user_1$x"),
+        ("$$", b"user_1$$user_2"),
+        ("$$", b"user_1$"),
+    ],
+)
+def test_binary_bind_value_with_its_tag_raises(param_client: Client, call, name, value):
+    with pytest.raises(ProgrammingError, match="ends the heredoc"):
+        call(param_client.query, f"SELECT {name} AS v", parameters={name: value})
+
+
+@pytest.mark.parametrize("value", [b"user_1$", b"$xuser_1", b"a$y$b", b"user_1'\\\x00user_2"])
+def test_binary_bind_value_with_tag_like_text_is_kept(param_client: Client, call, value):
+    row = call(param_client.query, "SELECT $x$ AS v", parameters={"$x$": value}).first_row
+    assert row == (value.decode(),)
+
+
 class ParamEnum(Enum):
     LABEL = "user_1's"
     CODE = 13
