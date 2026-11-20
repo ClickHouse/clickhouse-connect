@@ -9,7 +9,7 @@ Review whether each changed test catches a distinct driver defect at reasonable 
 
 Read `AGENTS.md` and `.agents/review.md`. State the behavior change in one sentence and use `rg` to compare the new tests with existing coverage. Run targeted `pytest <ids> --durations=0 -n 0` where practical. Report an unavailable required server or another validation limit.
 
-For fail-before checks, use a separate worktree with `git worktree add /tmp/test-review-<name> <base>`, copy in the test, run it, then remove the worktree. Never stash, reset, or edit the caller's tree.
+For fail-before checks, use a separate worktree with `git worktree add /tmp/test-review-<name> <base>`, copy in the test, run it, then remove the worktree. If your sandbox blocks those writes, ask the caller for the fail-before result or list it as not checked. Never stash, reset, or edit the caller's tree.
 
 ## CI flakes
 
@@ -17,7 +17,7 @@ CI runs a matrix of Python versions including 3.14t, ClickHouse versions, and C=
 
 1. Check timed tests first: elapsed-time assertions, fixed sleeps used as waits, and tight timeouts. Prefer asserting that an operation or event happened over how long it took. Use a condition wait or explicit synchronization with a generous bounded failure deadline. Under the async `call` fixture, the shared event loop runs only inside `run_until_complete`. A synchronous sleep cannot advance async cleanup, so use `asyncio.sleep` through the fixture when the loop must run. Receiving the first block does not prove the transport is still reading.
 2. Check background work, read-ahead, GC, and weak-reference assertions. Free-threaded workers may retain references briefly after futures resolve. Establish actual completion and reference release before asserting cleanup.
-3. Check port selection and connection-failure tests. Prefer port 0 or a bound-and-closed port. A hard-coded port in Linux's ephemeral range 32768-60999 can cause a self-connection. Do not require a connection error at an exact time.
+3. Check port selection and connection-failure tests. A hard-coded port in Linux's ephemeral range 32768-60999 can cause a self-connection. For a failure test, use a port that was bound and then closed. Do not pass port 0 to a client factory, because it falls back to the default port and reaches the running server. Do not require a connection error at an exact time.
 4. Check replica assumptions. A session `SET` may not reach the next Cloud replica, so prefer per-request settings. Reads after replicated writes need `select_sequential_consistency`, as shared fixtures provide. Inspect custom clients for the same protection.
 5. Check xdist name collisions, order dependence, globals or client settings left changed, and environment changes without `monkeypatch`. Tests must work independently and restore state even after failure.
 6. Require reproducible randomness and stable ordering. Look for unseeded generators, iteration over unordered collections, `now()`, local-timezone assumptions, and exact float equality. Avoid exact server error text, EXPLAIN output, or defaults that vary across server versions. Check that memory and thread budgets fit four workers on 4-vCPU runners.
