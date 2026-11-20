@@ -296,6 +296,22 @@ def test_binary_bind_value_with_tag_like_text_is_kept(param_client: Client, call
     assert row == (value.decode(),)
 
 
+@pytest.mark.parametrize(
+    "query, text",
+    [
+        ("SELECT $x$ AS v -- $x$\n", ()),
+        ("SELECT $x$ AS v /* $x$ */", ()),
+        ("SELECT '$x$' AS n, $x$ AS v", ("$x$",)),
+        ("SELECT $$ $x$ $$ AS n, $x$ AS v", (" $x$ ",)),
+    ],
+    ids=["line_comment", "block_comment", "string", "heredoc"],
+)
+def test_binary_marker_in_comment_string_or_heredoc_is_text(param_client: Client, call, query, text):
+    value = b"user_2's $$ */\n"
+    row = call(param_client.query, query, parameters={"$x$": value}).first_row
+    assert row == (*text, value.decode())
+
+
 class ParamEnum(Enum):
     LABEL = "user_1's"
     CODE = 13

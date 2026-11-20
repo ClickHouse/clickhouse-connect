@@ -781,25 +781,89 @@ def _check_binary_bind_value(key: str, value: Any) -> None:
         )
 
 
+# Starts of the comments, quoted strings and identifiers, and heredocs that can hold a raw binary marker.
+_binary_marker_hiding_start_re = re.compile(
+    "[" + re.escape("".join(_quote_closers) + "".join(_curly_quote_closers)) + r"]|/\*|--|//|#[ !]|\$[A-Za-z0-9_]*\$"
+)
+
+
+def _binary_marker_hiding_regions(query: str, limit: int) -> list[tuple[int, int]]:
+    """Return the comments, quoted strings and identifiers, and heredocs that start before `limit`.
+
+    A raw binary marker inside them does not get a heredoc of its own, so a newline, a quote, `*/`
+    or the heredoc tag in the bytes would end that token. After an unterminated token, the rest of
+    the query is one region. In `query`, each raw binary marker is replaced with spaces, because
+    after substitution it is a whole heredoc and the next token starts after it.
+    """
+    heredoc_ends = {match.group(1): match.start() for match in _heredoc_start_re.finditer(query)}
+    regions = []
+    index = 0
+    while index < limit:
+        token, token_end = _next_sql_token(query, index, heredoc_ends)
+        if token == _SQL_TOKEN_INVALID:
+            regions.append((index, len(query)))
+            break
+        char = query[index]
+        if token == _SQL_TOKEN_TRIVIA:
+            hiding = char not in _SQL_WHITESPACE
+        elif token == _SQL_TOKEN_OTHER:
+            opener = _heredoc_re.match(query, index) if char == "$" else None
+            hiding = (
+                char in _quote_closers
+                or char in _curly_quote_closers
+                or (opener is not None and heredoc_ends.get(opener.group(), -1) >= opener.end())
+            )
+        else:
+            hiding = False
+        if hiding:
+            regions.append((index, token_end))
+        index = token_end
+    return regions
+
+
 def _splice_binary_binds(query: str, binary_binds: dict[str, Any], client_params: dict[str, Any] | None, server_tz: tzinfo | None) -> bytes:
     # Markers are located in the query template, before client-side formatting, so a marker
     # inside a bound value stays data. A marker inside a `%(name)s` key is part of that name.
     values = {k: format_query_value(v, server_tz) for k, v in client_params.items()} if client_params else None
     key_spans = list(_pyformat_key_spans(query)) if values else []
     span_starts = [start for start, _ in key_spans]
-    marker_ends: dict[int, str] = {}
-    for key, value in binary_binds.items():
-        found = False
+    candidates: list[tuple[int, str]] = []
+    for key in binary_binds:
         index = query.find(key)
         while index != -1:
             end = index + len(key)
             # Key spans are ordered and do not overlap, so only the last one that starts at or before the marker can hold it.
             span = bisect_right(span_starts, index) - 1
             if span < 0 or key_spans[span][1] < end:
-                marker_ends[end] = key
-                found = True
+                candidates.append((index, key))
             index = query.find(key, end)
-        if found:
+    regions: list[tuple[int, int]] = []
+    if candidates:
+        limit = max(index for index, _ in candidates) + 1
+        scan_text = query
+        for key in binary_binds:
+            scan_text = scan_text.replace(key, " " * len(key))
+        if _binary_marker_hiding_start_re.search(scan_text, 0, limit) is not None:
+            if key_spans:
+                # A quote or a comment start inside a `%(name)s` key is part of the name, not SQL.
+                pieces = []
+                previous = 0
+                for start, stop in key_spans:
+                    pieces += [scan_text[previous:start], "_" * (stop - start)]
+                    previous = stop
+                pieces.append(scan_text[previous:])
+                scan_text = "".join(pieces)
+            regions = _binary_marker_hiding_regions(scan_text, limit)
+    region_starts = [start for start, _ in regions]
+    marker_ends: dict[int, str] = {}
+    found = set()
+    for index, key in candidates:
+        region = bisect_right(region_starts, index) - 1
+        if region < 0 or regions[region][1] <= index:
+            marker_ends[index + len(key)] = key
+            found.add(key)
+    for key, value in binary_binds.items():
+        if key in found:
             _check_binary_bind_value(key, value)
     parts: list[Any] = []
     start = 0
