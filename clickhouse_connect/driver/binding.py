@@ -111,7 +111,7 @@ def _skip_ascii_bareword(query: str, index: int) -> int:
     return index
 
 
-# clickhouse_connect/driverc/sqlscan.pyx mirrors this lexer, _sql_opaque_regions, and remove_sql_comments,
+# clickhouse_connect/driverc/sqlscan.pyx mirrors this lexer, _sql_opaque_regions without `unterminated`, and remove_sql_comments,
 # _matches_outside_quotes and _SQL_COMMENT_MARKERS in query.py. Keep them in sync.
 def _next_sql_token(query: str, index: int, heredoc_ends: dict[str, int]) -> tuple[int, int]:
     """Return the next SQL token kind and its exclusive end offset."""
@@ -185,11 +185,12 @@ _sql_opaque_start_re = re.compile(r"""['"`\u2018\u201c{$]|--|//|/\*|#[ !]""")
 _sql_opaque_token_re = re.compile(r"""'[^'\\]*'(?!')|"[^"\\]*"(?!")|`[^`\\]*`(?!`)|""" + _sql_opaque_start_re.pattern)
 
 
-def _sql_opaque_regions(query: str) -> Iterator[tuple[int, int]]:
+def _sql_opaque_regions(query: str, *, unterminated: bool = False) -> Iterator[tuple[int, int]]:
     """Yield the (start, end) of each comment, quoted string, quoted identifier and heredoc, in order.
 
-    Stops at the first unterminated token. Jumps between possible starts, reading a "$" from its
-    enclosing ASCII word boundary because it can continue a bareword or open a heredoc.
+    Stops at the first unterminated token, which it yields up to the end of the query when
+    `unterminated` is set. Jumps between possible starts, reading a "$" from its enclosing ASCII word
+    boundary because it can continue a bareword or open a heredoc.
     """
     heredoc_ends: dict[str, int] = {}
     heredocs_scanned = False
@@ -215,6 +216,8 @@ def _sql_opaque_regions(query: str) -> Iterator[tuple[int, int]]:
         while index < token_limit:
             token, token_end = _next_sql_token(query, index, heredoc_ends)
             if token == _SQL_TOKEN_INVALID:
+                if unterminated:
+                    yield index, end
                 return
             char = query[index]
             if token == _SQL_TOKEN_TRIVIA:
@@ -768,7 +771,7 @@ def _binding_has_binary_values(parameters: Sequence | dict[str, Any] | None) -> 
     return isinstance(parameters, dict) and bool(_binary_bind_values(parameters))
 
 
-def _check_binary_bind_value(key: str, value: Any) -> None:
+def _check_binary_bind_value(key: str, value: Any, open_tags: Collection[str] = ()) -> None:
     # The server ends a heredoc at the first `$tag$` after the opening one. That text can also
     # start in the last bytes of the value and end in the closing marker.
     marker = key.encode()
@@ -779,6 +782,48 @@ def _check_binary_bind_value(key: str, value: Any) -> None:
             "That ends the heredoc string that carries the value, and ClickHouse reads the text after it "
             "as SQL. Use a parameter name that does not occur in the value."
         )
+    if open_tags:
+        # A heredoc tag with no closing tag in the query text ends at its first copy after it, also
+        # one in this value or across the markers of the value.
+        heredoc = marker + data + marker
+        for tag in open_tags:
+            if tag.encode() in heredoc:
+                raise ProgrammingError(
+                    f"The value of binary query parameter {key!r} contains {tag!r}, and {tag!r} opens a heredoc "
+                    "string earlier in the query that has no closing tag. ClickHouse would end that heredoc string "
+                    "in the value and read the text after it as SQL. Close that heredoc string or change its tag."
+                )
+
+
+# Starts of the comments and quoted strings and identifiers that can hold a raw binary marker.
+_binary_marker_hiding_start_re = re.compile("[" + re.escape("".join(_quote_closers) + "".join(_curly_quote_closers)) + r"]|/\*|--|//|#[ !]")
+# The rest of a `%(name)s` placeholder after its closing parenthesis, as Python reads it.
+_pyformat_spec_re = re.compile(r"[#0+ -]*(?:\*|[0-9]+)?(?:\.(?:\*|[0-9]+))?[hlL]?.?", re.DOTALL)
+
+
+def _binary_marker_scan(scan_text: str, limit: int) -> tuple[list[tuple[int, int]], list[tuple[int, str]]]:
+    """Return the comments, quoted strings and identifiers, and heredocs that start before `limit`,
+    and the heredoc tags before `limit` that have no closing tag.
+
+    In `scan_text`, raw binary markers are blanked, because after substitution each one is a heredoc
+    of its own, and `%(name)s` placeholders are masked. After an unterminated token, the rest of the
+    query is one region. A tag that has no later copy counts as open also inside a bareword, because
+    the server would open a heredoc there if the token started at the tag.
+    """
+    regions = []
+    for start, stop in _sql_opaque_regions(scan_text, unterminated=True):
+        if start >= limit:
+            break
+        regions.append((start, stop))
+    region_starts = [start for start, _ in regions]
+    last_starts = {match.group(1): match.start() for match in _heredoc_start_re.finditer(scan_text)}
+    open_tags = []
+    for match in _heredoc_start_re.finditer(scan_text, 0, limit):
+        tag, start = match.group(1), match.start()
+        index = bisect_right(region_starts, start) - 1
+        if last_starts[tag] == start and (index < 0 or regions[index][1] <= start):
+            open_tags.append((start, tag))
+    return regions, open_tags
 
 
 def _splice_binary_binds(query: str, binary_binds: dict[str, Any], client_params: dict[str, Any] | None, server_tz: tzinfo | None) -> bytes:
@@ -787,20 +832,63 @@ def _splice_binary_binds(query: str, binary_binds: dict[str, Any], client_params
     values = {k: format_query_value(v, server_tz) for k, v in client_params.items()} if client_params else None
     key_spans = list(_pyformat_key_spans(query)) if values else []
     span_starts = [start for start, _ in key_spans]
-    marker_ends: dict[int, str] = {}
-    for key, value in binary_binds.items():
-        found = False
+    candidates: list[tuple[int, str]] = []
+    for key in binary_binds:
         index = query.find(key)
         while index != -1:
             end = index + len(key)
             # Key spans are ordered and do not overlap, so only the last one that starts at or before the marker can hold it.
             span = bisect_right(span_starts, index) - 1
             if span < 0 or key_spans[span][1] < end:
-                marker_ends[end] = key
-                found = True
+                candidates.append((index, key))
             index = query.find(key, end)
-        if found:
-            _check_binary_bind_value(key, value)
+    candidates.sort()
+    regions: list[tuple[int, int]] = []
+    open_tags: list[tuple[int, str]] = []
+    # Without a quote, a comment start, or a `$` that is not part of a marker before the last marker,
+    # no marker is inside a region and no heredoc tag is open.
+    if candidates and (
+        _binary_marker_hiding_start_re.search(query, 0, candidates[-1][0]) is not None
+        or query.count("$", 0, candidates[-1][0]) != sum(key.count("$") for _, key in candidates[:-1])
+    ):
+        limit = candidates[-1][0] + 1
+        masks = [(index, index + len(key), " ") for index, key in candidates]
+        for start, stop in key_spans:
+            spec = _pyformat_spec_re.match(query, stop + 1)
+            masks.append((start - 2, spec.end() if spec else stop + 1, "_"))
+        masks.sort()
+        pieces = []
+        previous = 0
+        for start, stop, fill in masks:
+            # An invalid placeholder such as `%(a)$x$` can overlap a marker. `%` formatting rejects it later.
+            start = max(start, previous)
+            if stop > start:
+                pieces += [query[previous:start], fill * (stop - start)]
+                previous = stop
+        pieces.append(query[previous:])
+        regions, open_tags = _binary_marker_scan("".join(pieces), limit)
+    region_starts = [start for start, _ in regions]
+    marker_ends: dict[int, str] = {}
+    last_markers: dict[str, int] = {}
+    previous_end = -1
+    for index, key in candidates:
+        region = bisect_right(region_starts, index) - 1
+        if region >= 0 and index < regions[region][1]:
+            # Inside a comment, a quoted string or identifier, or a heredoc, the marker is text.
+            continue
+        before = query[index - 1] if index else ""
+        if before and index != previous_end and (before == "." or _is_ascii_bareword_char(before)):
+            raise ProgrammingError(
+                f"Binary query parameter marker {key!r} follows {before!r} with no space between them, so ClickHouse "
+                "can read the marker and the value as part of the previous token, and the value as SQL. Put a "
+                "space or an operator before the marker."
+            )
+        marker_ends[index + len(key)] = key
+        last_markers[key] = index
+        previous_end = index + len(key)
+    for key, value in binary_binds.items():
+        if key in last_markers:
+            _check_binary_bind_value(key, value, [tag for start, tag in open_tags if start < last_markers[key]])
     parts: list[Any] = []
     start = 0
     for end in sorted(marker_ends):

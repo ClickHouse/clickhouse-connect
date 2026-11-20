@@ -296,6 +296,37 @@ def test_binary_bind_value_with_tag_like_text_is_kept(param_client: Client, call
     assert row == (value.decode(),)
 
 
+@pytest.mark.parametrize(
+    "query, text",
+    [
+        ("SELECT $x$ AS v -- $x$\n", ()),
+        ("SELECT $x$ AS v /* $x$ */", ()),
+        ("SELECT '$x$' AS n, $x$ AS v", ("$x$",)),
+        ("SELECT $$ $x$ $$ AS n, $x$ AS v", (" $x$ ",)),
+        ("SELECT 13 AS $y$, $x$ AS v", (13,)),
+    ],
+    ids=["line_comment", "block_comment", "string", "heredoc", "open_heredoc_tag"],
+)
+def test_binary_marker_inside_other_token_is_text(param_client: Client, call, query, text):
+    value = b"user_2's $$ */\n"
+    row = call(param_client.query, query, parameters={"$x$": value}).first_row
+    assert row == (*text, value.decode())
+
+
+@pytest.mark.parametrize(
+    "query, parameters, message",
+    [
+        ("SELECT 13 AS $y$, $x$ AS v", {"$x$": b"user_2 $y$ user_1"}, "has no closing tag"),
+        ("SELECT 13 AS a$x$", {"$x$": b"user_2"}, "follows"),
+        ("SELECT %(a)sAS$x$", {"a": "user_1", "$x$": b"user_2"}, "follows"),
+    ],
+    ids=["open_heredoc_tag", "bareword", "word_after_placeholder"],
+)
+def test_binary_bind_value_that_server_could_read_as_sql_raises(param_client: Client, call, query, parameters, message):
+    with pytest.raises(ProgrammingError, match=message):
+        call(param_client.query, query, parameters=parameters)
+
+
 class ParamEnum(Enum):
     LABEL = "user_1's"
     CODE = 13
