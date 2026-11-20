@@ -208,8 +208,21 @@ class DateTimeBase(ClickHouseType, registered=False):
     python_type = datetime
 
     def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
-        if self.nullable and options.np is not None and isinstance(first_value(column, True), options.np.datetime64):
-            column = [None if value is not None and options.np.isnat(value) else value for value in column]
+        np = options.np
+        if self.nullable and np is not None:
+            sample = first_value(column, True)
+            if isinstance(sample, datetime):
+                # NumPy NaT values after a Python datetime sample fail the datetime path.
+                start = len(dest)
+                try:
+                    super().write_column_data(column, dest, ctx)
+                    return
+                except (AttributeError, TypeError):
+                    del dest[start:]
+            elif not isinstance(sample, np.datetime64):
+                super().write_column_data(column, dest, ctx)
+                return
+            column = [None if isinstance(value, np.datetime64) and np.isnat(value) else value for value in column]
         super().write_column_data(column, dest, ctx)
 
     @property
