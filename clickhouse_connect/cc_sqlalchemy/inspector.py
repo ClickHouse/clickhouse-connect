@@ -31,6 +31,8 @@ _INTERNAL_QUERY_OPTION = "ch_internal_query"
 _INTERNAL_QUERY_SENTINEL = object()
 VIEW_ENGINE_KINDS = {"View": "view", "MaterializedView": "materialized_view", "WindowView": "window_view", "LiveView": "live_view"}
 _EXPRESSION_KEYS = ("server_default", "clickhouse_materialized", "clickhouse_alias", "clickhouse_ttl")
+# The server prints these dictionary attribute options after the type and the DEFAULT literal.
+_DICTIONARY_ATTRIBUTE_OPTIONS = (" EXPRESSION ", " HIERARCHICAL ", " BIDIRECTIONAL ", " INJECTIVE ", " IS_OBJECT_ID ")
 
 
 class _NoSuchTableError(NoSuchTableError, NoResultFound):
@@ -199,6 +201,10 @@ def _parse_dictionary_column(definition: str) -> dict[str, Any]:
 
     name = match.group("name")
     remainder = match.group("rest").strip()
+    # The Dictionary DDL cannot render these options, so reflection drops them. The added space matches a final flag.
+    option_index, _ = find_top_level_clause(remainder + " ", _DICTIONARY_ATTRIBUTE_OPTIONS)
+    if option_index != -1:
+        remainder = remainder[:option_index]
     type_index, _ = find_top_level_clause(
         remainder,
         (" DEFAULT ", " MATERIALIZED ", " ALIAS ", " TTL ", " COMMENT ", " CODEC("),

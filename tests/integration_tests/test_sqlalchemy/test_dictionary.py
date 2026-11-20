@@ -80,3 +80,43 @@ def test_invalid_dictionary_column_sends_no_sql(run_sqlalchemy, test_db, ch_name
         assert not sa.inspect(connection).has_table(name, schema=test_db)
 
     run_sqlalchemy(workflow)
+
+
+def test_dictionary_attribute_reflection(run_sqlalchemy, test_db, ch_name, test_config):
+    if test_config.cloud:
+        pytest.skip("Dictionary source references a local table not accessible on Cloud")
+    dictionary = ch_name("dictionary_attributes")
+    source = ch_name("dictionary_attributes_source")
+    attributes = [
+        ("parent_id", "UInt64 DEFAULT 0 HIERARCHICAL", "UInt64", "0"),
+        ("label", "String DEFAULT 'user_1' EXPRESSION upper(name) INJECTIVE", "String", "'user_1'"),
+        ("note", "Nullable(String) INJECTIVE", "Nullable(String)", None),
+        ("tags", "Array(String) DEFAULT ['user_1', 'user_2']", "Array(String)", "['user_1', 'user_2']"),
+        ("names", "Array(String) EXPRESSION [name, upper(name)]", "Array(String)", None),
+        ("title", "String DEFAULT '\u00df\u00df' EXPRESSION name INJECTIVE", "String", "'\u00df\u00df'"),
+        # Six U+FB03 is exact. After str.upper() the quoted option text is at the index of the closing bracket.
+        ("aliases", "Array(String) DEFAULT ['" + "\ufb03" * 6 + " INJECTIVE ']", "Array(String)", "['" + "\ufb03" * 6 + " INJECTIVE ']"),
+    ]
+    expected = [("id", "UInt64", None)] + [(name, type_name, default) for name, _sql, type_name, default in attributes]
+
+    def workflow(connection):
+        connection.execute(
+            sa.text(
+                f"CREATE TABLE `{test_db}`.`{source}` (id UInt64, parent_id UInt64, name String, note Nullable(String), "
+                "tags Array(String), aliases Array(String)) ENGINE MergeTree ORDER BY id"
+            )
+        )
+        connection.execute(
+            sa.text(
+                f"CREATE DICTIONARY `{test_db}`.`{dictionary}` (id UInt64, "
+                + ", ".join(f"{name} {sql}" for name, sql, _type, _default in attributes)
+                + f") PRIMARY KEY id SOURCE(CLICKHOUSE(DB '{test_db}' TABLE '{source}')) LAYOUT(HASHED()) LIFETIME(0)"
+            )
+        )
+        columns = sa.inspect(connection).get_columns(dictionary, schema=test_db)
+        assert [(column["name"], column["type"].name, column.get("server_default")) for column in columns] == expected
+        table = sa.Table(dictionary, sa.MetaData(), schema=test_db, autoload_with=connection)
+        reflected = [(column.name, column.type.name, column.server_default and column.server_default.arg.text) for column in table.c]
+        assert reflected == expected
+
+    run_sqlalchemy(workflow)

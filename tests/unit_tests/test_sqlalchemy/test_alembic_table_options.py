@@ -41,6 +41,7 @@ from clickhouse_connect.cc_sqlalchemy.dialect import ClickHouseDialect
         ("(a)", "a"),
         ("((a))", "a"),
         ("(toYYYYMM(ts))", "toYYYYMM(ts)"),
+        ("([a, ts])", "[a,ts]"),
         ("(a)+(b)", "(a)+(b)"),
         ("tuple()", "tuple()"),
         ("()", "tuple()"),
