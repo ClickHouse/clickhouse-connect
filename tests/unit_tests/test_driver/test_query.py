@@ -357,6 +357,15 @@ def test_query_context_mixed_binary_select_normalizes_template(monkeypatch):
     assert calls == [query]
 
 
+def test_query_context_binary_marker_in_client_bound_value_is_data():
+    context = QueryContext(
+        "SELECT %(name)s AS name, length($raw$) AS size",
+        parameters={"name": "user_1 $raw$ user_2", "$raw$": b"' OR 1 -- "},
+    )
+
+    assert context.final_query == b"SELECT 'user_1 $raw$ user_2' AS name, length($raw$' OR 1 -- $raw$) AS size"
+
+
 def test_query_context_binary_bind_with_unused_parameter_normalizes_template(monkeypatch):
     strip = query_module._strip_trailing_semicolons
     calls = []

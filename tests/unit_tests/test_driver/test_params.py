@@ -1016,6 +1016,82 @@ class TestBindQueryDollarInParamName:
         assert q == b"SELECT $x$user_1$x$, '{d:Int32}', 13, $x$user_1$x$"
         assert params == {}
 
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("$x$", b"'$x$'"),
+            ("user_1 $x$ user_2", b"'user_1 $x$ user_2'"),
+            (["$x$", "user_1"], b"['$x$', 'user_1']"),
+            (("$x$", 13), b"('$x$', 13)"),
+        ],
+        ids=["str", "str_inside", "list", "tuple"],
+    )
+    def test_binary_marker_in_client_bound_value_is_data(self, value, expected):
+        # The binary value has no marker in it. It must not land inside the quoted client-side value
+        q, params = bind_query("SELECT %(a)s, $x$, %(a)s", {"$x$": b"' OR 1 -- ", "a": value})
+        assert q == b"SELECT " + expected + b", $x$' OR 1 -- $x$, " + expected
+        assert params == {}
+
+    @pytest.mark.parametrize(
+        "query, parameters, expected",
+        [
+            (
+                "SELECT %(a)s %% 5, $x$, 7 %% 3, $x$, %(d)s",
+                {"a": 13, "$x$": b"user_1", "d_64": datetime(2023, 6, 1, 7, 40, 2, 250306)},
+                b"SELECT 13 % 5, $x$user_1$x$, 7 % 3, $x$user_1$x$, '2023-06-01 07:40:02.250306'",
+            ),
+            (
+                "SELECT 13 %% 5, $x$, 7 %% 3, $x$",
+                {"$x$": b"user_1"},
+                b"SELECT 13 %% 5, $x$user_1$x$, 7 %% 3, $x$user_1$x$",
+            ),
+        ],
+    )
+    def test_binary_binds_preserve_pyformat_behavior(self, query, parameters, expected):
+        q, params = bind_query(query, parameters)
+        assert q == expected
+        assert params == {}
+
+    def test_binary_marker_in_server_bound_value_is_data(self):
+        q, params = bind_query("SELECT {a:String}, $x$", {"$x$": b"user_1", "a": "$x$"})
+        assert q == b"SELECT {a:String}, $x$user_1$x$"
+        assert params == {"param_a": "$x$"}
+
+    @pytest.mark.parametrize(
+        "name, value",
+        [
+            ("$x$", b"user_1$x$user_2"),
+            ("$x$", b"$x$"),
+            ("$x$", b"user_1$x"),
+            ("$x$", bytearray(b"user_1$x$user_2")),
+            ("$x$", memoryview(b"user_1$x")),
+            ("$x$", array("B", b"user_1$x$user_2")),
+            ("$$", b"user_1$"),
+            ("$$", b"user_1$$user_2"),
+        ],
+        ids=["inside", "only_tag", "tag_split_at_end", "bytearray", "memoryview", "array", "empty_tag_split", "empty_tag_inside"],
+    )
+    def test_binary_bind_value_with_its_tag_raises(self, name, value):
+        # The server ends the heredoc at the first tag after the opening one and reads the rest as SQL
+        with pytest.raises(ProgrammingError, match="ends the heredoc"):
+            bind_query(f"SELECT {name} AS v", {name: value})
+
+    @pytest.mark.parametrize("value", [b"user_1$y$user_2", b"user_1$", b"$xuser_1", b"x$", b"$", b""])
+    def test_binary_bind_value_with_tag_like_text_is_kept(self, value):
+        q, params = bind_query("SELECT $x$ AS v", {"$x$": value})
+        assert q == b"SELECT $x$" + value + b"$x$ AS v"
+        assert params == {}
+
+    def test_binary_bind_value_not_in_query_is_not_checked(self):
+        q, params = bind_query("SELECT %(a)s", {"$x$": b"user_1$x$user_2", "a": 13})
+        assert q == b"SELECT 13"
+        assert params == {}
+
+    def test_binary_marker_in_pyformat_key_is_part_of_the_key(self):
+        q, params = bind_query("SELECT %(id$x$)s, $x$", {"$x$": b"user_1", "id$x$": 13})
+        assert q == b"SELECT 13, $x$user_1$x$"
+        assert params == {}
+
     def test_no_placeholder_skips_sql_tokenization(self, monkeypatch):
         tokenize = Mock(side_effect=AssertionError("Unexpected SQL tokenization"))
         monkeypatch.setattr(binding, "_next_sql_token", tokenize)
