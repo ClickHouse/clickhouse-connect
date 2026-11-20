@@ -20,9 +20,10 @@ goal. A failed test is information. Do not hide it.
      `clickhouse-client` does.
    - **The environment.** The test cannot pass through any client on this
      server (see [Environment causes](#environment-causes)).
-2. **The default for a client bug is a fix in the client**, in a pull request
-   of its own, with a regression test (see the root `AGENTS.md`). Do not fix a
-   client bug in a pull request that changes the harness.
+2. **The default for a client bug is a fix in the client**, with a regression
+   test (see the root `AGENTS.md`). In the same pull request, move its live
+   pin to a passing test or remove it, enable its allowlist group, and update
+   the counts. Keep changes to harness logic in a separate pull request.
 3. **The default for a shim bug is a fix in the shim.** Make the shim copy
    `clickhouse-client` more exactly. Do not change the shim to hide a client
    bug, for example by a different read format, a workaround for a wrong value,
@@ -154,10 +155,8 @@ These are **not** environment causes. Find the bug:
   other tests ran must not go in.
 - Do not run two sweeps at the same time on one server. The memory pressure
   causes `MEMORY_LIMIT_EXCEEDED` failures that are not real.
-- CI does not run failed tests again (`RETRY_FAILED`), because no known
-  client bug makes random tests fail. Do not use `RETRY_FAILED` when you grow
-  or check the allowlist. If a client bug makes random tests fail, document
-  it in its group before CI uses the retry.
+- CI does not run failed tests again. Each failed test fails its job. A test
+  must pass without retries before you add it to the allowlist.
 - When a test in the allowlist starts to fail sometimes, find the cause
   first (rule 1). Remove it only when the cause is in the environment or in
   the test itself, and write the reason.

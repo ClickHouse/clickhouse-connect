@@ -10587,13 +10587,16 @@
 # 05243_datetime64_to_time64_accurate_cast  # [time64-sub-microsecond]
 
 #-----------------------------------------------------------------------------
-# [wait-end-of-query] client: Client.query always sends wait_end_of_query = 1
-#   settings= cannot remove it. The server then buffers the result, and the
-#   ProfileEvents of the query change.
+# [wait-end-of-query] client: Client.query defaults to wait_end_of_query = 1
+#   A plain query defaults to 1. Per-query settings can override it, but sync
+#   query ignores a client-level 0. Async query honors the client-level value.
+#   Buffering changes the query's ProfileEvents compared with plain HTTP.
 #   Reproduction:
-#     SYSTEM CLEAR MARK CACHE, then
+#     c = clickhouse_connect.get_client(settings={"wait_end_of_query": 0})
 #     c.query("SELECT sum(b) FROM t PREWHERE a < 5000")
-#     -- FileOpen 6 in system.query_log (expected: 4, as over plain HTTP)
+#     -- sync sends 1, async sends 0. Compare query_log FileOpen with plain HTTP.
+#     c.query("SELECT sum(b) FROM t PREWHERE a < 5000", settings={"wait_end_of_query": 0})
+#     -- per-query 0 works for both clients.
 #   Issue: not filed yet
 #   Tests: 6
 # 01475_read_subcolumns  # [wait-end-of-query]

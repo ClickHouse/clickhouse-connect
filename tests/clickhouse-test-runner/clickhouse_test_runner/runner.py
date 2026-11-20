@@ -281,14 +281,12 @@ def write_rows(result: Any, fmt: OutputFormat) -> str:
             lines.append("\t".join(t.name if raw else escape_string(t.name, False) for t in types) + "\n")
         for row in result.result_rows:
             line = "\t".join([w.write(v, raw) for w, v in zip(writers, row)])
-            if not fmt.discard:
-                lines.append(line + "\n")
+            lines.append(line + "\n")
     else:
         # Client.query sent the statement through Client.command (for example CHECK TABLE), and the result
         # has no column types.
         for row in result.result_rows:
-            if not fmt.discard:
-                lines.append(render_untyped(row) + "\n")
+            lines.append(render_untyped(row) + "\n")
     return "".join(lines)
 
 

@@ -409,8 +409,6 @@ def _sequence_renderer(t: CHType, element: Renderer) -> Renderer:
             raise _mismatch(t, v)
         return "[" + ",".join(element(x) for x in v) + "]"
 
-    if t.base == "Nested":
-        return sequence
     return sequence
 
 

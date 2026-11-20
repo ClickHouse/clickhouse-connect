@@ -138,7 +138,6 @@ directory.
 | `UPSTREAM_TEST_LIST` | `tests/clickhouse-test-runner/allowlist.txt` | The file with the tests to run. |
 | `SHARD_INDEX`, `SHARD_TOTAL` | `1`, `1` | Run only shard `SHARD_INDEX` of `SHARD_TOTAL` round-robin shards of the list. |
 | `KNOWN_FAILURES` | (none) | Run the known failures of these groups instead (comma-separated IDs, or `all`). |
-| `RETRY_FAILED` | `0` | Run the failed tests again, at most this many times. Do not use it to grow or check the allowlist. |
 | `CLICKHOUSE_TEST_RUNNER_PYTHON` | `python3` | The Python interpreter of the program and of the runner. |
 | `CLICKHOUSE_CONNECT_USE_C` | `1` | `0` tests the pure Python decoding of clickhouse-connect instead of the Cython extensions. |
 | `CLICKHOUSE_CLIENT_CLI_LOG` | (none) | A file. Each invocation of the program adds its arguments (the `--password` value hidden), statements, errors and the log records of clickhouse-connect to it. |
@@ -164,11 +163,6 @@ The file has two kinds of lines:
 |---|---|
 | `00001_select_1` | The test runs. |
 | `# 01277_toUnixTimestamp64  # [dt64-sub-microsecond]` | A **known failure**: the test does not run, because of a bug in clickhouse-connect or a gap in the shim. The ID in brackets names the group. The header of the group, lower in the file, describes the cause. |
-
-clickhouse-connect has one protocol, HTTP, so the `# only=<protocol>: <reason>`
-lines of the multi-protocol harnesses are not necessary here. The script
-still reads them: a line with `only=http` runs, a line with another protocol
-does not.
 
 The known failures are at the end of the file, in groups. Each group starts
 with a header:
@@ -197,14 +191,16 @@ KNOWN_FAILURES=dt64-sub-microsecond tests/clickhouse-test-runner/scripts/run-ups
 KNOWN_FAILURES=all tests/clickhouse-test-runner/scripts/run-upstream-tests.sh
 ```
 
-When a fix makes the tests of a group pass, remove the `# ` at the start and
+In the client fix pull request, move its live pin to a passing test or remove
+it, and enable the tests of its group. Keep harness logic changes in a
+separate pull request. When the tests pass, remove the `# ` at the start and
 the `# [<id>]` at the end of their lines. When all tests of a group pass,
 remove the group header. Then update the counts: `Running:` and
 `Known failures:` at the top of the file, and `Tests:` of each group that
 changed.
 
 The live tests have a case for each `client` group: `CLIENT_BUGS`,
-`CLIENT_BUG_SCRIPTS` and `test_known_client_bug_startup_queries` in
+`CLIENT_BUG_SCRIPTS` and the separate known-client-bug tests in
 [`test_live.py`](test_live.py). A case that starts to pass fails its test, so
 that the group is checked again. When the client is fixed, move the case of
 `CLIENT_BUGS` to `EXPRESSIONS`, and change the other cases into tests of the
@@ -260,7 +256,7 @@ UPSTREAM_TEST_LIST=<(echo 01277_toUnixTimestamp64) \
 
 A test that passes there and fails through clickhouse-connect shows a bug in
 clickhouse-connect or in this program. `run-with-real-client.sh` reads the
-running tests of the list only. It does not read `KNOWN_FAILURES`, `only=`
+running tests of the list only. It does not read `KNOWN_FAILURES`
 or `SHARD_*`, and it does not compare the versions.
 
 ## How the program imitates clickhouse-client
@@ -398,8 +394,8 @@ requests that change this directory or the workflow.
 - Each job starts the stock server image of the pinned version with
   `CLICKHOUSE_SKIP_USER_SETUP=1` and the host name of the runner, as in step
   2 of "Run the tests locally".
-- CI does not set `RETRY_FAILED`: each failed test fails its job. The script
-  also turns off the runner's own retries (`--dont_retry_failures`). A failed
+- Each failed test fails its job. The script turns off the runner's retries
+  (`--dont_retry_failures`). A failed
   job uploads an artifact. It has the output of the runner with the diffs,
   the `.stdout` and `.stderr` files of the failed tests, and the log of the
   program (`CLICKHOUSE_CLIENT_CLI_LOG`).

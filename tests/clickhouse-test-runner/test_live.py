@@ -37,10 +37,6 @@ def run_shim(text: str | bytes, database: str = "default") -> tuple[bytes, str, 
     return out.getvalue(), err.getvalue(), code
 
 
-# A log_comment of this run, to find its own query_log rows.
-RUN_ID = uuid.uuid4().hex
-
-
 # Each expression is a SELECT list. For each one, the text that the shim writes from the values that
 # clickhouse-connect decoded must be the same as the server's text.
 EXPRESSIONS = [
@@ -157,21 +153,54 @@ CLIENT_BUG_SCRIPTS = {
     "INSERT INTO live_check_table VALUES (1), (2);\n"
     "CHECK TABLE live_check_table SETTINGS check_query_single_value_result = 0, max_threads = 1;\n"
     "DROP TABLE live_check_table;\n": (b"1_1_1_0\t1\t\n2_2_2_0\t1\t\n", "query-routed-to-command"),
-    # Client.query sends wait_end_of_query=1, and the server reads the query in another way.
-    "DROP TABLE IF EXISTS live_wait_end_of_query;\n"
-    "CREATE TABLE live_wait_end_of_query (a UInt64, b UInt64, c UInt8) ENGINE = MergeTree ORDER BY tuple()"
-    " SETTINGS min_bytes_for_wide_part = 0, add_minmax_index_for_numeric_columns = 0;\n"
-    "INSERT INTO live_wait_end_of_query SELECT number, number, number FROM numbers(10000);\n"
-    "SYSTEM CLEAR MARK CACHE;\n"
-    f"SELECT sum(b) FROM live_wait_end_of_query PREWHERE a < 5000 SETTINGS log_comment = 'live-{RUN_ID}';\n"
-    "SYSTEM FLUSH LOGS query_log;\n"
-    "SELECT ProfileEvents['FileOpen'] FROM system.query_log"
-    f" WHERE log_comment = 'live-{RUN_ID}' AND type = 'QueryFinish' AND event_date >= yesterday();\n"
-    "DROP TABLE live_wait_end_of_query;\n": (b"12497500\n4\n", "wait-end-of-query"),
 }
 
 
-@pytest.mark.parametrize("expr", EXPRESSIONS)
+@pytest.mark.parametrize(
+    "expr",
+    EXPRESSIONS,
+    ids=[
+        "integers",
+        "wide-integers",
+        "float64",
+        "float32-bfloat16",
+        "decimals",
+        "wide-decimals",
+        "strings",
+        "null-bool",
+        "dates",
+        "timezones",
+        "datetime64-bounds",
+        "datetime64-epoch",
+        "uuid-ip",
+        "arrays",
+        "tuples",
+        "maps",
+        "enums",
+        "low-cardinality",
+        "intervals",
+        "time",
+        "geometry",
+        "rows",
+        "variant",
+        "dynamic",
+        "json-escapes",
+        "json-arrays",
+        "json-types",
+        "null-map",
+        "tuple-low-cardinality",
+        "nested-tuples",
+        "tuple-names",
+        "tuple-map-keys",
+        "datetime64-wide-range",
+        "aggregate-json-dynamic",
+        "aggregate-interval-variant",
+        "format-alias",
+        "format-column",
+        "json-path-order",
+        "json-dot-key",
+    ],
+)
 def test_render_matches_server(expr):
     query = f"SELECT {expr}"
     out, err, code = run_shim(query + ";")
@@ -179,24 +208,93 @@ def test_render_matches_server(expr):
     assert out == server_tsv(query)
 
 
-@pytest.mark.parametrize("expr, group", CLIENT_BUGS.items())
+@pytest.mark.parametrize(
+    "expr, group",
+    CLIENT_BUGS.items(),
+    ids=[
+        "datetime64-precision",
+        "time64-precision",
+        "map-duplicate-keys",
+        "map-array-key",
+        "map-map-key",
+        "map-named-tuple-key",
+        "date-year-zero",
+        "datetime64-underflow",
+        "datetime64-overflow",
+        "datetime64-timezone-overflow",
+        "column-name-utf8",
+        "string-utf8",
+        "aggregate-function",
+        "qbit-int8",
+        "json-shared-path",
+        "json-leaf-object",
+        "dynamic-leaf-object",
+        "native-binary-types",
+        "native-flattened-json",
+        "dynamic-inference",
+        "dynamic-json-type",
+        "dynamic-datetime-type",
+        "dynamic-shared-variant",
+        "qbit-stride",
+        "decimal-precision",
+        "query-trailing-comma",
+    ],
+)
 def test_known_client_bugs(expr, group):
     query = f"SELECT {expr}"
     out, err, code = run_shim(query + ";")
     assert out != server_tsv(query) or code != 0, f"[{group}] passes now: check the group in allowlist.txt"
 
 
-@pytest.mark.parametrize("script, expected", CLIENT_BUG_SCRIPTS.items())
+@pytest.mark.parametrize(
+    "script, expected",
+    CLIENT_BUG_SCRIPTS.items(),
+    ids=["implicit-select", "kusto", "explain-ast", "query-utf8", "default-settings", "check-table"],
+)
 def test_known_client_bug_scripts(script, expected):
     output, group = expected
     out, err, code = run_shim(script)
     assert out != output or code != 0, f"[{group}] passes now: check the group in allowlist.txt"
 
 
+def test_known_client_bug_wait_end_of_query():
+    run_id = uuid.uuid4().hex
+    table = f"live_wait_end_of_query_{run_id}"
+    query = f"SELECT sum(b) FROM {table} PREWHERE a < 5000"
+    server_tsv(
+        f"CREATE TABLE {table} (a UInt64, b UInt64, c UInt8) ENGINE = MergeTree ORDER BY tuple()"
+        " SETTINGS min_bytes_for_wide_part = 0, add_minmax_index_for_numeric_columns = 0"
+    )
+    try:
+        server_tsv(f"INSERT INTO {table} SELECT number, number, number FROM numbers(10000)")
+        server_tsv("SYSTEM CLEAR MARK CACHE")
+        baseline = server_tsv(query + f" SETTINGS log_comment = 'baseline-{run_id}'")
+        server_tsv("SYSTEM CLEAR MARK CACHE")
+        # Plain query defaults to wait_end_of_query=1. Per-query 0 works, but sync query
+        # overrides a client-level 0, while async query honors it.
+        out, err, code = run_shim(query + f" SETTINGS log_comment = 'shim-{run_id}';")
+        assert (code, err) == (0, "")
+        assert out == baseline
+        server_tsv("SYSTEM FLUSH LOGS query_log")
+        file_opens = []
+        for source in ("baseline", "shim"):
+            file_opens.append(
+                int(
+                    server_tsv(
+                        "SELECT ProfileEvents['FileOpen'] FROM system.query_log"
+                        f" WHERE log_comment = '{source}-{run_id}' AND type = 'QueryFinish' AND event_date >= yesterday()"
+                    )
+                )
+            )
+    finally:
+        server_tsv(f"DROP TABLE {table}")
+    assert file_opens[0] != file_opens[1], "[wait-end-of-query] passes now: check the group in allowlist.txt"
+
+
 def test_known_client_bug_startup_queries():
     # get_client runs its own queries in the database of the client. clickhouse-client runs none, so the
     # query_log of the database has only the user's query.
-    database = f"live_startup_{RUN_ID}"
+    database = f"live_startup_{uuid.uuid4().hex}"
     server_tsv(f"CREATE DATABASE {database}")
     try:
         _, err, code = run_shim("SELECT 1;", database)

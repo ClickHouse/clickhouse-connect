@@ -120,8 +120,7 @@ jobs:
         id: upstream
         run: tests/clickhouse-test-runner/scripts/fetch-upstream.sh "${{ steps.version.outputs.version }}"
 
-      # No RETRY_FAILED: no known bug of clickhouse-connect makes random
-      # tests fail, so each failed test fails the job. The runner prints the
+      # Each failed test fails the job. The runner prints the
       # diff of each failed test; upstream-tests.log keeps that output for the
       # artifact. `shell: bash` sets pipefail, so the exit code of the runner
       # stays the result of the step.
