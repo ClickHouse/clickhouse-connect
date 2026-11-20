@@ -5,6 +5,7 @@ import pytest
 from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
 from clickhouse_connect.driverc.dataconv import build_array_rows as c_build_array_rows
 from clickhouse_connect.driverc.dataconv import build_lc_nullable_column as c_build_lc_nullable_column
+from clickhouse_connect.driverc.dataconv import build_map_rows as c_build_map_rows
 from clickhouse_connect.driverc.dataconv import build_nullable_column as c_build_nullable_column
 from clickhouse_connect.driverc.dataconv import read_nullable_array as c_read_nullable_array
 from clickhouse_connect.driverc.npconv import read_numpy_array as c_read_numpy_array
@@ -12,6 +13,7 @@ from clickhouse_connect.driverc.npconv import read_numpy_array as c_read_numpy_a
 from clickhouse_connect.driver.buffer import ResponseBuffer as PyResponseBuffer
 from clickhouse_connect.driver.dataconv import build_array_rows as py_build_array_rows
 from clickhouse_connect.driver.dataconv import build_lc_nullable_column as py_build_lc_nullable_column
+from clickhouse_connect.driver.dataconv import build_map_rows as py_build_map_rows
 from clickhouse_connect.driver.dataconv import build_nullable_column as py_build_nullable_column
 from clickhouse_connect.driver.dataconv import read_nullable_array as py_read_nullable_array
 from clickhouse_connect.driver.npconv import read_numpy_array as py_read_numpy_array
@@ -78,6 +80,35 @@ def test_build_array_rows_parity_keeps_element_objects(build_array_rows):
     rows = build_array_rows(column, array.array("Q", [2, 3]))
     assert rows == [[13, 79], [80]]
     assert all(v is column[ix] for ix, v in enumerate(rows[0] + rows[1]))
+
+
+@pytest.mark.parametrize(
+    "keys, values, offsets, map_type, expected",
+    [
+        pytest.param(["a", "b", "c"], [1, 2, None], [2, 2, 3], dict, [{"a": 1, "b": 2}, {}, {"c": None}], id="dict"),
+        pytest.param(["a", "a", "b"], [1, 2, 3], [2, 3], dict, [{"a": 2}, {"b": 3}], id="duplicate_keys_dict_keeps_last"),
+        pytest.param(["a", "a", "b"], [1, 2, 3], [2, 3], list, [[("a", 1), ("a", 2)], [("b", 3)]], id="duplicate_keys_pairs_keeps_all"),
+        pytest.param([], [], [0, 0], dict, [{}, {}], id="empty_maps"),
+        pytest.param([], [], [], dict, [], id="no_rows"),
+        pytest.param(["a", "b"], [1, 2], [2**63, 0, 1], dict, [{"a": 1, "b": 2}, {}, {"a": 1}], id="malformed_offsets_clamped_dict"),
+        pytest.param(["a", "b"], [1, 2], [2**63, 0, 1], list, [[("a", 1), ("b", 2)], [], [("a", 1)]], id="malformed_offsets_clamped_pairs"),
+    ],
+)
+@pytest.mark.parametrize("offsets_cls", [lambda x: array.array("Q", x), list], ids=["array", "list"])
+@pytest.mark.parametrize("build_map_rows", [py_build_map_rows, c_build_map_rows], ids=["python", "cython"])
+def test_build_map_rows_parity(keys, values, offsets, map_type, expected, offsets_cls, build_map_rows):
+    assert build_map_rows(keys, values, offsets_cls(offsets), map_type) == expected
+
+
+@pytest.mark.parametrize("map_type", [dict, list], ids=["dict", "pairs"])
+@pytest.mark.parametrize("build_map_rows", [py_build_map_rows, c_build_map_rows], ids=["python", "cython"])
+def test_build_map_rows_parity_keeps_element_objects(map_type, build_map_rows):
+    keys = list(np.array([13, 79, 80], dtype=np.uint64))
+    values = list(np.array([1.5, 2.5, 3.5]))
+    rows = build_map_rows(keys, values, array.array("Q", [2, 3]), map_type)
+    pairs = [pair for row in rows for pair in (row.items() if map_type is dict else row)]
+    assert pairs == list(zip(keys, values))
+    assert all(k is keys[ix] and v is values[ix] for ix, (k, v) in enumerate(pairs))
 
 
 def test_read_nullable_array_parity():

@@ -167,6 +167,19 @@ def build_array_rows(column: list, offsets: Sequence[int]) -> list:
     return rows
 
 
+def build_map_rows(keys: list, values: list, offsets: Sequence[int], map_type: type) -> list:
+    """
+    Build one map per row from the flat key and value lists of a Map column, using the row end offsets.
+    map_type is dict, or list for the pairs read format.
+    """
+    rows = []
+    start = 0
+    for end in offsets:
+        rows.append(map_type(zip(keys[start:end], values[start:end])))
+        start = end
+    return rows
+
+
 def write_str_col(column: Sequence, nullable: bool, encoding: str | None, dest: bytearray) -> int:
     app = dest.append
     for x in column:

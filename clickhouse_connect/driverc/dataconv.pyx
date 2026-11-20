@@ -613,6 +613,31 @@ def build_array_rows(list column, offsets):
     return rows
 
 
+def build_map_rows(list keys, list values, offsets, map_type):
+    """
+    Build one map per row from the flat key and value lists of a Map column, using the row end offsets.
+    map_type is dict, or list for the pairs read format.
+    """
+    cdef Py_ssize_t entry_count = min(len(keys), len(values))
+    cdef Py_ssize_t start = 0, end, ix
+    cdef unsigned long long offset
+    cdef list rows = []
+    cdef dict row
+    for x in offsets:
+        offset = x
+        # Clamp to entry_count before casting the UInt64 offset to Py_ssize_t, as zip over the slices would.
+        end = <Py_ssize_t>offset if offset < <unsigned long long>entry_count else entry_count
+        if map_type is dict:
+            row = {}
+            for ix in range(start, end):
+                row[keys[ix]] = values[ix]
+            rows.append(row)
+        else:
+            rows.append(map_type(zip(keys[start:end], values[start:end])))
+        start = end
+    return rows
+
+
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def build_map_columns(column, bytearray dest):
