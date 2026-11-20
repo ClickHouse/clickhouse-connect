@@ -105,6 +105,8 @@ Fixes and performance improvements in the compiled codec ship as `clickhouse-con
 
 Rust support for Python row and column queries in non-UTC ambient timezones requires `clickhouse-connect>=1.11.0` and `clickhouse-connect-core>=0.2.3`. Upgrade both packages to enable it. Older compatible cores retain the existing Python fallback in `rust` mode and rejection in `rust_strict` mode.
 
+Rust support for NumPy `datetime64` scalars in `DateTime` and `DateTime64` row inserts requires a `clickhouse-connect-core` release after 0.2.3. With an older core, these inserts raise an error in `rust` and `rust_strict` mode. The Python codec accepts them with any core.
+
 ## Known behavior differences {#known-behavior-differences}
 
 The Rust codec targets cell for cell parity with the Python codec. The following differences are known.
