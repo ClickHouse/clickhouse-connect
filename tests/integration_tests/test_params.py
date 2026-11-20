@@ -303,10 +303,9 @@ def test_binary_bind_value_with_tag_like_text_is_kept(param_client: Client, call
         ("SELECT $x$ AS v /* $x$ */", ()),
         ("SELECT '$x$' AS n, $x$ AS v", ("$x$",)),
         ("SELECT $$ $x$ $$ AS n, $x$ AS v", (" $x$ ",)),
-        ("SELECT 13 AS a$x$, $x$ AS v", (13,)),
         ("SELECT 13 AS $y$, $x$ AS v", (13,)),
     ],
-    ids=["line_comment", "block_comment", "string", "heredoc", "bareword", "open_heredoc_tag"],
+    ids=["line_comment", "block_comment", "string", "heredoc", "open_heredoc_tag"],
 )
 def test_binary_marker_inside_other_token_is_text(param_client: Client, call, query, text):
     value = b"user_2's $$ */\n"
@@ -314,9 +313,18 @@ def test_binary_marker_inside_other_token_is_text(param_client: Client, call, qu
     assert row == (*text, value.decode())
 
 
-def test_binary_bind_value_with_open_heredoc_tag_raises(param_client: Client, call):
-    with pytest.raises(ProgrammingError, match="has no closing tag"):
-        call(param_client.query, "SELECT 13 AS $y$, $x$ AS v", parameters={"$x$": b"user_2 $y$ user_1"})
+@pytest.mark.parametrize(
+    "query, parameters, message",
+    [
+        ("SELECT 13 AS $y$, $x$ AS v", {"$x$": b"user_2 $y$ user_1"}, "has no closing tag"),
+        ("SELECT 13 AS a$x$", {"$x$": b"user_2"}, "follows"),
+        ("SELECT %(a)sAS$x$", {"a": "user_1", "$x$": b"user_2"}, "follows"),
+    ],
+    ids=["open_heredoc_tag", "bareword", "word_after_placeholder"],
+)
+def test_binary_bind_value_that_server_could_read_as_sql_raises(param_client: Client, call, query, parameters, message):
+    with pytest.raises(ProgrammingError, match=message):
+        call(param_client.query, query, parameters=parameters)
 
 
 class ParamEnum(Enum):

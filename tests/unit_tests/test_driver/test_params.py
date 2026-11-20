@@ -1106,7 +1106,6 @@ class TestBindQueryDollarInParamName:
             "SELECT \u2018$x$\u2019, $x$",
             "SELECT $$ $x$ $$, $x$",
             "SELECT $y$ $x$ $y$, $x$",
-            "SELECT a$x$, $x$",
         ],
         ids=[
             "line_comment",
@@ -1120,7 +1119,6 @@ class TestBindQueryDollarInParamName:
             "curly_quotes",
             "heredoc",
             "named_heredoc",
-            "bareword",
         ],
     )
     def test_binary_marker_inside_other_token_is_text(self, query):
@@ -1143,12 +1141,11 @@ class TestBindQueryDollarInParamName:
     @pytest.mark.parametrize(
         "query, parameters, expected",
         [
-            ("SELECT 13$x$", {"$x$": b"user_1"}, b"SELECT 13$x$user_1$x$"),
             ("SELECT 'user_1'$x$", {"$x$": b"user_1"}, b"SELECT 'user_1'$x$user_1$x$"),
             ("SELECT $x$$x$", {"$x$": b"user_1"}, b"SELECT $x$user_1$x$$x$user_1$x$"),
-            ("SELECT %(a)s$x$", {"a": 13, "$x$": b"user_1"}, b"SELECT 13$x$user_1$x$"),
+            ("SELECT -$x$", {"$x$": b"user_1"}, b"SELECT -$x$user_1$x$"),
         ],
-        ids=["number", "string", "marker", "client_param"],
+        ids=["string", "marker", "operator"],
     )
     def test_binary_marker_right_after_other_token_is_replaced(self, query, parameters, expected):
         q, params = bind_query(query, parameters)
@@ -1156,19 +1153,39 @@ class TestBindQueryDollarInParamName:
         assert params == {}
 
     @pytest.mark.parametrize(
-        "query, value",
+        "query, parameters",
         [
-            ("SELECT $y$, $x$", b"user_1$y$user_2"),
-            ("SELECT $y$, $x$", b"y$user_1"),
-            ("SELECT $y$, $x$", b"user_1$y"),
-            ("SELECT $$, $x$", b"$user_1"),
+            ("SELECT a$x$", {"$x$": b"user_1"}),
+            ("SELECT 13$x$", {"$x$": b"user_1"}),
+            ("SELECT 13, .5a$x$", {"$x$": b"user_1"}),
+            ("SELECT $y$$x$", {"$x$": b"user_1"}),
+            ("SELECT %(a)s$x$", {"a": None, "$x$": b"user_1"}),
+            ("SELECT %(a)sAS$x$", {"a": "user_1", "$x$": b"user_1"}),
         ],
-        ids=["inside", "after_opening_marker", "before_closing_marker", "empty_tag"],
+        ids=["bareword", "number", "dot_number", "dollar", "placeholder", "word_after_placeholder"],
     )
-    def test_binary_bind_value_with_open_heredoc_tag_raises(self, query, value):
-        # The server would end the earlier heredoc in the value and read the rest as SQL
+    def test_binary_marker_touching_previous_token_raises(self, query, parameters):
+        # The server can read the marker and the bytes as part of the previous token
+        with pytest.raises(ProgrammingError, match="follows"):
+            bind_query(query, parameters)
+
+    @pytest.mark.parametrize(
+        "query, parameters",
+        [
+            ("SELECT $y$, $x$", {"$x$": b"user_1$y$user_2"}),
+            ("SELECT $y$, $x$", {"$x$": b"y$user_1"}),
+            ("SELECT $y$, $x$", {"$x$": b"user_1$y"}),
+            ("SELECT $$, $x$", {"$x$": b"$user_1"}),
+            ("SELECT $y$, $x$, $z$", {"$x$": b"user_1", "$z$": b"user_2$y$"}),
+            ("SELECT a$y$, $x$", {"$x$": b"user_1$y$"}),
+        ],
+        ids=["inside", "after_opening_marker", "before_closing_marker", "empty_tag", "second_key", "tag_in_bareword"],
+    )
+    def test_binary_bind_value_with_open_heredoc_tag_raises(self, query, parameters):
+        # The server would end the earlier heredoc in the value and read the rest as SQL. A tag inside a
+        # bareword counts as open too, so a lexer difference cannot hide one.
         with pytest.raises(ProgrammingError, match="has no closing tag"):
-            bind_query(query, {"$x$": value})
+            bind_query(query, parameters)
 
     @pytest.mark.parametrize(
         "query, value",
@@ -1176,9 +1193,9 @@ class TestBindQueryDollarInParamName:
             ("SELECT $y$, $x$", b"user_1"),
             ("SELECT $x$, $y$", b"user_1$y$"),
             ("SELECT $y$ $y$, $x$", b"user_1$y$"),
-            ("SELECT a$y$, $x$", b"user_1$y$"),
+            ("SELECT '$y$', $x$", b"user_1$y$"),
         ],
-        ids=["tag_not_in_value", "tag_after_marker", "closed_heredoc", "tag_in_bareword"],
+        ids=["tag_not_in_value", "tag_after_marker", "closed_heredoc", "tag_in_string"],
     )
     def test_binary_bind_value_with_heredoc_tag_text_is_kept(self, query, value):
         q, params = bind_query(query, {"$x$": value})
@@ -1192,8 +1209,9 @@ class TestBindQueryDollarInParamName:
             ("SELECT '13 %% 5 $x$', %(a)s, $x$", {"a": 13, "$x$": b"user_1"}, b"SELECT '13 % 5 $x$', 13, $x$user_1$x$"),
             ("SELECT %(user_1's)s, $x$", {"user_1's": 13, "$x$": b"user_1"}, b"SELECT 13, $x$user_1$x$"),
             ("SELECT %(user_1--id)s, $x$", {"user_1--id": 13, "$x$": b"user_1"}, b"SELECT 13, $x$user_1$x$"),
+            ("SELECT %(a)-- s, $x$", {"a": 13, "$x$": b"user_1"}, b"SELECT 13, $x$user_1$x$"),
         ],
-        ids=["string", "string_with_percent", "quote_in_key", "comment_start_in_key"],
+        ids=["string", "string_with_percent", "quote_in_key", "comment_start_in_key", "comment_start_in_flags"],
     )
     def test_binary_marker_with_client_params(self, query, parameters, expected):
         q, params = bind_query(query, parameters)
