@@ -109,6 +109,35 @@ def test_parse_set_assignments():
 
 
 @pytest.mark.parametrize(
+    "sql, expected",
+    [
+        ("USE /* c */ db1;", "db1"),
+        ("USE DATABASE -- c\n  db2;", "db2"),
+        ("USE db3 # c", "db3"),
+        ("USE `a -- b`;", "a -- b"),
+    ],
+)
+def test_parse_use_database_with_comments(sql, expected):
+    assert parse_use_database(sql, {}) == expected
+
+
+@pytest.mark.parametrize(
+    "sql, expected",
+    [
+        ("SET /* c */ dialect = 'prql';", {"dialect": "prql"}),
+        # A comment can hold a comma, an equals sign or a quote.
+        (
+            "SET\n  a = 1, -- don't, b = 2\n  c = 'x -- y', /* d = 3, */ e = 4 // c\n;",
+            {"a": "1", "c": "x -- y", "e": "4"},
+        ),
+        ("SET f = /* c */ 5, g = $$-- h$$;", {"f": "5", "g": "$$-- h$$"}),
+    ],
+)
+def test_parse_set_assignments_with_comments(sql, expected):
+    assert parse_set_assignments(sql) == expected
+
+
+@pytest.mark.parametrize(
     "sql, rest, name, supported",
     [
         ("SELECT 1", "SELECT 1", "TabSeparated", True),
@@ -177,6 +206,22 @@ def test_format_null_reads_no_rows(statements, expected):
         assert runner.execute(sql) == ""
         runner._after_success(sql)
     assert client.calls == expected
+
+
+def test_set_with_comments_changes_the_session():
+    runner = Runner(Options(settings={"max_threads": "4"}), io.BytesIO(), InvocationLog())
+    runner.client = _RecordingClient()
+    for sql in [
+        "SET -- c\n  max_threads = 1;",
+        "SET /* c */ ignore_format_null_for_explain = 0;",
+        "SET dialect /* c */ = 'kusto';",
+    ]:
+        runner.execute(sql)
+        runner._after_success(sql)
+    # The session holds max_threads now: the command-line value does not go with the next queries.
+    assert runner.settings == {}
+    assert not runner.explain_ignores_null
+    assert runner.dialect == "kusto"
 
 
 class _FailingClient(_RecordingClient):

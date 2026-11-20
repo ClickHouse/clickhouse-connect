@@ -109,6 +109,30 @@ def skip_whitespace_and_comments(text: str, i: int) -> int:
     return i
 
 
+def strip_comments(text: str) -> str:
+    """Return text with each comment replaced by a space. Quoted strings, quoted identifiers and heredocs do
+    not change."""
+    parts: list[str] = []
+    start = i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c in "'\"`":
+            i = skip_quoted(text, i)
+        elif c == "$":
+            end = heredoc_end(text, i)
+            i = end if end > 0 else i + 1
+        elif starts_line_comment(text, i) or text.startswith("/*", i):
+            parts.append(text[start:i])
+            parts.append(" ")
+            i = skip_block_comment(text, i) if text.startswith("/*", i) else skip_line_comment(text, i)
+            start = i
+        else:
+            i += 1
+    parts.append(text[start:])
+    return "".join(parts)
+
+
 def has_significant_token(text: str, i: int = 0) -> bool:
     return skip_whitespace_and_comments(text, i) < len(text)
 

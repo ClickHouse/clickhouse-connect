@@ -14,7 +14,7 @@ from clickhouse_connect.driver.exceptions import Error as ClickHouseConnectError
 from .args import Options
 from .errorcodes import ERROR_NAMES
 from .formats import OutputFormat, returns_rows, split_output_format, unquote_identifier
-from .lexer import leading_keyword, skip_quoted, skip_whitespace_and_comments, word_end
+from .lexer import leading_keyword, skip_quoted, skip_whitespace_and_comments, strip_comments, word_end
 from .log import InvocationLog
 from .render import ColumnWriter, escape_string, render_untyped
 from .split import Statement
@@ -293,14 +293,15 @@ def write_rows(result: Any, fmt: OutputFormat) -> str:
 def parse_use_database(sql: str, params: dict[str, str]) -> str | None:
     """Return the database name of a USE statement. A {name:Identifier} query parameter is replaced by its
     value."""
+    sql = strip_comments(sql)
     i = skip_whitespace_and_comments(sql, 0)
     i = word_end(sql, i)
     rest = sql[i:].strip()
     if rest.endswith(";"):
         rest = rest[:-1].strip()
-    word, _, after = rest.partition(" ")
-    if word.upper() == "DATABASE" and after:
-        rest = after.strip()
+    words = rest.split(None, 1)
+    if len(words) == 2 and words[0].upper() == "DATABASE":
+        rest = words[1]
     if not rest:
         return None
     if rest[0] in '`"':
@@ -320,6 +321,7 @@ def parse_use_database(sql: str, params: dict[str, str]) -> str | None:
 def parse_set_assignments(sql: str) -> dict[str, str]:
     """Return the settings that a `SET a = 1, b = 'x'` statement assigns, with their values (string values
     without quotes)."""
+    sql = strip_comments(sql)
     i = word_end(sql, skip_whitespace_and_comments(sql, 0))
     body = sql[i:].strip()
     if body.endswith(";"):
