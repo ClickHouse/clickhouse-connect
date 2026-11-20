@@ -94,6 +94,8 @@ def test_dictionary_attribute_reflection(run_sqlalchemy, test_db, ch_name, test_
         ("tags", "Array(String) DEFAULT ['user_1', 'user_2']", "Array(String)", "['user_1', 'user_2']"),
         ("names", "Array(String) EXPRESSION [name, upper(name)]", "Array(String)", None),
         ("title", "String DEFAULT '\u00df\u00df' EXPRESSION name INJECTIVE", "String", "'\u00df\u00df'"),
+        # Six U+FB03 is exact. After str.upper() the quoted option text is at the index of the closing bracket.
+        ("aliases", "Array(String) DEFAULT ['" + "\ufb03" * 6 + " INJECTIVE ']", "Array(String)", "['" + "\ufb03" * 6 + " INJECTIVE ']"),
     ]
     expected = [("id", "UInt64", None)] + [(name, type_name, default) for name, _sql, type_name, default in attributes]
 
@@ -101,7 +103,7 @@ def test_dictionary_attribute_reflection(run_sqlalchemy, test_db, ch_name, test_
         connection.execute(
             sa.text(
                 f"CREATE TABLE `{test_db}`.`{source}` (id UInt64, parent_id UInt64, name String, note Nullable(String), "
-                "tags Array(String)) ENGINE MergeTree ORDER BY id"
+                "tags Array(String), aliases Array(String)) ENGINE MergeTree ORDER BY id"
             )
         )
         connection.execute(

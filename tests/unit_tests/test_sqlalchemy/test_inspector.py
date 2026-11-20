@@ -1,6 +1,7 @@
 import pytest
 
 from clickhouse_connect.cc_sqlalchemy.inspector import _parse_dictionary_column, get_dictionary_columns
+from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import find_top_level_clause
 
 
 @pytest.mark.parametrize(
@@ -36,6 +37,12 @@ def test_dictionary_column_expressions_are_strings(definition, key, expression, 
         ("`tags` Array(String) EXPRESSION array(name, upper(name))", "Array(String)", None),
         ("`label` String DEFAULT '[user_1, user_2'", "String", "'[user_1, user_2'"),
         ("`label` String DEFAULT '\u00df\u00df' INJECTIVE", "String", "'\u00df\u00df'"),
+        # Six U+FB03 is exact. After str.upper() the quoted option text is at the index of the closing bracket.
+        (
+            "`tags` Array(String) DEFAULT ['" + "\ufb03" * 6 + " INJECTIVE ']",
+            "Array(String)",
+            "['" + "\ufb03" * 6 + " INJECTIVE ']",
+        ),
     ],
 )
 def test_dictionary_column_attribute_options(monkeypatch, attribute, type_name, server_default):
@@ -47,3 +54,7 @@ def test_dictionary_column_attribute_options(monkeypatch, attribute, type_name, 
     id_column, column = get_dictionary_columns(None, "lookup")
     assert (id_column["name"], id_column["type"].name) == ("id", "UInt64")
     assert (column["type"].name, column.get("server_default")) == (type_name, server_default)
+
+
+def test_find_top_level_clause_case_and_offset():
+    assert find_top_level_clause("'\ufb03\ufb03' default x", (" DEFAULT ",)) == (4, " DEFAULT ")
