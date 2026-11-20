@@ -18,7 +18,7 @@ from clickhouse_connect.driver import ctypes as driver_ctypes
 from clickhouse_connect.driver import options, tzutil
 from clickhouse_connect.driver.common import first_value, int_size, np_date_types, write_array
 from clickhouse_connect.driver.ctypes import data_conv
-from clickhouse_connect.driver.exceptions import ProgrammingError
+from clickhouse_connect.driver.exceptions import DataError, ProgrammingError
 from clickhouse_connect.driver.insert import InsertContext
 from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.types import ByteSource
@@ -26,6 +26,34 @@ from clickhouse_connect.driver.types import ByteSource
 epoch_start_date = date(1970, 1, 1)
 epoch_start_datetime = datetime(1970, 1, 1)
 _EPOCH_ORDINAL = epoch_start_date.toordinal()
+_NUMPY_TIME_UNITS = {
+    "W": (604_800, 1),
+    "D": (86_400, 1),
+    "h": (3_600, 1),
+    "m": (60, 1),
+    "s": (1, 1),
+    "ms": (1, 1_000),
+    "us": (1, 1_000_000),
+    "ns": (1, 1_000_000_000),
+    "ps": (1, 1_000_000_000_000),
+    "fs": (1, 1_000_000_000_000_000),
+    "as": (1, 1_000_000_000_000_000_000),
+}
+
+
+def _numpy_datetime64_to_ticks(value: numpy.datetime64, precision: int, column_name: str | None) -> int:
+    raw = int(value.astype("int64"))
+    if raw == -(1 << 63):
+        raise DataError(f"column '{column_name}' cannot insert NumPy datetime64 NaT")
+    unit, multiplier = options.np.datetime_data(value.dtype)
+    if unit in ("Y", "M"):
+        days = value.astype("datetime64[D]")
+        if int(days.astype(value.dtype).astype("int64")) != raw:
+            raise DataError(f"column '{column_name}' NumPy datetime64 value out of range")
+        raw = int(days.astype("int64"))
+        unit, multiplier = "D", 1
+    numerator, denominator = _NUMPY_TIME_UNITS[unit]
+    return raw * int(multiplier) * numerator * precision // denominator
 
 
 def _legacy_days(value: Any, epoch: date) -> int | float:
@@ -179,6 +207,24 @@ class DateTimeBase(ClickHouseType, registered=False):
     valid_formats = "native", "int"
     python_type = datetime
 
+    def write_column_data(self, column: Sequence, dest: bytearray, ctx: InsertContext):
+        np = options.np
+        if self.nullable and np is not None:
+            sample = first_value(column, True)
+            if isinstance(sample, datetime):
+                # NumPy NaT values after a Python datetime sample fail the datetime path.
+                start = len(dest)
+                try:
+                    super().write_column_data(column, dest, ctx)
+                    return
+                except (AttributeError, TypeError):
+                    del dest[start:]
+            elif not isinstance(sample, np.datetime64):
+                super().write_column_data(column, dest, ctx)
+                return
+            column = [None if isinstance(value, np.datetime64) and np.isnat(value) else value for value in column]
+        super().write_column_data(column, dest, ctx)
+
     @property
     def pandas_dtype(self):
         """Sets dtype for pandas datetime objects"""
@@ -267,6 +313,11 @@ class DateTime(DateTimeBase):
         if isinstance(first, int) or self.write_format(ctx) == "int":
             if self.nullable:
                 column = [x if x else 0 for x in column]
+        elif options.np is not None and isinstance(first, options.np.datetime64):
+            if self.nullable:
+                column = [0 if x is None else _numpy_datetime64_to_ticks(x, 1, ctx.column_name) for x in column]
+            else:
+                column = [_numpy_datetime64_to_ticks(x, 1, ctx.column_name) for x in column]
         elif common.get_setting("naive_datetime_insert") == "server":
             active_tz = self.tzinfo or ctx.server_tz
             if self.nullable:
@@ -357,6 +408,11 @@ class DateTime64(DateTimeBase):
         if isinstance(first, int) or self.write_format(ctx) == "int":
             if self.nullable:
                 column = [x if x else 0 for x in column]
+        elif options.np is not None and isinstance(first, options.np.datetime64):
+            if self.nullable:
+                column = [0 if x is None else _numpy_datetime64_to_ticks(x, self.prec, ctx.column_name) for x in column]
+            else:
+                column = [_numpy_datetime64_to_ticks(x, self.prec, ctx.column_name) for x in column]
         else:
             server_mode = common.get_setting("naive_datetime_insert") == "server"
             active_tz = (self.tzinfo or ctx.server_tz) if server_mode else None
@@ -422,19 +478,7 @@ class TimeBase(ClickHouseType, registered=False):
     _MICROS_PER_SECOND = 1_000_000
     _NANOS_PER_SECOND = 1_000_000_000
     _SECONDS_PER_DAY = 86_400
-    _NUMPY_TIME_UNITS = {
-        "W": (604_800, 1),
-        "D": (86_400, 1),
-        "h": (3_600, 1),
-        "m": (60, 1),
-        "s": (1, 1),
-        "ms": (1, 1_000),
-        "us": (1, 1_000_000),
-        "ns": (1, 1_000_000_000),
-        "ps": (1, 1_000_000_000_000),
-        "fs": (1, 1_000_000_000_000_000),
-        "as": (1, 1_000_000_000_000_000_000),
-    }
+    _NUMPY_TIME_UNITS = _NUMPY_TIME_UNITS
 
     _array_type: str
     byte_size: int

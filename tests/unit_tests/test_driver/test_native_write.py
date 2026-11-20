@@ -747,3 +747,22 @@ def test_uuid_native_write_invalid_values(column, error):
     ch_type = get_from_name("UUID")
     with pytest.raises(error):
         ch_type.write_column(column, bytearray(), InsertContext("table", ["value"], [ch_type]))
+
+
+@pytest.mark.parametrize(
+    "type_name",
+    ["Nullable(DateTime)", "Nullable(DateTime64(3))", "Array(Nullable(DateTime))", "LowCardinality(Nullable(DateTime))"],
+)
+def test_datetime_sample_then_numpy_nat_writes_null(type_name):
+    np = pytest.importorskip("numpy")
+    value = datetime(2024, 1, 2, 3, 4, 5)
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("table", ["value"], [ch_type])
+    with_nat, with_none = [value, np.datetime64("NaT"), None], [value, None, None]
+    if type_name.startswith("Array"):
+        with_nat, with_none = [with_nat], [with_none]
+    expected = bytearray(b"prefix")
+    ch_type.write_column(with_none, expected, ctx)
+    dest = bytearray(b"prefix")
+    ch_type.write_column(with_nat, dest, ctx)
+    assert dest == expected
