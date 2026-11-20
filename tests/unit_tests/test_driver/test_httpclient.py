@@ -1803,9 +1803,15 @@ class TestInsertArrowTableQuoting:
             ("my-table", "default", "`default`.`my-table`"),
             ("`my-table`", None, "`my-table`"),
             ("`my-table`", "default", "`default`.`my-table`"),
-            ("default.my-table", None, "default.my-table"),
-            ("default.my-table", "other", "default.my-table"),
+            ("default.my-table", None, "`default`.`my-table`"),
+            ("default.my-table", "other", "`default`.`my-table`"),
             ("user events", "my-db", "`my-db`.`user events`"),
+            ("`a.b`", "db", "`db`.`a.b`"),
+            (
+                "db.other SELECT id FROM db.secret WHERE id NOT IN (SELECT id FROM input('id UInt64')) OR id IN",
+                None,
+                "`db`.`other SELECT id FROM db`.`secret WHERE id NOT IN (SELECT id FROM input(\\'id UInt64\\')) OR id IN`",
+            ),
         ],
     )
     def test_insert_arrow_quotes_table_for_raw_insert(self, table, database, expected):
@@ -1819,9 +1825,15 @@ class TestInsertArrowTableQuoting:
             ("my-table", "default", "`default`.`my-table`"),
             ("`my-table`", None, "`my-table`"),
             ("`my-table`", "default", "`default`.`my-table`"),
-            ("default.my-table", None, "default.my-table"),
-            ("default.my-table", "other", "default.my-table"),
+            ("default.my-table", None, "`default`.`my-table`"),
+            ("default.my-table", "other", "`default`.`my-table`"),
             ("user events", "my-db", "`my-db`.`user events`"),
+            ("`a.b`", "db", "`db`.`a.b`"),
+            (
+                "db.other SELECT id FROM db.secret WHERE id NOT IN (SELECT id FROM input('id UInt64')) OR id IN",
+                None,
+                "`db`.`other SELECT id FROM db`.`secret WHERE id NOT IN (SELECT id FROM input(\\'id UInt64\\')) OR id IN`",
+            ),
         ],
     )
     async def test_async_insert_arrow_quotes_table_for_raw_insert(self, table, database, expected):

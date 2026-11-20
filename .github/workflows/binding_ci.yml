@@ -61,6 +61,10 @@ on:
       - '.github/scripts/qualify_core_wheel.py'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   clickhouse-versions:
     uses: ./.github/workflows/clickhouse-versions.yml

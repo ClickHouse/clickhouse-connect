@@ -38,6 +38,9 @@ _SQL_WHITESPACE = (
     "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u200b\u200c\u200d"
     "\u2028\u2029\u202f\u205f\u2060\u3000\ufeff"
 )
+_SQL_WS = f"[{re.escape(_SQL_WHITESPACE)}]"
+_table_function_re = re.compile(rf"{_SQL_WS}*(?:TABLE{_SQL_WS}+)?FUNCTION{_SQL_WS}+[A-Za-z_][A-Za-z0-9_]*{_SQL_WS}*\(", re.IGNORECASE)
+_table_keyword_re = re.compile(rf"TABLE{_SQL_WS}+", re.IGNORECASE)
 
 
 def _skip_quoted_token(query: str, index: int, quote: str) -> int:
@@ -858,9 +861,35 @@ def quote_identifier(identifier: str) -> str:
 
 
 def _qualified_table(table: str, database: str | None = None) -> str:
-    # Dotted names stay as-is so existing db.table callers keep working.
-    if "." in table:
+    if _table_function_re.match(table):
         return table
+    # Split qualified names only at dots outside quoted identifiers.
+    parts = []
+    start = index = 0
+    while index < len(table):
+        char = table[index]
+        if char in ("`", '"'):
+            end = _skip_quoted_token(table, index, char)
+            if end == -1:
+                break
+            index = end
+        elif char == ".":
+            parts.append(table[start:index].strip(_SQL_WHITESPACE))
+            index += 1
+            start = index
+        else:
+            index += 1
+    if parts:
+        parts.append(table[start:].strip(_SQL_WHITESPACE))
+        keyword = _table_keyword_re.match(parts[0])
+        if keyword:
+            parts[0] = parts[0][keyword.end() :]
+        return ".".join(quote_identifier(part) for part in parts)
+    stripped = table.strip(_SQL_WHITESPACE)
+    keyword = _table_keyword_re.match(stripped)
+    candidate = stripped[keyword.end() :] if keyword else stripped
+    if candidate != table and quote_identifier(candidate) == candidate:
+        table = candidate
     if database:
         return f"{quote_identifier(database)}.{quote_identifier(table)}"
     return quote_identifier(table)

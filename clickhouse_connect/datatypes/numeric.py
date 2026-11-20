@@ -3,6 +3,7 @@ import decimal
 import struct
 from collections.abc import MutableSequence, Sequence
 from math import isfinite, nan
+from operator import index
 from typing import Any
 
 from clickhouse_connect.datatypes.base import ArrayType, ClickHouseType, TypeDef, _TypeArgs
@@ -165,16 +166,31 @@ class BigInt(ClickHouseType, registered=False):
             else:
                 for x in column:
                     ext(int(x).to_bytes(sz, "little", signed=signed))
-        else:
-            if self.nullable:
-                for x in column:
-                    if x:
+            return
+        if isinstance(first, int):
+            start = len(dest)
+            try:
+                if self.nullable:
+                    for x in column:
+                        if x:
+                            ext(x.to_bytes(sz, "little", signed=signed))
+                        else:
+                            ext(empty)
+                else:
+                    for x in column:
                         ext(x.to_bytes(sz, "little", signed=signed))
-                    else:
-                        ext(empty)
-            else:
-                for x in column:
-                    ext(x.to_bytes(sz, "little", signed=signed))
+                return
+            except AttributeError:
+                del dest[start:]
+        if self.nullable:
+            for x in column:
+                if x:
+                    ext(index(x).to_bytes(sz, "little", signed=signed))
+                else:
+                    ext(empty)
+        else:
+            for x in column:
+                ext(index(x).to_bytes(sz, "little", signed=signed))
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         if ctx.as_pandas and self.nullable:
@@ -262,7 +278,7 @@ class BFloat16(ArrayType):
         dest: bytearray,
         ctx: InsertContext,
     ):
-        if not column:
+        if len(column) == 0:
             return
 
         if self.nullable:

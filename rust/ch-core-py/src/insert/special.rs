@@ -294,9 +294,10 @@ pub(super) fn lc_scalar_column<'py, R: RowAccess<'py>>(
     let mut dict_values = Vec::new();
     let mut slots = HashMap::<ScalarKey, i32>::new();
     let mut null_map = nullable.then(|| Vec::with_capacity(row_count));
-    // Time64 is rejected by is_low_cardinality_inner, so only Time probes.
+    // Time64 and DateTime64 are rejected by is_low_cardinality_inner.
     let mut time_probe = match value_type {
-        ChType::Time => TimeScalarProbe::new(value_type),
+        ChType::Time => TemporalScalarProbe::new(value_type),
+        ChType::DateTime { .. } if nullable => TemporalScalarProbe::new(value_type),
         _ => None,
     };
 
@@ -340,7 +341,7 @@ pub(super) fn lc_scalar_column<'py, R: RowAccess<'py>>(
             nulls.push(0);
         }
         let scalar = match time_hit {
-            Some(TimeProbe::Ticks(ticks)) => time_ticks_scalar(value_type, ticks, name, row)?,
+            Some(TimeProbe::Ticks(ticks)) => temporal_ticks_scalar(value_type, ticks, name, row)?,
             _ => convert_scalar(py, value_type, &value, name, row)?,
         };
         let key = scalar.key();

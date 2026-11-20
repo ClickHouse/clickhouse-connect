@@ -21,6 +21,79 @@ class NoOffsetTZ(tzinfo):
         return None
 
 
+@pytest.mark.parametrize("type_name", ["Int128", "UInt128", "Int256", "UInt256"])
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("representation", ["int64", "uint64", "numpy-first", "int-first"])
+def test_bigint_numpy_native_bytes(type_name, nullable, representation):
+    np = pytest.importorskip("numpy")
+    values = {
+        "int64": [np.int64(13), np.int64(79)],
+        "uint64": [np.uint64(13), np.uint64(2**64 - 1)],
+        "numpy-first": [np.int64(13), 79],
+        "int-first": [13, np.uint64(79)],
+    }[representation]
+    if nullable:
+        type_name = f"Nullable({type_name})"
+        values = [None, *values, 0, None]
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("table", ["value"], [ch_type])
+    expected = bytearray(b"prefix")
+    ch_type.write_column([None if value is None else int(value) for value in values], expected, ctx)
+    dest = bytearray(b"prefix")
+    ch_type.write_column(values, dest, ctx)
+    assert dest == expected
+
+
+@pytest.mark.parametrize("type_name", ["Int128", "UInt128", "Int256", "UInt256"])
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("representation", ["float", "decimal"])
+@pytest.mark.parametrize("int_first", [False, True])
+def test_bigint_rejects_noninteger(type_name, nullable, representation, int_first):
+    value = {"float": 13.5, "decimal": Decimal("13.5")}[representation]
+    if nullable:
+        type_name = f"Nullable({type_name})"
+    values = [13, value] if int_first else [value]
+    ch_type = get_from_name(type_name)
+    with pytest.raises(TypeError):
+        ch_type.write_column(values, bytearray(), InsertContext("table", ["value"], [ch_type]))
+
+
+@pytest.mark.parametrize("values", [[1.5, 2.0], []])
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_bfloat16_numpy_native_bytes(values, dtype):
+    np = pytest.importorskip("numpy")
+    ch_type = get_from_name("BFloat16")
+    ctx = InsertContext("table", ["value"], [ch_type])
+    expected = bytearray()
+    ch_type.write_column(values, expected, ctx)
+    dest = bytearray()
+    ch_type.write_column(np.array(values, dtype=dtype), dest, ctx)
+    assert dest == expected
+
+
+@pytest.mark.parametrize(
+    "type_name, expected",
+    [
+        ("Map(String, Nested(f1 Dynamic(max_types=1)))", "Map(String, Array(Tuple(String)))"),
+        ("Nested(f1 Dynamic, f2 UInt8)", "Array(Tuple(String, UInt8))"),
+        ("Tuple(a Nested(f1 Dynamic))", "Tuple(`a` Array(Tuple(String)))"),
+        ("Nested(f1 UInt8)", "Nested(f1 UInt8)"),
+        ("Nested(f1 Tuple(a UInt8))", "Nested(f1 Tuple(`a` UInt8))"),
+        ("Nested(f1 Decimal(10,2))", "Nested(f1 Decimal(10, 2))"),
+        ("Nested(f1 JSON(a UInt8), f2 UInt8)", "Nested(f1 JSON(`a` UInt8), f2 UInt8)"),
+        ("SimpleAggregateFunction(anyLast, Dynamic)", "String"),
+        ("SimpleAggregateFunction(anyLast, Array(Dynamic))", "Array(String)"),
+        ("Nullable(SimpleAggregateFunction(anyLast, Tuple(Dynamic)))", "Nullable(Tuple(String))"),
+        ("SimpleAggregateFunction(sum, UInt64)", "SimpleAggregateFunction(sum, UInt64)"),
+        ("Nested(f1 Array(Dynamic))", "Array(Tuple(Array(String)))"),
+        ("Nested(f1 Map(String, Dynamic))", "Array(Tuple(Map(String, String)))"),
+        ("Nested(f1 SimpleAggregateFunction(anyLast, Dynamic))", "Array(Tuple(String))"),
+    ],
+)
+def test_dynamic_container_insert_name(type_name, expected):
+    assert get_from_name(type_name).insert_name == expected
+
+
 LOW_CARD_OUTPUT = """
 0101 0576 616c 7565 204c 6f77 4361 7264
 696e 616c 6974 7928 4e75 6c6c 6162 6c65
@@ -674,3 +747,22 @@ def test_uuid_native_write_invalid_values(column, error):
     ch_type = get_from_name("UUID")
     with pytest.raises(error):
         ch_type.write_column(column, bytearray(), InsertContext("table", ["value"], [ch_type]))
+
+
+@pytest.mark.parametrize(
+    "type_name",
+    ["Nullable(DateTime)", "Nullable(DateTime64(3))", "Array(Nullable(DateTime))", "LowCardinality(Nullable(DateTime))"],
+)
+def test_datetime_sample_then_numpy_nat_writes_null(type_name):
+    np = pytest.importorskip("numpy")
+    value = datetime(2024, 1, 2, 3, 4, 5)
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("table", ["value"], [ch_type])
+    with_nat, with_none = [value, np.datetime64("NaT"), None], [value, None, None]
+    if type_name.startswith("Array"):
+        with_nat, with_none = [with_nat], [with_none]
+    expected = bytearray(b"prefix")
+    ch_type.write_column(with_none, expected, ctx)
+    dest = bytearray(b"prefix")
+    ch_type.write_column(with_nat, dest, ctx)
+    assert dest == expected

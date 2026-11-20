@@ -9,6 +9,7 @@ from sqlalchemy.sql import sqltypes
 from sqlalchemy.sql.compiler import DDLCompiler
 from sqlalchemy.sql.visitors import Visitable
 
+from clickhouse_connect.cc_sqlalchemy._schema import validate_setting_name
 from clickhouse_connect.cc_sqlalchemy.datatypes.base import ChSqlaType
 from clickhouse_connect.cc_sqlalchemy.datatypes.sqltypes import Nullable
 from clickhouse_connect.cc_sqlalchemy.ddl.index import index_definition, table_indexes
@@ -30,6 +31,8 @@ def render_setting_value(value: Any) -> str:
 def render_settings(settings: Mapping[str, Any] | None) -> str:
     if not settings:
         return ""
+    for key in settings:
+        validate_setting_name(key)
     return ", ".join(f"{key} = {render_setting_value(value)}" for key, value in settings.items())
 
 
