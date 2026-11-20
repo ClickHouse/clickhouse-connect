@@ -315,7 +315,7 @@ ClickHouse Connect Client `query*` and `command` methods accept an optional `par
 
 ClickHouse supports [server-side binding](/concepts/features/interfaces/client#cli-queries-with-parameters) for query values. The bound value is sent separately from the query as an HTTP parameter. ClickHouse Connect uses this mode when it detects an expression of the form `{<name>:<datatype>}` outside strings, quoted identifiers, comments, and heredocs. Pass the values as a Python dictionary.
 
-Parameter names must be ClickHouse ASCII BareWord names. The driver accepts `$` at the start, inside, or at the end of the name when the server would accept it, such as `{$tenant_id:String}`. A dictionary key that starts and ends with `$` and has a buffer value such as `bytes`, `bytearray`, or `memoryview` is reserved for ClickHouse Connect's raw binary parameter convention. If such a key is used for a non-binary server-side parameter, keep it to a single `{name:Type}` placeholder. Repeated `$tag$` names can be parsed by ClickHouse as heredoc markers.
+Parameter names must be ClickHouse ASCII BareWord names. The driver accepts `$` at the start, inside, or at the end of the name when the server would accept it, such as `{$tenant_id:String}`. A dictionary key that starts and ends with `$` and has a buffer value such as `bytes`, `bytearray`, or `memoryview` is reserved for ClickHouse Connect's raw binary parameter convention. If such a key is used for a non-binary server-side parameter, keep it to a single `{name:Type}` placeholder. Repeated `$tag$` names can be parsed by ClickHouse as heredoc markers. The driver sends a raw binary value as a heredoc string between two `$name$` tags, so use only ASCII letters, digits, and underscores between the `$` signs. A value that contains its own tag, or ends with the tag without its last `$`, such as `$name`, raises `ProgrammingError`. Use a name that does not occur in the value.
 
 Use Python `None` for nullable values. Nested `None` values are supported inside `Array` and `Tuple` parameters, and inside `Map` literals when `dict_parameter_format` is set to `"map"`.
 
@@ -365,6 +365,8 @@ This also works for named tuples inside `Array`, `Tuple`, `Nullable`, and `Map` 
 ClickHouse Connect also supports client-side parameter binding, which can allow more flexibility in generating templated SQL queries. For client-side binding, the `parameters` argument should be a dictionary or a sequence. Client-side binding uses the Python ["printf" style](https://docs.python.org/3/library/stdtypes.html#old-string-formatting) string formatting for parameter substitution.
 
 Note that unlike server-side binding, client-side binding doesn't work for database identifiers such as database, table, or column names, since Python-style formatting can't distinguish between the different types of strings, and they need to be formatted differently (backticks or double quotes for database identifiers, single quotes for data values).
+
+For unknown Python types, client-side binding uses the output of `str()` without quoting or escaping. Convert untrusted values to `str`, `int`, `float`, `date`, or `datetime`, or use server-side binding, which sends values separately.
 
 Because substitution is printf-style, a literal `%` in the query must be written as `%%` whenever `parameters` are passed. A query whose only `{name:Type}` text sits inside a string, quoted identifier, comment, or heredoc takes this client-side path, so an unescaped `%` in such a query raises `ValueError`.
 
@@ -731,7 +733,7 @@ For the common use case of inserting multiple records into ClickHouse, there is 
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `table` | str | Required | Target table. A database-qualified name is permitted. May be omitted when supplied by `context`. |
+| `table` | str | Required | Target table. A database-qualified name such as `db.table` is permitted. Each part is quoted, and parts already quoted with backticks or double quotes are kept as written. A leading `TABLE` keyword before a qualified or quoted table name is accepted. Table function targets that start with `FUNCTION` or `TABLE FUNCTION` are SQL and are sent as written, so do not pass untrusted text in them. May be omitted when supplied by `context`. |
 | `data` | Sequence of Sequences | Required | Row-oriented or column-oriented data matrix. May be supplied later through an `InsertContext`. |
 | `column_names` | str or Sequence[str] | `"*"` | Ordered columns. `"*"` runs a metadata query to discover every insertable column. |
 | `database` | str or None | Client database | Target database when `table` is not qualified. |

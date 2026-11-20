@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.driver.binding import _qualified_table, quote_identifier
 from clickhouse_connect.driver.summary import QuerySummary
 
 
@@ -17,12 +17,7 @@ def insert_file(
     settings: dict[str, Any] | None = None,
     compression: str | None = None,
 ) -> QuerySummary:
-    if not database and table[0] not in ("`", "'") and table.find(".") > 0:
-        full_table = table
-    elif database:
-        full_table = f"{quote_identifier(database)}.{quote_identifier(table)}"
-    else:
-        full_table = quote_identifier(table)
+    full_table = f"{quote_identifier(database)}.{quote_identifier(table)}" if database else _qualified_table(table)
     if not fmt:
         fmt = "CSV" if column_names else "CSVWithNames"
     if compression is None:
@@ -50,12 +45,7 @@ async def insert_file_async(
     compression: str | None = None,
 ) -> QuerySummary:
 
-    if not database and table[0] not in ("`", "'") and table.find(".") > 0:
-        full_table = table
-    elif database:
-        full_table = f"{quote_identifier(database)}.{quote_identifier(table)}"
-    else:
-        full_table = quote_identifier(table)
+    full_table = f"{quote_identifier(database)}.{quote_identifier(table)}" if database else _qualified_table(table)
     if not fmt:
         fmt = "CSV" if column_names else "CSVWithNames"
     if compression is None:

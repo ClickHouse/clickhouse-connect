@@ -320,13 +320,15 @@ def test_foreign_dialect_coexistence(foreign_dialect_path, provider, cache):
 
 @pytest.mark.parametrize("kind", ["table", "dictionary"])
 def test_reflection_preserves_public_keys_and_copies_canonical_metadata(monkeypatch, kind):
-    expressions = [
-        ("default_value", "DEFAULT", "13", "server_default"),
-        ("materialized_value", "MATERIALIZED", "id + 13", "clickhouse_materialized"),
-        ("alias_value", "ALIAS", "id + 79", "clickhouse_alias"),
-    ]
+    expressions = [("default_value", "DEFAULT", "13", "server_default")]
     if kind == "table":
-        expressions.append(("ttl_value", "TTL", "id + INTERVAL 1 DAY", "clickhouse_ttl"))
+        expressions.extend(
+            [
+                ("materialized_value", "MATERIALIZED", "id + 13", "clickhouse_materialized"),
+                ("alias_value", "ALIAS", "id + 79", "clickhouse_alias"),
+                ("ttl_value", "TTL", "id + INTERVAL 1 DAY", "clickhouse_ttl"),
+            ]
+        )
     rows = [
         SimpleNamespace(
             name=name,
