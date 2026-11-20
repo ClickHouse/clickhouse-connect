@@ -775,7 +775,7 @@ def _check_binary_bind_value(key: str, value: Any) -> None:
     data = value if isinstance(value, (bytes, bytearray)) else memoryview(value).tobytes()
     if marker in data or marker in data[1 - len(marker) :] + marker[:-1]:
         raise ProgrammingError(
-            f"The value of binary query parameter {key!r} contains {key!r} or ends with the start of it. "
+            f"The value of binary query parameter {key!r} contains {key!r} or ends with {key[:-1]!r}. "
             "That ends the heredoc string that carries the value, and ClickHouse reads the text after it "
             "as SQL. Use a parameter name that does not occur in the value."
         )
