@@ -51,7 +51,19 @@ fn parse_timedelta_dtype(dtype: &Bound<'_, PyAny>) -> Option<(NumpyTimedeltaMeta
         unit[..digit_count].parse::<i128>().ok()?
     };
     let base = &unit[digit_count..];
-    let (unit_numerator, denominator) = match base {
+    let (unit_numerator, denominator) = numpy_time_unit_ratio(base)?;
+    Some((
+        NumpyTimedeltaMeta {
+            order,
+            numerator: multiplier.checked_mul(unit_numerator)?,
+            denominator,
+        },
+        false,
+    ))
+}
+
+fn numpy_time_unit_ratio(unit: &str) -> Option<(i128, i128)> {
+    Some(match unit {
         "W" => (604_800, 1),
         "D" => (86_400, 1),
         "h" => (3_600, 1),
@@ -64,15 +76,7 @@ fn parse_timedelta_dtype(dtype: &Bound<'_, PyAny>) -> Option<(NumpyTimedeltaMeta
         "fs" => (1, 1_000_000_000_000_000),
         "as" => (1, 1_000_000_000_000_000_000),
         _ => return None,
-    };
-    Some((
-        NumpyTimedeltaMeta {
-            order,
-            numerator: multiplier.checked_mul(unit_numerator)?,
-            denominator,
-        },
-        false,
-    ))
+    })
 }
 
 /// Non-generic timedelta meta read from a value's `dtype` attribute.
@@ -90,6 +94,93 @@ fn numpy_i64(bytes: &[u8], order: NumpyByteOrder) -> Option<i64> {
         NumpyByteOrder::Little => i64::from_le_bytes(raw),
         NumpyByteOrder::Big => i64::from_be_bytes(raw),
     })
+}
+
+fn numpy_datetime_ticks(
+    value: &Bound<'_, PyAny>,
+    precision: u8,
+    column: &str,
+    row: usize,
+    type_name: &str,
+) -> PyResult<Option<TimeProbe>> {
+    let py = value.py();
+    let Ok(dtype) = value.getattr(intern!(py, "dtype")) else {
+        return Ok(None);
+    };
+    if !dtype
+        .getattr(intern!(py, "kind"))
+        .and_then(|kind| kind.eq("M"))
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    let Ok(numpy) = py.import(intern!(py, "numpy")) else {
+        return Ok(None);
+    };
+    if !value.is_instance(&numpy.getattr(intern!(py, "datetime64"))?)? {
+        return Ok(None);
+    }
+    let bytes = value.call_method0(intern!(py, "tobytes"))?;
+    let bytes = bytes.cast::<PyBytes>().map_err(|_| {
+        PyValueError::new_err(format!(
+            "column {column:?} row {row} NumPy datetime tobytes() did not return bytes"
+        ))
+    })?;
+    let order = if cfg!(target_endian = "little") {
+        NumpyByteOrder::Little
+    } else {
+        NumpyByteOrder::Big
+    };
+    let raw = numpy_i64(bytes.as_bytes(), order).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "column {column:?} row {row} NumPy datetime scalar is not 8 bytes"
+        ))
+    })?;
+    if raw == i64::MIN {
+        return Ok(Some(TimeProbe::Nat));
+    }
+    let (unit, multiplier) = numpy
+        .call_method1(intern!(py, "datetime_data"), (&dtype,))?
+        .extract::<(String, i128)>()?;
+    let overflow = || {
+        PyValueError::new_err(format!(
+            "column {column:?} row {row} {type_name} NumPy datetime64 value is outside range"
+        ))
+    };
+    let (count, unit) = if matches!(unit.as_str(), "Y" | "M") {
+        let days = value.call_method1(intern!(py, "astype"), ("datetime64[D]",))?;
+        let round_trip = days
+            .call_method1(intern!(py, "astype"), (&dtype,))?
+            .call_method1(intern!(py, "astype"), ("int64",))?
+            .extract::<i64>()?;
+        if round_trip != raw {
+            return Err(overflow());
+        }
+        let days = days
+            .call_method1(intern!(py, "astype"), ("int64",))?
+            .extract::<i64>()?;
+        (i128::from(days), "D")
+    } else {
+        (
+            i128::from(raw)
+                .checked_mul(multiplier)
+                .ok_or_else(overflow)?,
+            unit.as_str(),
+        )
+    };
+    let (numerator, denominator) = numpy_time_unit_ratio(unit).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "column {column:?} row {row} unsupported NumPy datetime64 unit {unit:?}"
+        ))
+    })?;
+    let ticks = count
+        .checked_mul(numerator)
+        .and_then(|value| value.checked_mul(i128::from(time64_scale(precision))))
+        .ok_or_else(overflow)?
+        .div_euclid(denominator);
+    i64::try_from(ticks)
+        .map(|ticks| Some(TimeProbe::Ticks(ticks)))
+        .map_err(|_| overflow())
 }
 
 fn numpy_timedelta_scalar_raw(
@@ -150,18 +241,17 @@ fn is_pandas_nat(value: &Bound<'_, PyAny>) -> bool {
     name == b"NaTType" || name.ends_with(b".NaTType")
 }
 
-/// Non-null outcome of probing one Time/Time64 cell.
+/// Outcome of probing one temporal cell.
 pub(super) enum TimeProbe {
     Nat,
     Ticks(i64),
 }
 
-/// Per-column state for probing Time/Time64 cells that are not one of the
-/// exact fast types. The parsed dtype and unit ratio are cached and reused
-/// while subsequent cells carry an identical or equal dtype object.
-pub(super) struct TimeScalarProbe {
+/// Per-column temporal scalar probe. Time/Time64 dtype metadata is cached.
+pub(super) struct TemporalScalarProbe {
     precision: u8,
     fractional: bool,
+    datetime: bool,
     type_name: &'static str,
     cache: Option<TimeDtypeCache>,
 }
@@ -173,35 +263,56 @@ struct TimeDtypeCache {
     ratio: NumpyTimeRatio,
 }
 
-impl TimeScalarProbe {
+impl TemporalScalarProbe {
     pub(super) fn new(ch_type: &ChType) -> Option<Self> {
         match ch_type {
             ChType::Time => Some(Self {
                 precision: 0,
                 fractional: false,
+                datetime: false,
                 type_name: "Time",
                 cache: None,
             }),
             ChType::Time64 { precision } => Some(Self {
                 precision: *precision,
                 fractional: true,
+                datetime: false,
                 type_name: "Time64",
+                cache: None,
+            }),
+            ChType::DateTime { .. } => Some(Self {
+                precision: 0,
+                fractional: false,
+                datetime: true,
+                type_name: "DateTime",
+                cache: None,
+            }),
+            ChType::DateTime64 { precision, .. } => Some(Self {
+                precision: *precision,
+                fractional: true,
+                datetime: true,
+                type_name: "DateTime64",
                 cache: None,
             }),
             _ => None,
         }
     }
 
-    /// Probe one cell. `Ok(None)` means the value is neither a NumPy
-    /// timedelta scalar nor pandas NaT; the caller converts it normally.
+    /// Return `None` when the caller must use its normal scalar conversion.
     pub(super) fn probe(
         &mut self,
         value: &Bound<'_, PyAny>,
         column: &str,
         row: usize,
     ) -> PyResult<Option<TimeProbe>> {
+        if self.datetime && value.is_instance_of::<PyDateTime>() {
+            return Ok(None);
+        }
         if !should_probe_numpy_timedelta(value) {
             return Ok(None);
+        }
+        if self.datetime {
+            return numpy_datetime_ticks(value, self.precision, column, row, self.type_name);
         }
         let py = value.py();
         let Ok(dtype) = value.getattr(intern!(py, "dtype")) else {
@@ -258,21 +369,29 @@ impl TimeScalarProbe {
     }
 }
 
-/// Build the Time/Time64 scalar for probed ticks.
-pub(super) fn time_ticks_scalar(
+/// Build the temporal scalar for probed ticks.
+pub(super) fn temporal_ticks_scalar(
     ch_type: &ChType,
     ticks: i64,
     column: &str,
     row: usize,
 ) -> PyResult<Scalar> {
     match ch_type {
+        ChType::DateTime { .. } => Ok(Scalar::DateTime(u32::try_from(ticks).map_err(|_| {
+            PyValueError::new_err(format!(
+                "column {column:?} row {row} DateTime value {ticks} is outside UInt32 range"
+            ))
+        })?)),
+        ChType::DateTime64 { .. } => Ok(Scalar::DateTime64(ticks)),
         ChType::Time => {
             Ok(Scalar::Time(i32::try_from(ticks).map_err(|_| {
                 time_range_error(column, row, "Time", ticks)
             })?))
         }
         ChType::Time64 { .. } => Ok(Scalar::Time64(ticks)),
-        _ => Err(PyValueError::new_err("internal Time scalar type mismatch")),
+        _ => Err(PyValueError::new_err(
+            "internal temporal scalar type mismatch",
+        )),
     }
 }
 
@@ -694,6 +813,14 @@ pub(super) fn datetime_seconds(
     if let Ok(secs) = value.extract::<i64>() {
         return Ok(secs);
     }
+    if let Some(probe) = numpy_datetime_ticks(value, 0, column, row, "DateTime")? {
+        return match probe {
+            TimeProbe::Ticks(secs) => Ok(secs),
+            TimeProbe::Nat => Err(PyValueError::new_err(format!(
+                "column {column:?} row {row} cannot insert NumPy datetime64 NaT into DateTime"
+            ))),
+        };
+    }
     let ts = value
         .call_method0("timestamp")
         .and_then(|o| o.extract::<f64>())
@@ -729,6 +856,16 @@ pub(super) fn datetime64_ticks(
 
     if let Ok(ticks) = value.extract::<i64>() {
         return Ok(ticks);
+    }
+    if !value.is_instance_of::<PyString>() {
+        if let Some(probe) = numpy_datetime_ticks(value, precision, column, row, "DateTime64")? {
+            return match probe {
+                TimeProbe::Ticks(ticks) => Ok(ticks),
+                TimeProbe::Nat => Err(PyValueError::new_err(format!(
+                    "column {column:?} row {row} cannot insert NumPy datetime64 NaT into DateTime64"
+                ))),
+            };
+        }
     }
 
     let value = if let Ok(s) = value.cast::<PyString>() {

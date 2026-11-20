@@ -1,5 +1,6 @@
 """Schema option names shared by registration, reflection, and migration output."""
 
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -14,6 +15,14 @@ TABLE_OPTIONS = (
     "dictionary_primary_key",
 )
 COLUMN_OPTIONS = ("materialized", "alias", "codec", "ttl", "after", "settings")
+_SETTING_SEGMENT = r"""(?:[A-Za-z_$][A-Za-z0-9_$]*|`(?:[^`\\]|\\.|``)+`|"(?:[^"\\]|\\.|"")+")"""
+_SETTING_NAME = re.compile(rf"{_SETTING_SEGMENT}(?:\.{_SETTING_SEGMENT})*")
+
+
+def validate_setting_name(name: str) -> None:
+    """Require a setting identifier."""
+    if not isinstance(name, str) or _SETTING_NAME.fullmatch(name) is None:
+        raise ValueError(f"Invalid ClickHouse setting name {name!r}")
 
 
 def canonical_schema_kwargs(kwargs: Mapping[str, Any], names: Iterable[str]) -> dict[str, Any]:

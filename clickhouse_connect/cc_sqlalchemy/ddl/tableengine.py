@@ -10,6 +10,7 @@ from sqlalchemy.orm import InstrumentedAttribute
 from sqlalchemy.sql.elements import ClauseElement, ColumnElement, TextClause
 from sqlalchemy.sql.schema import SchemaItem
 
+from clickhouse_connect.cc_sqlalchemy._schema import validate_setting_name
 from clickhouse_connect.cc_sqlalchemy.sql.sqlparse import split_top_level, walk_sql
 from clickhouse_connect.driver.binding import _decode_ch_string_literal, _format_identifier, format_str, quote_identifier
 from clickhouse_connect.driver.common import unescape_identifier
@@ -154,6 +155,8 @@ class TableEngine(SchemaItem):
             kwargs = {}
         if settings is not None:
             kwargs["settings"] = settings
+        for key in kwargs.get("settings") or {}:
+            validate_setting_name(key)
         self.name: str = self.__class__.__name__
         te_name = f"{self.name} Table Engine"
         self._orig_kwargs = kwargs.copy()
@@ -165,7 +168,7 @@ class TableEngine(SchemaItem):
                     continue
                 raise ValueError(f"Required engine parameter {arg_name} not provided for {te_name}")
             if arg_name in self.quoted_args:
-                engine_args.append(f"'{v}'")
+                engine_args.append(format_str(str(v)))
             else:
                 engine_args.append(v)
         if engine_args:
@@ -582,7 +585,15 @@ def _parse_positional_engine_args(full_engine: str, engine_cls: type["TableEngin
     if not engine_cls.arg_names:
         return {}
     _, arg_values, _ = parse_callable(full_engine)
-    return {arg_name: _strip_string_quotes(arg_value) for arg_name, arg_value in zip(engine_cls.arg_names, arg_values) if arg_value != ""}
+    params = {}
+    for arg_name, arg_value in zip(engine_cls.arg_names, arg_values):
+        if arg_value == "":
+            continue
+        value = _strip_string_quotes(arg_value)
+        if arg_name in engine_cls.quoted_args and isinstance(arg_value, str) and value != arg_value:
+            value = _decode_ch_string_literal(arg_value)
+        params[arg_name] = value
+    return params
 
 
 def _find_clause_markers(sql: str) -> list[tuple[int, str]]:

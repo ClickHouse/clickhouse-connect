@@ -14,6 +14,7 @@ class EnumCode(IntEnum):
     ACTIVE = 1
 
 
+@pytest.mark.local_only
 @pytest.mark.parametrize("enum_name", ["Enum8", "Enum16"])
 @pytest.mark.parametrize(
     "wrapper, wrap_value",
@@ -88,6 +89,7 @@ def test_enum_nullable_none(param_client, call, table_context, enum_name, values
 
 @pytest.mark.parametrize("enum_name", ["Enum8", "Enum16"])
 @pytest.mark.parametrize("nullable, bad_value", [(False, None), (False, []), (False, {}), (True, []), (True, {})])
+@pytest.mark.local_only
 def test_enum_invalid_non_string(param_client, call, table_context, test_config, enum_name, bad_value, nullable):
     enum_type = f"{enum_name}('active'=1)"
     if nullable:

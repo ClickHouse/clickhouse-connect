@@ -144,3 +144,11 @@ def test_schema_qualified_and_quoted_identifiers():
 def test_value_change_without_existing_type_raises(kw):
     with pytest.raises(CommandError, match="requires existing_type"):
         _alter_column(**kw)
+
+
+def test_value_change_without_existing_type_raises_before_rename():
+    buffer = StringIO()
+    impl = ClickHouseImpl(ClickHouseDialect(), None, True, None, buffer, {})
+    with pytest.raises(CommandError, match="requires existing_type for events.payload"):
+        impl.alter_column("events", "payload", name="body", nullable=True)
+    assert buffer.getvalue() == ""
