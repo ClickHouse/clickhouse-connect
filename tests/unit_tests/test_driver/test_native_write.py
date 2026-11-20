@@ -1,3 +1,4 @@
+import array
 import struct
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal, localcontext
@@ -762,7 +763,11 @@ UUID_COLUMN_SHAPES = pytest.mark.parametrize(
 )
 
 
-@pytest.mark.parametrize("convert", [bytes, bytearray, memoryview], ids=["bytes", "bytearray", "memoryview"])
+@pytest.mark.parametrize(
+    "convert",
+    [bytes, bytearray, memoryview, lambda b: memoryview(array.array("H", b))],
+    ids=["bytes", "bytearray", "memoryview", "wide_memoryview"],
+)
 def test_uuid_native_write_binary(convert):
     ch_type = get_from_name("UUID")
     dest = bytearray()
@@ -774,13 +779,20 @@ def test_uuid_native_write_binary(convert):
 @UUID_COLUMN_SHAPES
 @pytest.mark.parametrize(
     "value",
-    [b"\x01" * 15, b"\x01" * 17, b"\x01" * 32, bytearray(b"\x01" * 31), memoryview(b"\x01")],
-    ids=["short", "long", "two_uuids", "bytearray", "memoryview"],
+    [
+        b"\x01" * 15,
+        b"\x01" * 17,
+        b"\x01" * 32,
+        bytearray(b"\x01" * 31),
+        memoryview(b"\x01"),
+        memoryview(array.array("H", [13] * 16)),
+    ],
+    ids=["short", "long", "two_uuids", "bytearray", "memoryview", "wide_memoryview"],
 )
 def test_uuid_native_write_rejects_binary_of_wrong_length(type_name, build, value):
     ch_type = get_from_name(type_name)
     column = build([UUID_VALUES[0].bytes, value, UUID_VALUES[2].bytes])
-    with pytest.raises(DataError, match=f"UUID bytes length is {len(value)}, expected 16"):
+    with pytest.raises(DataError, match=f"UUID bytes length is {memoryview(value).nbytes}, expected 16"):
         ch_type.write_column(column, bytearray(), InsertContext("table", ["value"], [ch_type]))
 
 

@@ -61,12 +61,15 @@ class UUID(ClickHouseType):
             _write_big_endian_uuids([v.bytes if v else empty for v in column], dest)
         elif isinstance(first, (bytes, bytearray, memoryview)):
             for v in column:
+                # len() of a memoryview counts items, not bytes
+                if isinstance(v, memoryview):
+                    v = v.tobytes()
                 if not v:
                     dest += empty
                 elif len(v) != 16:
                     raise ctx.data_error(f"UUID bytes length is {len(v)}, expected 16")
                 else:
-                    dest += bytes(reversed(v[:8])) + bytes(reversed(v[8:]))
+                    dest += v[7::-1] + v[:7:-1]
         else:
             for v in column:
                 if (
