@@ -1106,6 +1106,7 @@ class TestBindQueryDollarInParamName:
             "SELECT \u2018$x$\u2019, $x$",
             "SELECT $$ $x$ $$, $x$",
             "SELECT $y$ $x$ $y$, $x$",
+            "SELECT a$x$, $x$",
         ],
         ids=[
             "line_comment",
@@ -1119,10 +1120,11 @@ class TestBindQueryDollarInParamName:
             "curly_quotes",
             "heredoc",
             "named_heredoc",
+            "bareword",
         ],
     )
-    def test_binary_marker_in_comment_string_or_heredoc_is_text(self, query):
-        # The bytes would end the comment, string or heredoc, and the server would read them as SQL
+    def test_binary_marker_inside_other_token_is_text(self, query):
+        # The server opens no heredoc there, so it would read the bytes as SQL
         q, params = bind_query(query, {"$x$": b"user_1"})
         assert q == query.removesuffix("$x$").encode() + b"$x$user_1$x$"
         assert params == {}
@@ -1136,6 +1138,51 @@ class TestBindQueryDollarInParamName:
     def test_heredoc_right_after_binary_marker_hides_later_marker(self):
         q, params = bind_query("SELECT $x$$y$ $x$ $y$, $x$", {"$x$": b"user_1"})
         assert q == b"SELECT $x$user_1$x$$y$ $x$ $y$, $x$user_1$x$"
+        assert params == {}
+
+    @pytest.mark.parametrize(
+        "query, parameters, expected",
+        [
+            ("SELECT 13$x$", {"$x$": b"user_1"}, b"SELECT 13$x$user_1$x$"),
+            ("SELECT 'user_1'$x$", {"$x$": b"user_1"}, b"SELECT 'user_1'$x$user_1$x$"),
+            ("SELECT $x$$x$", {"$x$": b"user_1"}, b"SELECT $x$user_1$x$$x$user_1$x$"),
+            ("SELECT %(a)s$x$", {"a": 13, "$x$": b"user_1"}, b"SELECT 13$x$user_1$x$"),
+        ],
+        ids=["number", "string", "marker", "client_param"],
+    )
+    def test_binary_marker_right_after_other_token_is_replaced(self, query, parameters, expected):
+        q, params = bind_query(query, parameters)
+        assert q == expected
+        assert params == {}
+
+    @pytest.mark.parametrize(
+        "query, value",
+        [
+            ("SELECT $y$, $x$", b"user_1$y$user_2"),
+            ("SELECT $y$, $x$", b"y$user_1"),
+            ("SELECT $y$, $x$", b"user_1$y"),
+            ("SELECT $$, $x$", b"$user_1"),
+        ],
+        ids=["inside", "after_opening_marker", "before_closing_marker", "empty_tag"],
+    )
+    def test_binary_bind_value_with_open_heredoc_tag_raises(self, query, value):
+        # The server would end the earlier heredoc in the value and read the rest as SQL
+        with pytest.raises(ProgrammingError, match="has no closing tag"):
+            bind_query(query, {"$x$": value})
+
+    @pytest.mark.parametrize(
+        "query, value",
+        [
+            ("SELECT $y$, $x$", b"user_1"),
+            ("SELECT $x$, $y$", b"user_1$y$"),
+            ("SELECT $y$ $y$, $x$", b"user_1$y$"),
+            ("SELECT a$y$, $x$", b"user_1$y$"),
+        ],
+        ids=["tag_not_in_value", "tag_after_marker", "closed_heredoc", "tag_in_bareword"],
+    )
+    def test_binary_bind_value_with_heredoc_tag_text_is_kept(self, query, value):
+        q, params = bind_query(query, {"$x$": value})
+        assert q == query.replace("$x$", "$x$" + value.decode() + "$x$").encode()
         assert params == {}
 
     @pytest.mark.parametrize(

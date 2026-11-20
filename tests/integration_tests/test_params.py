@@ -303,13 +303,20 @@ def test_binary_bind_value_with_tag_like_text_is_kept(param_client: Client, call
         ("SELECT $x$ AS v /* $x$ */", ()),
         ("SELECT '$x$' AS n, $x$ AS v", ("$x$",)),
         ("SELECT $$ $x$ $$ AS n, $x$ AS v", (" $x$ ",)),
+        ("SELECT 13 AS a$x$, $x$ AS v", (13,)),
+        ("SELECT 13 AS $y$, $x$ AS v", (13,)),
     ],
-    ids=["line_comment", "block_comment", "string", "heredoc"],
+    ids=["line_comment", "block_comment", "string", "heredoc", "bareword", "open_heredoc_tag"],
 )
-def test_binary_marker_in_comment_string_or_heredoc_is_text(param_client: Client, call, query, text):
+def test_binary_marker_inside_other_token_is_text(param_client: Client, call, query, text):
     value = b"user_2's $$ */\n"
     row = call(param_client.query, query, parameters={"$x$": value}).first_row
     assert row == (*text, value.decode())
+
+
+def test_binary_bind_value_with_open_heredoc_tag_raises(param_client: Client, call):
+    with pytest.raises(ProgrammingError, match="has no closing tag"):
+        call(param_client.query, "SELECT 13 AS $y$, $x$ AS v", parameters={"$x$": b"user_2 $y$ user_1"})
 
 
 class ParamEnum(Enum):
