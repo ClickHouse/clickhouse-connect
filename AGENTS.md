@@ -11,6 +11,7 @@ Required reading:
 - Before making substantial code changes, read `.agents/architecture.md`.
 - Before doing code review, review feedback, or PR analysis, read `.agents/review.md`.
 - Before investigating server behavior, type serialization, wire protocol, format parsing, or settings handling, read `.agents/server-map.md` and follow the workflow in `Server Behavior Is Authoritative` below.
+- Before working on the upstream SQL test harness in `tests/clickhouse-test-runner/`, read `tests/clickhouse-test-runner/AGENTS.md`.
 
 Do not treat those docs as replacements for this file. They are required reference material. This file remains the source of truth for agent behavior.
 
