@@ -36,7 +36,7 @@ import chdb
 
 from clickhouse_connect.driver._backend.httpcommon import columns_only_meta, is_columns_only_query
 from clickhouse_connect.driver._backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
-from clickhouse_connect.driver.binding import quote_identifier
+from clickhouse_connect.driver.binding import quote_identifier, statement_for_wire
 from clickhouse_connect.driver.common import ShowClickHouseErrors
 from clickhouse_connect.driver.exceptions import (
     GENERIC_CLICKHOUSE_ERROR,
@@ -667,7 +667,7 @@ class ChdbBackend:
         cols = ", ".join(quote_identifier(name) for name in context.column_names)
         # build_insert prepends this exact statement to its first chunk for
         # the HTTP request body; INFILE wants only the Native bytes
-        body_prefix = f"INSERT INTO {context.table} ({cols}) FORMAT Native\n".encode()
+        body_prefix = f"INSERT INTO {context.table} ({cols}) FORMAT Native\n".encode("utf-8", "surrogateescape")
         tmp = tempfile.NamedTemporaryFile(suffix=".native", delete=False)  # noqa: SIM115
         try:
             try:
@@ -691,7 +691,7 @@ class ChdbBackend:
             settings = self._engine_settings(runtime.settings)
             clause = f" SETTINGS {_settings_clause(settings)}" if settings else ""
             sql = f"INSERT INTO {context.table} ({cols}) FROM INFILE {_quote_sql_string(tmp.name)}{clause} FORMAT Native"
-            result = self._run(sql, "TabSeparated", database=runtime.database)
+            result = self._run(statement_for_wire(sql), "TabSeparated", database=runtime.database)
             return self._insert_summary(result)
         finally:
             try:
@@ -728,7 +728,7 @@ class ChdbBackend:
             settings = self._engine_settings(runtime.settings)
             clause = f" SETTINGS {_settings_clause(settings)}" if settings else ""
             sql = f"INSERT INTO {table}{cols} FROM INFILE {_quote_sql_string(tmp.name)}{clause} FORMAT {fmt}"
-            result = self._run(sql, "TabSeparated", database=runtime.database)
+            result = self._run(statement_for_wire(sql), "TabSeparated", database=runtime.database)
             return self._insert_summary(result)
         finally:
             try:

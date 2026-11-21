@@ -65,6 +65,11 @@ def _named_rows(result: object, description: str) -> Iterable[Mapping[str, Any]]
     raise OperationalError(f"Unexpected response to {description} query: {result!r}")
 
 
+def _column_def(row: Mapping[str, Any]) -> ColumnDef:
+    """Build a ColumnDef, decoding bytes the way read_leb128_str decodes a name in a Native block"""
+    return ColumnDef(**{key: value.decode("utf-8", "surrogateescape") if isinstance(value, bytes) else value for key, value in row.items()})
+
+
 def _setting_definitions(result: object) -> dict[str, SettingDef]:
     definitions: dict[str, SettingDef] = {}
     for row in _named_rows(result, "server settings"):
@@ -171,11 +176,12 @@ def insert_context_sequence(
     if column_types is None and column_type_names is None:
         # An empty query_id overrides client defaults and tells the server to generate a new ID.
         describe_settings = {**(settings or {}), "query_id": ""}
-        describe_result = yield QueryOp(f"DESCRIBE TABLE {full_table}", settings=describe_settings)
+        # Read as bytes, so a name that is not valid UTF-8 is not replaced by its hex form
+        describe_result = yield QueryOp(f"DESCRIBE TABLE {full_table}", settings=describe_settings, query_formats={"String": "bytes"})
         column_defs = [
-            ColumnDef(**row)
-            for row in _named_rows(describe_result, "DESCRIBE TABLE")
-            if row["default_type"] not in ("ALIAS", "MATERIALIZED")
+            cd
+            for cd in map(_column_def, _named_rows(describe_result, "DESCRIBE TABLE"))
+            if cd.default_type not in ("ALIAS", "MATERIALIZED")
         ]
     if column_names is None or isinstance(column_names, str) and column_names == "*":
         column_names = [cd.name for cd in column_defs]

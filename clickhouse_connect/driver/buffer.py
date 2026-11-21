@@ -110,7 +110,8 @@ class ResponseBuffer(ByteSource):
 
     def read_leb128_str(self) -> str:
         sz = self.read_leb128()
-        return self.read_bytes(sz).decode()
+        # Type and column names are not always valid UTF-8, for example an Enum label such as '\xff'.
+        return self.read_bytes(sz).decode("utf-8", "surrogateescape")
 
     def read_uint64(self) -> int:
         return int.from_bytes(self.read_bytes(8), "little", signed=False)

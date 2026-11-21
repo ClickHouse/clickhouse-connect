@@ -136,7 +136,7 @@ class InsertContext(BaseQueryContext):
                 return
             if self.current_block == 0:
                 cols = f" ({', '.join([quote_identifier(x) for x in self.column_names])})"
-                prefix = f"INSERT INTO {self.table}{cols} FORMAT Native\n".encode()
+                prefix = f"INSERT INTO {self.table}{cols} FORMAT Native\n".encode("utf-8", "surrogateescape")
             else:
                 prefix = b""
             self.current_block += 1
