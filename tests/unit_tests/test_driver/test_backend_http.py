@@ -915,6 +915,17 @@ class TestAsyncRequestTargetPath:
         session.get.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_async_request_sends_bool_params_as_text():
+    backend = make_async_backend()
+    response = SimpleNamespace(status=200, headers={})
+    backend.session = SimpleNamespace(closed=False, request=AsyncMock(return_value=response))
+    params = {"join_use_nulls": True, "enable_optimize_predicate_expression": False, "max_threads": 4}
+    await backend.request(b"SELECT 1", params, server_wait=False)
+    _args, kwargs = backend.session.request.call_args
+    assert kwargs["params"] == {"join_use_nulls": "True", "enable_optimize_predicate_expression": "False", "max_threads": 4}
+
+
 @pytest.mark.parametrize("data_type", [bytes, bytearray, memoryview])
 @pytest.mark.filterwarnings("error::ResourceWarning")
 @pytest.mark.asyncio

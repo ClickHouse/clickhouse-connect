@@ -39,6 +39,10 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - `query_np` is faster for results that mix column types and include at least one object column, on the Python and Rust codecs. Each block of the structured array now starts from `np.zeros` instead of `np.empty`, which set every object field to `None` one element at a time. A 1M-row query with 10 columns, 5 of them object columns, takes about 18% less time.
 - With the C extensions, the Python codec reads `Map` columns faster in `query`, `query_np` and `query_df` and their streaming variants, by building each row's `dict` or list of pairs in Cython, as it already does for `Array` rows. Without the C extensions, `query_np` and `query_df` are also faster for `Map` columns with numeric keys or values.
 
+### Bug Fixes
+
+- `AsyncClient` methods no longer raise `TypeError` when a per-call `settings` value is a Python `bool`, for example `settings={"async_insert": True}`. The async client now sends `True` and `False` as text, the same as the synchronous client.
+
 ## 1.13.0, 2026-11-16
 
 ### Bug Fixes
