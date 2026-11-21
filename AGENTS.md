@@ -11,6 +11,7 @@ Required reading:
 - Before making substantial code changes, read `.agents/architecture.md`.
 - Before doing code review, review feedback, or PR analysis, read `.agents/review.md`.
 - Before investigating server behavior, type serialization, wire protocol, format parsing, or settings handling, read `.agents/server-map.md` and follow the workflow in `Server Behavior Is Authoritative` below.
+- Before working on the upstream SQL test harness in `tests/clickhouse-test-runner/`, read `tests/clickhouse-test-runner/AGENTS.md`.
 
 Do not treat those docs as replacements for this file. They are required reference material. This file remains the source of truth for agent behavior.
 
@@ -143,5 +144,6 @@ When you reconcile the sub-agent's findings into your reply to the user, preserv
 - When possible, use parametrized tests. Express a matrix of cases with `@pytest.mark.parametrize` instead of using near-duplicate test bodies. This is the right place for the type-shape and case-variant coverage above.
 - Client behavior must hold for both the sync and async clients. For integration tests use the `param_client` and call fixtures from `tests/integration_tests/conftest.py`, which run one test body against both transports via the client_mode parameter. See `tests/integration_tests/test_temporal.py` for the pattern. Do not write a sync-only test for a change that touches shared client code.
 - Do not use `42` as the generic representative integer in tests.
+- After writing or changing tests, run the `test-reviewer` agent on them and apply its trims and flake fixes before handing off.
 - Do not use names like `alice` or `bob` as generic placeholders.
 - Prefer values like `13`, `79`, `user_1`, and `user_2`, or similarly neutral domain-appropriate values.
