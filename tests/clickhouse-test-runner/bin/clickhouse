@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Starts the clickhouse-client imitation of this harness. tests/clickhouse-test calls it as
+# `clickhouse client ...`, `clickhouse-client ...` and `clickhouse extract-from-config ...`.
+#
+# It runs clickhouse-connect from this checkout. CLICKHOUSE_TEST_RUNNER_PYTHON selects the Python
+# interpreter (default: python3).
+set -euo pipefail
+bin_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+runner_dir="$(dirname "${bin_dir}")"
+repo_dir="$(cd "${runner_dir}/../.." && pwd)"
+export PYTHONPATH="${runner_dir}:${repo_dir}${PYTHONPATH:+:${PYTHONPATH}}"
+exec "${CLICKHOUSE_TEST_RUNNER_PYTHON:-python3}" -m clickhouse_test_runner "$@"
