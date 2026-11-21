@@ -386,6 +386,14 @@ not try `.sh` tests.
 runs the allowlist nightly, manually, and on pushes to `main` and pull
 requests that change this directory or the workflow.
 
+To run it on another pull request, for example a change in the client, add
+the `tests:run-core-sql` label
+([`upstream-sql-tests-label.yml`](../../.github/workflows/upstream-sql-tests-label.yml)).
+The run tests the pull request as it is when the label is added, and removes
+the label when it ends: to test a later push, add the label again. The token
+of a pull request from a fork cannot remove the label, so remove it by hand
+before you add it again.
+
 - The matrix is 10 round-robin shards of the allowlist, about 1,020 tests
   each, at `-j 4`. After its upstream tests, the first shard also runs the
   unit and live tests of the harness.
