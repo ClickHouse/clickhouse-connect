@@ -28,6 +28,7 @@ from tests.helpers import run_in_new_loop
 
 PROTOCOL_RESPONSE = b"\x00" * 8 + b"\x01\x01\x05check"
 VERSION_OP = CommandOp("SELECT version(), timezone()", use_database=False)
+DESCRIBE_OP = QueryOp("DESCRIBE TABLE `target_table`", settings={"query_id": ""}, query_formats={"String": "bytes"})
 SETTINGS_OP = QueryOp("SELECT name, value, readonly FROM system.settings LIMIT 10000")
 PROBE_OP = RawQueryOp(
     "SELECT 1 AS check",
@@ -217,7 +218,7 @@ def test_insert_context_sequence_describes_table_identically(column_names):
     sync_context = run_sync(insert_context_sequence("target_table", column_names=column_names), sync_backend.execute)
     async_context = run_in_new_loop(run_async(insert_context_sequence("target_table", column_names=column_names), async_backend.execute))
 
-    assert sync_backend.operations == async_backend.operations == [QueryOp("DESCRIBE TABLE `target_table`", settings={"query_id": ""})]
+    assert sync_backend.operations == async_backend.operations == [DESCRIBE_OP]
     for context in (sync_context, async_context):
         assert context.table == "`target_table`"
         assert context.column_names == ["user_id", "label"]
@@ -241,7 +242,7 @@ def test_insert_context_sequence_resets_query_id_for_describe(settings, describe
     sync_context = run_sync(insert_context_sequence("target_table", settings=settings), sync_backend.execute)
     async_context = run_in_new_loop(run_async(insert_context_sequence("target_table", settings=settings), async_backend.execute))
 
-    expected = [QueryOp("DESCRIBE TABLE `target_table`", settings=describe_settings)]
+    expected = [QueryOp("DESCRIBE TABLE `target_table`", settings=describe_settings, query_formats={"String": "bytes"})]
     assert sync_backend.operations == async_backend.operations == expected
     for context in (sync_context, async_context):
         assert context.settings == (original_settings or {})
@@ -282,6 +283,34 @@ def test_insert_context_sequence_rejects_unknown_column():
         )
 
 
+def _describe_bytes_row(name: bytes, type_name: bytes) -> dict[str, object]:
+    return {
+        "name": name,
+        "type": type_name,
+        "default_type": b"",
+        "default_expression": b"",
+        "comment": b"",
+        "codec_expression": b"",
+        "ttl_expression": b"",
+    }
+
+
+def test_insert_context_sequence_reads_names_that_are_not_utf8_from_describe():
+    rows = [
+        _describe_bytes_row(b"e", b"Enum8('\xff' = 1, 'other' = 2)"),
+        _describe_bytes_row(b"caf\xc3\xa9", b"UInt8"),
+        {**_describe_bytes_row(b"hidden", b"UInt8"), "default_type": b"MATERIALIZED"},
+    ]
+
+    sync_context = run_sync(insert_context_sequence("target_table"), FakeSyncExecutor([rows]).execute)
+    async_context = run_in_new_loop(run_async(insert_context_sequence("target_table"), FakeAsyncExecutor([rows]).execute))
+
+    for context in (sync_context, async_context):
+        assert context.column_names == ["e", "caf\u00e9"]
+        assert [t.name for t in context.column_types] == [r"Enum8('\xff' = 1, 'other' = 2)", "UInt8"]
+        assert context.column_types[0].insert_name == r"Enum8('\xff' = 1, 'other' = 2)"
+
+
 def test_client_execute_operation_dispatch():
     client = Mock()
     result = Client._execute_operation(client, CommandOp("SELECT version()", use_database=False))
@@ -296,6 +325,19 @@ def test_client_execute_operation_dispatch():
     client.raw_query.assert_called_once_with("SELECT 1", settings=None, fmt="Native")
     with pytest.raises(TypeError, match="Unsupported operation type"):
         Client._execute_operation(client, SimpleNamespace(settings={}))
+
+
+def test_client_execute_operation_lets_an_operation_override_the_internal_formats():
+    client = Mock()
+    Client._execute_operation(client, QueryOp("SELECT 1", query_formats={"String": "bytes", "FixedString": "bytes"}))
+    client.create_query_context.assert_called_once_with(
+        query="SELECT 1", settings=None, query_formats={"String": "bytes", "FixedString": "bytes"}
+    )
+
+    client = AsyncMock()
+    client.create_query_context = Mock()
+    run_in_new_loop(AsyncClient._execute_operation(client, QueryOp("SELECT 1", query_formats={"String": "bytes"})))
+    client.create_query_context.assert_called_once_with(query="SELECT 1", settings=None, query_formats={"String": "bytes"})
 
 
 def test_async_client_execute_operation_dispatch():

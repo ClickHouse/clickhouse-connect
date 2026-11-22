@@ -21,6 +21,7 @@ cdef union ull_wrapper:
     unsigned long long int_value
 
 cdef char * errors = 'strict'
+cdef char * name_errors = 'surrogateescape'
 cdef char * utf8 = 'utf8'
 cdef dict array_templates = {}
 cdef bint must_swap = sys.byteorder == 'big'
@@ -272,7 +273,8 @@ cdef class ResponseBuffer:
     def read_leb128_str(self) -> str:
         cdef unsigned long long sz = self.read_leb128()
         cdef char * b = self.read_bytes_c(sz)
-        return PyUnicode_Decode(b, sz, utf8, errors)
+        # Type and column names are not always valid UTF-8, for example an Enum label such as '\xff'.
+        return PyUnicode_Decode(b, sz, utf8, name_errors)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)

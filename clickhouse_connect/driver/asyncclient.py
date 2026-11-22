@@ -451,7 +451,9 @@ class AsyncClient(Client):
         if isinstance(operation, CommandOp):
             return await self.command(operation.text, settings=settings, use_database=operation.use_database)
         if isinstance(operation, QueryOp):
-            context = self.create_query_context(query=operation.text, settings=settings, query_formats=dict(_INTERNAL_QUERY_FORMATS))
+            context = self.create_query_context(
+                query=operation.text, settings=settings, query_formats={**_INTERNAL_QUERY_FORMATS, **operation.query_formats}
+            )
             context.internal = True
             return await self._query_with_context(context)
         if isinstance(operation, RawQueryOp):

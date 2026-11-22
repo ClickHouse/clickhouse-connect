@@ -21,9 +21,11 @@ class CommandOp:
 class QueryOp:
     text: str
     settings: Mapping[str, Any] = field(default_factory=dict)
+    query_formats: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "settings", _freeze_mapping(self.settings))
+        object.__setattr__(self, "query_formats", _freeze_mapping(self.query_formats))
 
 
 @dataclass(frozen=True)
