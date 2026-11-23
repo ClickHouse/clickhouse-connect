@@ -249,13 +249,11 @@ class Client(ABC):
         AsyncClient overrides this with a coroutine variant, so sync base-class
         helpers that dispatch through it must themselves be overridden there.
         """
+        if isinstance(operation, QueryOp):
+            return self._query_with_context(operation.make_context(self.create_query_context, _INTERNAL_QUERY_FORMATS))
         settings = dict(operation.settings) or None
         if isinstance(operation, CommandOp):
             return self.command(operation.text, settings=settings, use_database=operation.use_database)
-        if isinstance(operation, QueryOp):
-            context = self.create_query_context(query=operation.text, settings=settings, query_formats=dict(_INTERNAL_QUERY_FORMATS))
-            context.internal = True
-            return self._query_with_context(context)
         if isinstance(operation, RawQueryOp):
             return self.raw_query(operation.text, settings=settings, fmt=operation.fmt)
         raise TypeError(f"Unsupported operation type: {type(operation).__name__}")

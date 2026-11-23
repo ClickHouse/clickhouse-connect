@@ -171,12 +171,13 @@ def insert_context_sequence(
     if column_types is None and column_type_names is None:
         # An empty query_id overrides client defaults and tells the server to generate a new ID.
         describe_settings = {**(settings or {}), "query_id": ""}
-        describe_result = yield QueryOp(f"DESCRIBE TABLE {full_table}", settings=describe_settings)
-        column_defs = [
-            ColumnDef(**row)
-            for row in _named_rows(describe_result, "DESCRIBE TABLE")
-            if row["default_type"] not in ("ALIAS", "MATERIALIZED")
-        ]
+        describe_result = yield QueryOp(f"DESCRIBE TABLE {full_table}", settings=describe_settings, column_formats={"type": "bytes"})
+        for row in _named_rows(describe_result, "DESCRIBE TABLE"):
+            if row["default_type"] not in ("ALIAS", "MATERIALIZED"):
+                type_name = row["type"]
+                if isinstance(type_name, bytes):
+                    type_name = type_name.decode("utf-8", "surrogateescape")
+                column_defs.append(ColumnDef(**{**row, "type": type_name}))
     if column_names is None or isinstance(column_names, str) and column_names == "*":
         column_names = [cd.name for cd in column_defs]
         column_types = [cd.ch_type for cd in column_defs]

@@ -217,7 +217,11 @@ def test_insert_context_sequence_describes_table_identically(column_names):
     sync_context = run_sync(insert_context_sequence("target_table", column_names=column_names), sync_backend.execute)
     async_context = run_in_new_loop(run_async(insert_context_sequence("target_table", column_names=column_names), async_backend.execute))
 
-    assert sync_backend.operations == async_backend.operations == [QueryOp("DESCRIBE TABLE `target_table`", settings={"query_id": ""})]
+    assert (
+        sync_backend.operations
+        == async_backend.operations
+        == [QueryOp("DESCRIBE TABLE `target_table`", settings={"query_id": ""}, column_formats={"type": "bytes"})]
+    )
     for context in (sync_context, async_context):
         assert context.table == "`target_table`"
         assert context.column_names == ["user_id", "label"]
@@ -241,7 +245,7 @@ def test_insert_context_sequence_resets_query_id_for_describe(settings, describe
     sync_context = run_sync(insert_context_sequence("target_table", settings=settings), sync_backend.execute)
     async_context = run_in_new_loop(run_async(insert_context_sequence("target_table", settings=settings), async_backend.execute))
 
-    expected = [QueryOp("DESCRIBE TABLE `target_table`", settings=describe_settings)]
+    expected = [QueryOp("DESCRIBE TABLE `target_table`", settings=describe_settings, column_formats={"type": "bytes"})]
     assert sync_backend.operations == async_backend.operations == expected
     for context in (sync_context, async_context):
         assert context.settings == (original_settings or {})
@@ -288,7 +292,9 @@ def test_client_execute_operation_dispatch():
     assert result is client.command.return_value
     client.command.assert_called_once_with("SELECT version()", settings=None, use_database=False)
     Client._execute_operation(client, QueryOp("SELECT 1", settings={"max_threads": "4"}))
-    client.create_query_context.assert_called_once_with(query="SELECT 1", settings={"max_threads": "4"}, query_formats={"String": "string"})
+    client.create_query_context.assert_called_once_with(
+        query="SELECT 1", settings={"max_threads": "4"}, query_formats={"String": "string"}, column_formats=None
+    )
     context = client.create_query_context.return_value
     assert context.internal is True
     client._query_with_context.assert_called_once_with(context)
@@ -305,7 +311,9 @@ def test_async_client_execute_operation_dispatch():
     client.command.assert_awaited_once_with("SELECT version()", settings=None, use_database=False)
     client.create_query_context = Mock()
     run_in_new_loop(AsyncClient._execute_operation(client, QueryOp("SELECT 1", settings={"max_threads": "4"})))
-    client.create_query_context.assert_called_once_with(query="SELECT 1", settings={"max_threads": "4"}, query_formats={"String": "string"})
+    client.create_query_context.assert_called_once_with(
+        query="SELECT 1", settings={"max_threads": "4"}, query_formats={"String": "string"}, column_formats=None
+    )
     context = client.create_query_context.return_value
     assert context.internal is True
     client._query_with_context.assert_awaited_once_with(context)

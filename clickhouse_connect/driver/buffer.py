@@ -108,9 +108,9 @@ class ResponseBuffer(ByteSource):
                 return sz
             shift += 7
 
-    def read_leb128_str(self) -> str:
+    def read_leb128_str(self, *, surrogateescape: bool = False) -> str:
         sz = self.read_leb128()
-        return self.read_bytes(sz).decode()
+        return self.read_bytes(sz).decode("utf-8", "surrogateescape" if surrogateescape else "strict")
 
     def read_uint64(self) -> int:
         return int.from_bytes(self.read_bytes(8), "little", signed=False)

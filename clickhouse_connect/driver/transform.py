@@ -92,7 +92,7 @@ class NativeTransform:
                 num_rows = source.read_leb128()
                 for col_num in range(num_cols):
                     orig_name = source.read_leb128_str()
-                    type_name = source.read_leb128_str()
+                    type_name = source.read_leb128_str(surrogateescape=True)
                     if block_num == 0:
                         disp_name = renamer(orig_name) if renamer is not None else orig_name
                         names.append(disp_name)

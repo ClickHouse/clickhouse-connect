@@ -2,8 +2,9 @@ from enum import Enum, IntEnum
 
 import pytest
 
+from clickhouse_connect.datatypes.dynamic import typed_variant
 from clickhouse_connect.driver.exceptions import DataError
-from tests.integration_tests.conftest import nullable_tuple_settings
+from tests.integration_tests.conftest import nullable_tuple_settings, type_available
 
 
 class EnumLabel(str, Enum):
@@ -67,6 +68,53 @@ def test_enum_labels_and_codes(param_client, call, table_context, enum_name, wra
         call(param_client.insert, "test_enum_labels_and_codes", [(i, wrap_value(value)) for i, value in enumerate(values)])
         result = call(param_client.query, "SELECT status FROM test_enum_labels_and_codes ORDER BY id")
         assert result.result_rows == [(wrap_value(value),) for value in expected]
+
+
+@pytest.mark.local_only
+@pytest.mark.parametrize("insert_with_driver", [False, True], ids=["read", "infer-insert-type"])
+def test_enum_labels_with_non_utf8_bytes(param_client, call, table_context, test_config, insert_with_driver):
+    if test_config.native_codec != "python":
+        pytest.skip("This test uses the Python Native codec")
+
+    table = "test_enum_non_utf8"
+    columns = [
+        "id UInt8",
+        r"label Enum8('\xff' = 1, 'other' = 2)",
+        r"labels Array(Nullable(Enum16('caf\xe9' = 300, 'other' = 2)))",
+    ]
+    rows = [(13, "other", ["other", None]), (79, "\udcff", ["caf\udce9"])]
+    with table_context(table, columns):
+        if insert_with_driver:
+            call(param_client.insert, table, rows)
+        else:
+            call(param_client.command, f"INSERT INTO {table} VALUES (13, 2, [2, NULL]), (79, 1, [300])")
+
+        oracle = call(
+            param_client.query,
+            f"SELECT hex(toString(label)), toInt8(label), arrayMap(x -> hex(toString(x)), labels), "
+            f"arrayMap(x -> toInt16(x), labels) FROM {table} ORDER BY id",
+        )
+        assert oracle.result_rows == [("6F74686572", 2, ["6F74686572", None], [2, None]), ("FF", 1, ["636166E9"], [300])]
+        result = call(param_client.query, f"SELECT id, label, labels, unhex('ff') FROM {table} ORDER BY id")
+        assert result.result_rows == [(*row, "ff") for row in rows]
+
+
+@pytest.mark.local_only
+def test_variant_with_non_utf8_enum_metadata_fails_without_mixing_members(param_client, call, table_context, test_config):
+    if test_config.native_codec != "python":
+        pytest.skip("This test uses the Python Native codec")
+    type_available(param_client, "variant")
+    table = "test_enum_variant_non_utf8"
+    first = "Enum8('~' = 2)"
+    variant = rf"Variant({first}, Enum8('\xff' = 1))"
+    settings = {"allow_suspicious_variant_types": 1}
+    with table_context(table, [f"label {variant}"], order_by="tuple()", settings=settings):
+        call(param_client.command, f"INSERT INTO {table} SELECT CAST(CAST(2 AS {first}) AS {variant})", settings=settings)
+        with pytest.raises(DataError, match="Variant types with non-UTF-8 metadata"):
+            call(param_client.query, f"SELECT label FROM {table}")
+        with pytest.raises(DataError, match="Variant types with non-UTF-8 metadata"):
+            call(param_client.insert, table, [[typed_variant("~", first)]])
+        assert call(param_client.query, f"SELECT hex(toString(label)) FROM {table}").result_rows == [("7E",)]
 
 
 @pytest.mark.parametrize("enum_name", ["Enum8", "Enum16"])

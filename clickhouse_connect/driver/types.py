@@ -21,7 +21,7 @@ class ByteSource(Closable):
         pass
 
     @abstractmethod
-    def read_leb128_str(self) -> str:
+    def read_leb128_str(self, *, surrogateescape: bool = False) -> str:
         pass
 
     @abstractmethod

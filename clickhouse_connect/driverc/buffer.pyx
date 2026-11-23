@@ -269,9 +269,11 @@ cdef class ResponseBuffer:
         b = self._read_byte_load()
         return b
 
-    def read_leb128_str(self) -> str:
+    def read_leb128_str(self, *, surrogateescape: bool = False) -> str:
         cdef unsigned long long sz = self.read_leb128()
         cdef char * b = self.read_bytes_c(sz)
+        if surrogateescape:
+            return PyUnicode_Decode(b, sz, utf8, "surrogateescape")
         return PyUnicode_Decode(b, sz, utf8, errors)
 
     @cython.boundscheck(False)
