@@ -263,6 +263,7 @@ class HttpAsyncBackend:
         self.proxy_url = proxy_url
         self.server_host_name = server_host_name
         self.token_provider = token_provider
+        self._token_refresh_pending = False
         self.autogenerate_query_id = autogenerate_query_id
         self.read_format = read_format
         self.form_encode_query_params = form_encode_query_params
@@ -388,6 +389,7 @@ class HttpAsyncBackend:
         self.headers["Authorization"] = f"Bearer {access_token}"
         if self.session:
             self.session.headers["Authorization"] = f"Bearer {access_token}"
+        self._token_refresh_pending = False
 
     async def error_handler(self, response: aiohttp.ClientResponse, retried: bool = False):
         """
@@ -669,6 +671,8 @@ class HttpAsyncBackend:
         if self.autogenerate_query_id and "query_id" not in final_params:
             final_params["query_id"] = str(uuid.uuid4())
 
+        if self.token_provider and self._token_refresh_pending:
+            self.set_access_token(await self.resolve_token())
         req_headers = dict_copy(self.headers, headers)
         if self.server_host_name:
             req_headers["Host"] = self.server_host_name
@@ -688,8 +692,7 @@ class HttpAsyncBackend:
                     )
                 self._active_session = query_session
 
-            # Snapshot+acquire under lock so close_connections() can't pass the
-            # drain check between our session read and our refcount increment.
+            # Acquire under lock so connection rotation cannot drain this session first.
             async with self.session_lock:
                 lease = self.session_lease
                 if lease is None or lease.session.closed:
@@ -704,17 +707,14 @@ class HttpAsyncBackend:
                 lease.acquire()
             lease_released = False
             try:
-                # Construct full URL (aiohttp doesn't have base_url)
-                url = self._base_url
-                request_kwargs = {"method": method, "url": url, "params": final_params, "headers": req_headers}
+                request_kwargs = {"method": method, "url": self._base_url, "params": final_params, "headers": req_headers}
                 if self.server_host_name and self.ssl_context is not None:
                     request_kwargs["ssl"] = self.ssl_context
                     request_kwargs["server_hostname"] = self.server_host_name
                 if self.proxy_url:
                     request_kwargs["proxy"] = self.proxy_url
                 if files:
-                    # IMPORTANT: Must set content_type on text fields to force multipart/form-data encoding
-                    # Without content_type, aiohttp uses application/x-www-form-urlencoded
+                    # Text fields need a content type to trigger multipart encoding.
                     form = aiohttp.FormData()
                     for field_name, field_value in files.items():
                         if isinstance(field_value, tuple):
@@ -753,16 +753,16 @@ class HttpAsyncBackend:
                         response.close()
                         continue
                 if self.token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
-                    if retry_body is None and not (data is None or isinstance(data, (bytes, bytearray, str, dict))):
-                        await self.error_handler(response)  # non-replayable body, surface the auth error instead of retrying
-                    auth_retried = True
-                    self.set_access_token(await self.resolve_token())
-                    req_headers["Authorization"] = self.headers["Authorization"]
-                    if retry_body is not None:
-                        data = await retry_body()
-                    logger.debug("Refreshing access token after authentication failure")
-                    response.close()
-                    continue
+                    if retryable and _request_is_read_only(data, final_params, files):
+                        auth_retried = True
+                        self.set_access_token(await self.resolve_token())
+                        req_headers["Authorization"] = self.headers["Authorization"]
+                        if retry_body is not None:
+                            data = await retry_body()
+                        logger.debug("Retrying read with refreshed token")
+                        response.close()
+                        continue
+                    self._token_refresh_pending = True
                 await self.error_handler(response)
 
             except aiohttp.ClientConnectionError as e:

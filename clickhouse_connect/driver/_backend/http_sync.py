@@ -101,6 +101,7 @@ class HttpSyncBackend:
         self.timeout = timeout
         self.server_host_name = server_host_name
         self.token_provider = token_provider
+        self._token_refresh_pending = False
         self.autogenerate_query_id = autogenerate_query_id
         self.http_retries = http_retries
         self.read_format = read_format
@@ -117,6 +118,7 @@ class HttpSyncBackend:
         if auth_header and not auth_header.startswith("Bearer"):
             raise ProgrammingError("Cannot set access token when a different auth type is used")
         self.headers["Authorization"] = f"Bearer {access_token}"
+        self._token_refresh_pending = False
 
     def error_handler(self, response: HTTPResponse, retried: bool = False) -> None:
         """
@@ -310,6 +312,8 @@ class HttpSyncBackend:
     ) -> HTTPResponse:
         if isinstance(data, str):
             data = data.encode()
+        if self.token_provider and self._token_refresh_pending:
+            self.set_access_token(self.token_provider())
         headers = dict_copy(self.headers, headers)
         attempts = 0
         auth_retried = False
@@ -402,18 +406,20 @@ class HttpSyncBackend:
                 logger.debug("Retrying requests with status code %d", response.status)
                 time.sleep(0.1 * attempts)
                 response.close()
-            elif self.token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
-                body = kwargs.get("body")
-                if retry_body is None and not (body is None or isinstance(body, (bytes, bytearray, str))):
-                    self.error_handler(response)  # non-replayable body, surface the auth error instead of retrying
-                auth_retried = True
-                self.set_access_token(self.token_provider())
-                headers["Authorization"] = self.headers["Authorization"]
-                if retry_body is not None:
-                    kwargs["body"] = retry_body()
-                response.close()
-                logger.debug("Refreshing access token after authentication failure")
-            elif error_handler is not None:
+                continue
+            if self.token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
+                if retryable and _request_is_read_only(data, final_params, fields):
+                    auth_retried = True
+                    self.set_access_token(self.token_provider())
+                    headers["Authorization"] = self.headers["Authorization"]
+                    if retry_body is not None:
+                        kwargs["body"] = retry_body()
+                    response.close()
+                    logger.debug("Retrying read with refreshed token")
+                    continue
+                # A 516 can arrive after execution. Refresh on the next request instead.
+                self._token_refresh_pending = True
+            if error_handler is not None:
                 error_handler(response)
             else:
                 self.error_handler(response)

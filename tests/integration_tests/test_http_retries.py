@@ -1,6 +1,7 @@
 import socket
 import sys
 import time
+from collections.abc import Callable
 from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -27,7 +28,7 @@ def _dedup_settings(client, enabled: bool) -> dict[str, int | str]:
 class _RetryHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def do_POST(self):  # noqa: N802
+    def read_body(self):
         if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
             chunks = []
             while True:
@@ -38,10 +39,11 @@ class _RetryHandler(BaseHTTPRequestHandler):
                     break
                 chunks.append(self.rfile.read(size))
                 assert self.rfile.read(2) == b"\r\n"
-            body = b"".join(chunks)
-        else:
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            return b"".join(chunks)
+        return self.rfile.read(int(self.headers.get("Content-Length", 0)))
 
+    def do_POST(self):  # noqa: N802
+        body = self.read_body()
         upstream = self.server.upstream
         connection_cls = HTTPSConnection if upstream.scheme == "https" else HTTPConnection
         headers = {name: value for name, value in self.headers.items() if name.lower() not in _HOP_HEADERS}
@@ -133,6 +135,144 @@ def retry_proxy(param_client, client_factory, test_create_client):
         observer.close()
         assert not thread.is_alive()
         assert not proxy.errors, proxy.errors
+
+
+class _TokenReplyHandler(_RetryHandler):
+    def do_POST(self):  # noqa: N802
+        body = self.read_body()
+        server = self.server
+        if server.reply is None:
+            query = parse_qs(urlsplit(self.path).query).get("query", [""])[0].encode() or body
+            for prefix, startup_reply in server.bootstrap.items():
+                if query.startswith(prefix):
+                    response = startup_reply
+                    break
+            else:
+                raise AssertionError(f"Unexpected startup request: {query!r}")
+        else:
+            server.tokens.append(self.headers.get("Authorization"))
+            response = server.reply(len(server.tokens))
+
+        self.send_response(403 if response is None else 200)
+        if response is None:
+            self.send_header("X-ClickHouse-Exception-Code", "516")
+            response = b"Code: 516. DB::Exception: Injected late response. (AUTHENTICATION_FAILED)"
+        self.send_header("Content-Length", str(len(response)))
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.end_headers()
+        self.wfile.write(response)
+
+
+class _TokenReplyServer(ThreadingHTTPServer):
+    def __init__(self, observer):
+        super().__init__(("127.0.0.1", 0), _TokenReplyHandler)
+        self.bootstrap = {
+            b"SELECT version(), timezone()": observer.raw_query("SELECT version(), timezone()", fmt="TabSeparated"),
+            b"SELECT name, value, readonly FROM system.settings": observer.raw_query(
+                "SELECT name, value, readonly FROM system.settings LIMIT 0", fmt="Native"
+            ),
+            b"SELECT 1 AS check": b"",
+        }
+        self.reply: Callable[[int], bytes | None] | None = None
+        self.tokens: list[str | None] = []
+        self.errors = []
+
+    def arm(self, reply):
+        self.tokens.clear()
+        self.reply = reply
+
+    def handle_error(self, request, client_address):
+        self.errors.append(sys.exc_info()[1])
+        super().handle_error(request, client_address)
+
+
+@pytest.fixture
+def token_reply_server(client_factory, test_client):
+    server = _TokenReplyServer(test_client)
+    thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+    thread.start()
+
+    def connect(provider):
+        return client_factory(
+            host="127.0.0.1",
+            port=server.server_port,
+            secure=False,
+            compress=False,
+            username=None,
+            password=None,
+            token_provider=provider,
+            apply_test_settings=False,
+        )
+
+    try:
+        yield server, connect
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert not server.errors, server.errors
+
+
+@pytest.mark.local_only
+@pytest.mark.parametrize("method", ["command", "insert", "raw_insert"])
+def test_token_failure_after_write_does_not_replay(token_reply_server, test_client, call, table_context, method):
+    server, connect = token_reply_server
+    first_refresh_fails = method == "command"
+    tokens = iter(("fixture-initial", None, "fixture-refreshed") if first_refresh_fails else ("fixture-initial", "fixture-refreshed"))
+
+    def provider():
+        token = next(tokens)
+        if token is None:
+            raise RuntimeError("Fixture token unavailable")
+        return token
+
+    with table_context("token_write_retry", ["key Int32"]):
+        client = connect(provider)
+        settings = _dedup_settings(test_client, False)
+
+        def late_error(_):
+            # Observe one committed row for each request received by the fixture.
+            test_client.command("INSERT INTO token_write_retry VALUES (13)", settings=settings)
+            return None
+
+        server.arm(late_error)
+        with pytest.raises(DatabaseError) as error:
+            if method == "command":
+                call(client.command, "INSERT INTO token_write_retry VALUES (13)")
+            elif method == "insert":
+                call(client.insert, "token_write_retry", [[13]], column_names=["key"], column_type_names=["Int32"])
+            else:
+                call(client.raw_insert, "token_write_retry", ["key"], b"13\n", fmt="CSV")
+        assert error.value.code == 516
+        assert server.tokens == ["Bearer fixture-initial"]
+        assert test_client.query("SELECT key FROM token_write_retry").result_rows == [(13,)]
+
+        def next_write(_):
+            test_client.command("INSERT INTO token_write_retry VALUES (79)", settings=settings)
+            return b""
+
+        server.arm(next_write)
+        if first_refresh_fails:
+            with pytest.raises(RuntimeError, match="Fixture token unavailable"):
+                call(client.command, "INSERT INTO token_write_retry VALUES (79)")
+            assert server.tokens == []
+        call(client.command, "INSERT INTO token_write_retry VALUES (79)")
+        assert server.tokens == ["Bearer fixture-refreshed"]
+        assert test_client.query("SELECT key FROM token_write_retry ORDER BY key").result_rows == [(13,), (79,)]
+
+
+@pytest.mark.local_only
+def test_token_failure_on_with_select_refreshes_and_retries(token_reply_server, test_client, call):
+    server, connect = token_reply_server
+    tokens = iter(("fixture-initial", "fixture-refreshed"))
+    client = connect(lambda: next(tokens))
+    result = test_client.raw_query("SELECT toInt32(13) AS value", fmt="Native")
+    server.arm(lambda attempt: None if attempt == 1 else result)
+
+    assert call(client.query, "WITH toInt32(13) AS value SELECT value").result_rows == [(13,)]
+    assert server.tokens == ["Bearer fixture-initial", "Bearer fixture-refreshed"]
 
 
 @pytest.mark.local_only
