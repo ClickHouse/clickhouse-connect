@@ -27,7 +27,7 @@ Use `clickhouse_connect.get_client` to create a synchronous `Client`, or install
 | `username` | str or None | `"default"` | ClickHouse user name. The aliases `user` and `user_name` are also accepted. |
 | `password` | str | `""` | Password for `username`. Do not combine user/password authentication with token authentication. |
 | `access_token` | str or None | `None` | ClickHouse Cloud JWT access token. Mutually exclusive with `token_provider` and user/password authentication. |
-| `token_provider` | callable or None | `None` | Supplies JWTs. After 516, eligible reads retry. Other requests refresh on the next SQL call. Async providers supported. |
+| `token_provider` | callable or None | `None` | Supplies JWTs. On 516, replayable reads retry. Other requests refresh on the next SQL call. Async providers supported. |
 | `database` | str or None | User default | Default database. Passing `None` requests the server default for the user. |
 | `secure` | bool or str | `False` | Enable HTTPS/TLS. `interface="https"` also selects HTTPS, as does port 443 or 8443 when `interface` is not set. |
 | `dsn` | str or None | `None` | Connection URL. Explicit keyword arguments take precedence over values parsed from the DSN. Percent-encode reserved characters in credentials and database names. |

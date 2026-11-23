@@ -359,11 +359,12 @@ class HttpSyncBackend:
                 self._active_session = query_session
             try:
                 response: HTTPResponse = cast(HTTPResponse, cast(PoolManager, self.http).request(method, url, **kwargs))
+                error_code = response.headers.get(ex_header)
                 # http.client accepts EOF as the end of headers. ClickHouse sends only progress
                 # headers until it finalizes the response headers.
                 if (
                     200 <= response.status < 300
-                    and not response.headers.get(ex_header)
+                    and not error_code
                     and method.upper() != "HEAD"
                     and all(name.lower() == "x-clickhouse-progress" for name in response.headers)
                 ):
@@ -398,16 +399,16 @@ class HttpSyncBackend:
             finally:
                 if query_session:
                     self._active_session = None  # Make sure we always clear this
-            if 200 <= response.status < 300 and not response.headers.get(ex_header):
+            if 200 <= response.status < 300 and not error_code:
                 return response
-            if response.status in retryable_http_statuses:
+            if response.status in retryable_http_statuses and error_code != auth_failed_ex_code:
                 if not retryable or attempts > retries:
                     self.error_handler(response, True)
                 logger.debug("Retrying requests with status code %d", response.status)
                 time.sleep(0.1 * attempts)
                 response.close()
                 continue
-            if self.token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
+            if self.token_provider and not auth_retried and error_code == auth_failed_ex_code:
                 if retryable and _request_is_read_only(data, final_params, fields):
                     auth_retried = True
                     self.set_access_token(self.token_provider())

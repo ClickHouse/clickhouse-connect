@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable
 from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import RawIOBase
 from threading import Thread
 from urllib.parse import parse_qs, urlsplit
 
@@ -11,6 +12,7 @@ import pytest
 
 from clickhouse_connect.dbapi.cursor import Cursor
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
+from clickhouse_connect.driver.external import ExternalData
 from clickhouse_connect.driver.options import pd
 
 _HOP_HEADERS = {"connection", "content-length", "expect", "host", "keep-alive", "trailer", "transfer-encoding"}
@@ -151,9 +153,10 @@ class _TokenReplyHandler(_RetryHandler):
                 raise AssertionError(f"Unexpected startup request: {query!r}")
         else:
             server.tokens.append(self.headers.get("Authorization"))
+            server.bodies.append(body)
             response = server.reply(len(server.tokens))
 
-        self.send_response(403 if response is None else 200)
+        self.send_response(server.auth_error_status if response is None else 200)
         if response is None:
             self.send_header("X-ClickHouse-Exception-Code", "516")
             response = b"Code: 516. DB::Exception: Injected late response. (AUTHENTICATION_FAILED)"
@@ -176,10 +179,14 @@ class _TokenReplyServer(ThreadingHTTPServer):
         }
         self.reply: Callable[[int], bytes | None] | None = None
         self.tokens: list[str | None] = []
+        self.bodies: list[bytes] = []
+        self.auth_error_status = 403
         self.errors = []
 
-    def arm(self, reply):
+    def arm(self, reply, status=403):
         self.tokens.clear()
+        self.bodies.clear()
+        self.auth_error_status = status
         self.reply = reply
 
     def handle_error(self, request, client_address):
@@ -216,8 +223,8 @@ def token_reply_server(client_factory, test_client):
 
 
 @pytest.mark.local_only
-@pytest.mark.parametrize("method", ["command", "insert", "raw_insert"])
-def test_token_failure_after_write_does_not_replay(token_reply_server, test_client, call, table_context, method):
+@pytest.mark.parametrize(("method", "status"), [("command", 403), ("insert", 403), ("raw_insert", 403), ("backend", 503)])
+def test_token_failure_after_write_does_not_replay(token_reply_server, test_client, call, table_context, method, status):
     server, connect = token_reply_server
     first_refresh_fails = method == "command"
     tokens = iter(("fixture-initial", None, "fixture-refreshed") if first_refresh_fails else ("fixture-initial", "fixture-refreshed"))
@@ -237,17 +244,20 @@ def test_token_failure_after_write_does_not_replay(token_reply_server, test_clie
             test_client.command("INSERT INTO token_write_retry VALUES (13)", settings=settings)
             return None
 
-        server.arm(late_error)
+        server.arm(late_error, status)
         with pytest.raises(DatabaseError) as error:
             if method == "command":
                 call(client.command, "INSERT INTO token_write_retry VALUES (13)")
             elif method == "insert":
                 call(client.insert, "token_write_retry", [[13]], column_names=["key"], column_type_names=["Int32"])
-            else:
+            elif method == "raw_insert":
                 call(client.raw_insert, "token_write_retry", ["key"], b"13\n", fmt="CSV")
-        assert error.value.code == 516
-        assert server.tokens == ["Bearer fixture-initial"]
+            else:
+                call(client._backend.request, "INSERT INTO token_write_retry VALUES (13)", {}, retryable=True, retries=1)
         assert test_client.query("SELECT key FROM token_write_retry").result_rows == [(13,)]
+        assert server.tokens == ["Bearer fixture-initial"]
+        assert type(error.value) is DatabaseError
+        assert error.value.code == 516
 
         def next_write(_):
             test_client.command("INSERT INTO token_write_retry VALUES (79)", settings=settings)
@@ -273,6 +283,40 @@ def test_token_failure_on_with_select_refreshes_and_retries(token_reply_server, 
 
     assert call(client.query, "WITH toInt32(13) AS value SELECT value").result_rows == [(13,)]
     assert server.tokens == ["Bearer fixture-initial", "Bearer fixture-refreshed"]
+
+
+@pytest.mark.local_only
+@pytest.mark.parametrize("client_mode", ["async"], indirect=True)
+def test_token_failure_does_not_replay_async_multipart_stream(token_reply_server, test_client, call):
+    class OneShotFile(RawIOBase):
+        def __init__(self, data):
+            self.data = data
+
+        def readable(self):
+            return True
+
+        def read(self, size=-1):
+            data, self.data = self.data, b""
+            return data
+
+    server, connect = token_reply_server
+    tokens = iter(("fixture-initial", "fixture-refreshed", "fixture-latest"))
+    client = connect(lambda: next(tokens))
+    query = "SELECT toInt32(13)"
+    data = b"fixture-data\n"
+    server.arm(lambda _: None)
+    with pytest.raises(DatabaseError) as error, OneShotFile(data) as stream:
+        call(client._raw_request, None, {"query": query}, files={"fixture": ("fixture.csv", stream, "text/csv")})
+    assert error.value.code == 516
+    assert server.tokens == ["Bearer fixture-initial"]
+    assert [data in body for body in server.bodies] == [True]
+
+    result = test_client.raw_query(query, fmt="Native")
+    server.arm(lambda attempt: None if attempt == 1 else result)
+    external = ExternalData(file_name="fixture.csv", data=data, fmt="CSV", structure="value String")
+    assert call(client.raw_query, query, fmt="Native", external_data=external) == result
+    assert server.tokens == ["Bearer fixture-refreshed", "Bearer fixture-latest"]
+    assert [data in body for body in server.bodies] == [True, True]
 
 
 @pytest.mark.local_only

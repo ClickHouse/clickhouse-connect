@@ -713,22 +713,22 @@ class HttpAsyncBackend:
                     request_kwargs["server_hostname"] = self.server_host_name
                 if self.proxy_url:
                     request_kwargs["proxy"] = self.proxy_url
+                replayable_form = True
                 if files:
-                    # Text fields need a content type to trigger multipart encoding.
+                    # Content type forces multipart for text fields.
                     form = aiohttp.FormData()
-                    for field_name, field_value in files.items():
-                        if isinstance(field_value, tuple):
-                            if field_value[0] is None:
-                                form.add_field(field_name, str(field_value[1]), content_type="text/plain")
-                            else:
-                                filename = field_value[0]
-                                file_data = field_value[1]
-                                if isinstance(file_data, (bytes, bytearray, memoryview)):
-                                    file_data = io.BytesIO(file_data)
-                                content_type = field_value[2] if len(field_value) > 2 else None
-                                form.add_field(field_name, file_data, filename=filename, content_type=content_type)
+                    for name, part in files.items():
+                        if isinstance(part, tuple) and part[0] is not None:
+                            filename, value = part[0], part[1]
+                            content_type = part[2] if len(part) > 2 else None
                         else:
-                            form.add_field(field_name, field_value, content_type="text/plain")
+                            filename = None
+                            value = str(part[1]) if isinstance(part, tuple) else part
+                            content_type = "text/plain"
+                        replayable_form = replayable_form and isinstance(value, (str, bytes, bytearray, memoryview))
+                        if filename is not None and isinstance(value, (bytes, bytearray, memoryview)):
+                            value = io.BytesIO(value)
+                        form.add_field(name, value, filename=filename, content_type=content_type)
                     request_kwargs["data"] = form
                 elif isinstance(data, (bytes, bytearray, memoryview)):
                     request_kwargs["data"] = io.BytesIO(data)
@@ -738,22 +738,22 @@ class HttpAsyncBackend:
                     request_kwargs["data"] = data
 
                 response = await session.request(**request_kwargs)
-                if 200 <= response.status < 300 and not response.headers.get(ex_header):
+                error_code = response.headers.get(ex_header)
+                if 200 <= response.status < 300 and not error_code:
                     # Caller releases lease after consuming the body.
                     response._lease_release = _one_shot(lease.release)  # type: ignore[attr-defined]
                     lease_released = True
                     return response
 
-                if response.status in retryable_http_statuses:
+                if response.status in retryable_http_statuses and error_code != auth_failed_ex_code:
                     if not retryable or attempts > retries:
                         await self.error_handler(response, retried=True)
-                    else:
-                        logger.debug("Retrying request with status code %s (attempt %s/%s)", response.status, attempts, retries + 1)
-                        await asyncio.sleep(0.1 * attempts)
-                        response.close()
-                        continue
-                if self.token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
-                    if retryable and _request_is_read_only(data, final_params, files):
+                    logger.debug("Retrying request with status code %s (attempt %s/%s)", response.status, attempts, retries + 1)
+                    await asyncio.sleep(0.1 * attempts)
+                    response.close()
+                    continue
+                if self.token_provider and not auth_retried and error_code == auth_failed_ex_code:
+                    if replayable_form and retryable and _request_is_read_only(data, final_params, files):
                         auth_retried = True
                         self.set_access_token(await self.resolve_token())
                         req_headers["Authorization"] = self.headers["Authorization"]
