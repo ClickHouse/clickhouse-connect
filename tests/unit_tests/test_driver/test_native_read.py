@@ -1,6 +1,6 @@
 import decimal
 import struct
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from ipaddress import IPv4Address
 from uuid import UUID
 
@@ -10,7 +10,7 @@ from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
 
 from clickhouse_connect.datatypes import registry
 from clickhouse_connect.datatypes.dynamic import typed_variant
-from clickhouse_connect.driver import ctypes
+from clickhouse_connect.driver import ctypes, options
 from clickhouse_connect.driver.buffer import ResponseBuffer as PyResponseBuffer
 from clickhouse_connect.driver.exceptions import DataError, InternalError, NotSupportedError
 from clickhouse_connect.driver.insert import InsertContext
@@ -134,6 +134,121 @@ def test_date32_native_read():
     source = bytes_source(b"\x01\x01\x01d\x06Date32" + payload, cls=ctypes.RespBuffCls)
     with pytest.raises(ValueError):
         _ = parse_response(source).result_rows
+
+
+@pytest.mark.parametrize(
+    "type_name, fmt_key, fmt_val, write_values, expected",
+    [
+        ("Date32", "Date32", "int", [-719528, -13, 79], [-719528, -13, 79]),
+        ("Date32", "date32", "int", [-13, 79], [-13, 79]),
+        ("Date32", "Date*", "int", [-13, 79], [-13, 79]),
+        ("Nullable(Date32)", "Date32", "int", [None, -13, 79], [None, -13, 79]),
+        ("Array(Date32)", "Date32", "int", [[-13, 79], []], [[-13, 79], []]),
+        ("Tuple(Date32)", "Date32", "int", [(-13,), (79,)], ((-13,), (79,))),
+        ("Array(Tuple(Nullable(Date32)))", "Date32", "int", [[(None,), (-13,)], []], [[(None,), (-13,)], []]),
+        ("LowCardinality(Date32)", "Date32", "int", [-13, 79, -13], [-13, 79, -13]),
+        ("LowCardinality(Nullable(Date32))", "Date32", "int", [None, -13, None], [None, -13, None]),
+        ("Nullable(DateTime)", "DateTime", "int", [None, 13, 79], [None, 13, 79]),
+        ("Nullable(DateTime('Asia/Tokyo'))", "datetime", "int", [None, 13, 79], [None, 13, 79]),
+        ("LowCardinality(Nullable(DateTime))", "DateTime", "int", [None, 13, None], [None, 13, None]),
+        ("Nullable(DateTime64(3))", "DateTime64", "int", [None, -13, 79], [None, -13, 79]),
+        ("Nullable(DateTime64(1))", "DateTime*", "int", [None, -13, 79], [None, -13, 79]),
+        ("Array(Tuple(Nullable(DateTime64(1))))", "DateTime64", "int", [[(None,), (-13,)], []], [[(None,), (-13,)], []]),
+        ("Time", "Time", "int", [-13, 79], [-13, 79]),
+        ("Time", "time", "string", [-13, 79], ["-000:00:13", "000:01:19"]),
+        ("Time", "TIME", "time", [13, 79], [time(0, 0, 13), time(0, 1, 19)]),
+        ("Nullable(Time)", "Time", "int", [None, -13], [None, -13]),
+        ("Nullable(Time)", "Time", "string", [None, -13], [None, "-000:00:13"]),
+        ("Nullable(Time)", "Time", "time", [None, 13], [None, time(0, 0, 13)]),
+        ("Time64(2)", "Time*", "int", [-1379, 79], [-1379, 79]),
+        ("Time64(2)", "Time64", "string", [-1379, 79], ["-000:00:13.79", "000:00:00.79"]),
+        ("Time64(6)", "Time64", "time", [13_000_079, 0], [time(0, 0, 13, 79), time(0, 0, 0)]),
+        ("Nullable(Time64(2))", "Time64", "int", [None, -1379], [None, -1379]),
+        ("Array(Tuple(Nullable(Time64(2))))", "Time64", "string", [[(None,), (-1379,)], []], [[(None,), ("-000:00:13.79",)], []]),
+        ("LowCardinality(Time)", "Time", "string", [-13, 79, -13], ["-000:00:13", "000:01:19", "-000:00:13"]),
+        ("LowCardinality(Time64(2))", "Time64", "int", [-1379, 79, -1379], [-1379, 79, -1379]),
+        ("LowCardinality(Nullable(Time))", "Time", "int", [None, -13, None], [None, -13, None]),
+    ],
+)
+def test_temporal_numpy_read_formats(type_name, fmt_key, fmt_val, write_values, expected):
+    ch_type = registry.get_from_name(type_name)
+    dest = bytearray()
+    ch_type.write_column(write_values, dest, InsertContext("", [], [], query_formats={"Date*": "int", "DateTime*": "int", "Time*": "int"}))
+    is_flat_int = fmt_val == "int" and ch_type.base_type in ("Date32", "DateTime", "DateTime64", "Time", "Time64")
+
+    np_ctx = QueryContext(use_numpy=True, query_formats={fmt_key: fmt_val})
+    result = ch_type.read_column(bytes_source(bytes(dest), cls=ctypes.RespBuffCls), len(write_values), np_ctx)
+    assert (result if isinstance(result, tuple) else list(result)) == expected
+    if is_flat_int:
+        assert all(v is None or type(v) is int for v in result)
+
+    pd = options.pd
+    if pd is None:
+        return
+
+    def normalize_na(val):
+        if val is pd.NA:
+            return None
+        if isinstance(val, tuple):
+            return tuple(normalize_na(item) for item in val)
+        if isinstance(val, list):
+            return [normalize_na(item) for item in val]
+        return val
+
+    df_ctx = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True, query_formats={fmt_key: fmt_val})
+    df_result = ch_type.read_column(bytes_source(bytes(dest), cls=ctypes.RespBuffCls), len(write_values), df_ctx)
+    raw = df_result if isinstance(df_result, tuple) else list(df_result)
+    assert normalize_na(raw) == expected
+    if is_flat_int:
+        assert all(v is pd.NA or type(v) is int for v in df_result)
+    if ch_type.nullable and fmt_val in ("int", "string", "time"):
+        assert df_result[0] is pd.NA
+
+
+def test_time_nullable_use_none_false_and_container_formats():
+    pd = pytest.importorskip("pandas")
+    nullable_time = registry.get_from_name("Nullable(Time)")
+    # Masked row 0 carries an out-of-datetime.time-range negative tick (-13).
+    masked_payload = b"\x01\x00" + struct.pack("<2i", -13, 3723)
+    for fmt, null_default, value in [
+        ("int", 0, 3723),
+        ("string", "00:00:00", "001:02:03"),
+        ("time", time(0, 0), time(1, 2, 3)),
+    ]:
+        np_ctx = QueryContext(use_numpy=True, use_none=False, query_formats={"Time": fmt})
+        assert list(nullable_time.read_column(bytes_source(masked_payload, cls=ctypes.RespBuffCls), 2, np_ctx)) == [null_default, value]
+        df_ctx = QueryContext(use_numpy=True, as_pandas=True, use_none=False, use_extended_dtypes=True, query_formats={"Time": fmt})
+        df_col = nullable_time.read_column(bytes_source(masked_payload, cls=ctypes.RespBuffCls), 2, df_ctx)
+        assert df_col[0] is pd.NA and df_col[1] == value
+
+    # Container column_formats ("pairs") and unrecognized format names must keep native timedelta64 decoding.
+    map_type = registry.get_from_name("Map(String, Nullable(Time))")
+    map_dest = bytearray()
+    map_type.write_column([{"a": None}, {"b": 13}], map_dest, InsertContext("", [], [], query_formats={"Time": "int"}))
+    pairs_np_ctx = QueryContext(use_numpy=True, use_none=False, column_formats={"m": "pairs"})
+    pairs_np_ctx.start_column("m")
+    pairs_np = map_type.read_column(bytes_source(bytes(map_dest), cls=ctypes.RespBuffCls), 2, pairs_np_ctx)
+    assert np.isnat(pairs_np[0][0][1]) and pairs_np[1] == [("b", np.timedelta64(13, "s"))]
+
+    pairs_df_ctx = QueryContext(use_numpy=True, as_pandas=True, use_extended_dtypes=True, column_formats={"m": "pairs"})
+    pairs_df_ctx.start_column("m")
+    pairs_df = map_type.read_column(bytes_source(bytes(map_dest), cls=ctypes.RespBuffCls), 2, pairs_df_ctx)
+    assert np.isnat(pairs_df[0][0][1]) and pairs_df[1] == [("b", np.timedelta64(13, "s"))]
+
+    lc_time = registry.get_from_name("LowCardinality(Time)")
+    lc_dest = bytearray()
+    lc_time.write_column([13, 79], lc_dest, InsertContext("", [], [], query_formats={"Time": "int"}))
+    unknown_ctx = QueryContext(use_numpy=True, query_formats={"Time": "unknown"})
+    lc_res = lc_time.read_column(bytes_source(bytes(lc_dest), cls=ctypes.RespBuffCls), 2, unknown_ctx)
+    assert isinstance(lc_res, np.ndarray) and lc_res.dtype == np.dtype("timedelta64[s]")
+
+
+@pytest.mark.parametrize("bad_ticks", [-2, 30 * 3600])
+def test_time_numpy_time_format_rejects_out_of_range(bad_ticks):
+    ch_type = registry.get_from_name("Time")
+    source = bytes_source(struct.pack("<i", bad_ticks), cls=ctypes.RespBuffCls)
+    with pytest.raises(ValueError, match="outside valid range"):
+        ch_type.read_column(source, 1, QueryContext(use_numpy=True, query_formats={"Time": "time"}))
 
 
 def test_low_cardinality():

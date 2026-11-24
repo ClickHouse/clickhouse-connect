@@ -416,19 +416,61 @@ def test_pandas_nullable_date_use_none_false(param_client: Client, call, consume
 @pytest.mark.parametrize("read_format", ["native", "int"])
 @pytest.mark.parametrize("extended", [False, True])
 def test_pandas_nullable_date_formats(param_client: Client, call, read_format, extended):
-    query = "SELECT arrayJoin([toDate('1970-01-14'), NULL]) AS d"
+    query = (
+        "SELECT "
+        "if(number = 0, toDate('1970-01-14'), NULL) AS d, "
+        "if(number = 0, toDate32('1969-12-19'), NULL) AS d32, "
+        "if(number = 0, toDateTime('1970-01-01 00:00:13', 'UTC'), NULL) AS dt, "
+        "if(number = 0, toDateTime64('1969-12-31 23:59:47.125', 3, 'UTC'), NULL) AS dt64 "
+        "FROM numbers(2)"
+    )
     result_df = call(
         param_client.query_df,
         query,
         use_none=False,
         use_extended_dtypes=extended,
-        query_formats={"Date": read_format},
+        query_formats={"Date*": read_format, "DateTime*": read_format},
     )
-    assert result_df.iloc[0]["d"] == (13 if read_format == "int" else pd.Timestamp("1970-01-14"))
-    if extended:
-        assert pd.isna(result_df.iloc[1]["d"])
-    else:
-        assert result_df.iloc[1]["d"] == (0 if read_format == "int" else pd.Timestamp("1970-01-01"))
+    expected_first = {
+        "d": 13 if read_format == "int" else pd.Timestamp("1970-01-14"),
+        "d32": -13 if read_format == "int" else pd.Timestamp("1969-12-19"),
+        "dt": 13 if read_format == "int" else pd.Timestamp("1970-01-01 00:00:13"),
+        "dt64": -12875 if read_format == "int" else pd.Timestamp("1969-12-31 23:59:47.125"),
+    }
+    for col, val in expected_first.items():
+        assert result_df.iloc[0][col] == val
+        if extended:
+            assert pd.isna(result_df.iloc[1][col])
+        else:
+            assert result_df.iloc[1][col] == (0 if read_format == "int" else pd.Timestamp("1970-01-01"))
+
+
+@pytest.mark.parametrize(
+    "fmt_key, expr, expected",
+    [
+        ("Date32", "toDate32('1969-12-19')", -13),
+        ("DateTime64", "toDateTime64('1970-01-01 00:00:07.9', 1, 'UTC')", 79),
+    ],
+)
+def test_temporal_int_format_numpy_and_pandas_shapes(param_client: Client, call, fmt_key, expr, expected):
+    query = (
+        f"SELECT v, n, [v, n] AS a, tuple(v, n) AS t, [tuple(v, n)] AS at "
+        f"FROM (SELECT {expr} AS v, if(number = 0, NULL, {expr}) AS n FROM numbers(2))"
+    )
+    np_res = call(param_client.query_np, query, query_formats={fmt_key: "int"})
+    assert np_res[:, 0].tolist() == [expected, expected]
+    assert np_res[:, 1].tolist() == [None, expected]
+    assert np_res[:, 2].tolist() == [[expected, None], [expected, expected]]
+    assert np_res[:, 3].tolist() == [(expected, None), (expected, expected)]
+    assert np_res[:, 4].tolist() == [[(expected, None)], [(expected, expected)]]
+
+    df_res = call(param_client.query_df, query, query_formats={fmt_key: "int"})
+    assert df_res["v"].tolist() == [expected, expected]
+    assert df_res.iloc[0]["n"] is pd.NA
+    assert df_res.iloc[1]["n"] == expected
+    assert df_res["a"].tolist() == [[expected, pd.NA], [expected, expected]]
+    assert df_res["t"].tolist() == [(expected, pd.NA), (expected, expected)]
+    assert df_res["at"].tolist() == [[(expected, pd.NA)], [(expected, expected)]]
 
 
 def test_pandas_row_df(param_client: Client, call, table_context: Callable):
