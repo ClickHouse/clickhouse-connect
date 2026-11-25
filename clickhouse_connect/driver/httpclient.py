@@ -28,8 +28,8 @@ from clickhouse_connect.driver.client import _HTTP_RESERVED_SETTING_NAMES, _HTTP
 from clickhouse_connect.driver.common import (
     ShowClickHouseErrors,
     coerce_bool,
-    coerce_float,
     coerce_show_clickhouse_errors,
+    coerce_timeout,
     dict_add,
     dict_copy,
     format_uri_host,
@@ -184,9 +184,9 @@ class HttpClient(SyncBackendClient):
 
             # There are use cases when the client needs to disable timeouts.
             if connect_timeout is not None:
-                connect_timeout = coerce_float(connect_timeout)
+                connect_timeout = coerce_timeout(connect_timeout)
             if send_receive_timeout is not None:
-                send_receive_timeout = coerce_float(send_receive_timeout)
+                send_receive_timeout = coerce_timeout(send_receive_timeout)
             self._rename_response_column = rename_response_column
 
             # allow to override the global autogenerate_session_id setting via the constructor params
