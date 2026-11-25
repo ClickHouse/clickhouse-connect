@@ -293,8 +293,8 @@ def create_client(
       method and compresses inserts with lz4, or zstd when lz4 is not installed.  A str of 'lz4', 'zstd', 'br', or 'gzip'
       can be used to use a specific compression type
     :param query_limit: Default LIMIT on returned rows.  0 means no limit
-    :param connect_timeout: Timeout in seconds for establishing a new HTTP connection, excluding pool wait time.
-    :param send_receive_timeout: Read timeout in seconds for http connection
+    :param connect_timeout: Timeout in seconds for establishing a new HTTP connection, excluding pool wait time. May be fractional.
+    :param send_receive_timeout: Read timeout in seconds for http connection. May be fractional.
     :param client_name: client_name prepended to the HTTP User Agent header. Set this to track client queries
       in the ClickHouse system.query_log.
     :param send_progress: Deprecated, has no effect.  Previous functionality is now automatically determined

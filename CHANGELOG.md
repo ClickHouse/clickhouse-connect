@@ -33,6 +33,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 
 ### Improvements
 
+- `connect_timeout` and `send_receive_timeout` on the synchronous HTTP client now accept fractional seconds, for example `send_receive_timeout=0.3`, matching the async client. Before, the value was truncated to an integer, so `0.3` became `0` and client creation failed with a urllib3 `ValueError`. String values from a DSN, such as `connect_timeout=0.5`, are now parsed as floats too.
 - Alembic materialized view creation now supports refresh schedules through `ClickHouseRefresh`, inner engines, comments, and skipping the initial refresh with `empty=True`. New helpers modify refresh schedules and SELECT queries. All create forms use `CreateClickHouseMaterializedViewOp`, so policy hooks must inspect its `engine` and `refresh` fields. Materialized view drops can discard inner-table data.
 - `query_df` is faster when the result arrives in many blocks, for example a `GROUP BY` that uses two-level aggregation and returns 256 blocks. Before, the time to build the DataFrame grew with the number of blocks times the number of columns. Columns of the `object` dtype still use the old path, so their dtypes do not change. Closes [#1203](https://github.com/ClickHouse/clickhouse-connect/issues/1203).
 - The Python codec serializes `UUID` insert columns faster when values are `uuid.UUID` objects, integers or strings, by building the column bytes in one pass instead of per value.
