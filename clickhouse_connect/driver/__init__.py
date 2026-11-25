@@ -28,12 +28,11 @@ _BOOL_OPTIONS = frozenset(
 )
 _SYNC_INT_OPTIONS = frozenset(
     {
-        "connect_timeout",
         "query_limit",
         "query_retries",
-        "send_receive_timeout",
     }
 )
+_SYNC_FLOAT_OPTIONS = frozenset({"connect_timeout", "send_receive_timeout"})
 _ASYNC_INT_OPTIONS = frozenset(
     {
         "query_limit",
@@ -381,7 +380,7 @@ def create_client(
                         name = name[3:]
                     settings[name] = value
         _coerce_bool_options(kwargs)
-        _coerce_numeric_options(kwargs, _SYNC_INT_OPTIONS)
+        _coerce_numeric_options(kwargs, _SYNC_INT_OPTIONS, _SYNC_FLOAT_OPTIONS)
         # token auth may also arrive via generic_args (DB-API connect_args); pop both so neither is passed twice
         generic_access = kwargs.pop("access_token", None)
         generic_token = kwargs.pop("token_provider", None)

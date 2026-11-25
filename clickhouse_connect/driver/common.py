@@ -214,6 +214,12 @@ def coerce_int(val: str | int | None) -> int:
     return int(val)
 
 
+def coerce_float(val: str | int | float | None) -> float:
+    if not val:
+        return 0.0
+    return float(val)
+
+
 def coerce_bool(val: str | bool | None) -> bool:
     if not val:
         return False
