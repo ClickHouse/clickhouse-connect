@@ -321,13 +321,11 @@ def test_pandas_streams(param_client: Client, call, consume_stream):
         assert stream_count > 2
 
 
-def test_pandas_limit_zero(param_client: Client, call, consume_stream):
-    query = "SELECT 1 AS column1, 'x' AS s LIMIT 0"
-    assert call(param_client.query_df, query).empty
-
-    blocks = []
-    consume_stream(call(param_client.query_df_stream, query), blocks.append)
-    assert blocks == []
+def test_pandas_limit_zero(param_client, call, consume_stream):
+    sql = "SELECT 'x' s, 1 n LIMIT 0"
+    df = call(param_client.query_df, sql)
+    assert df.empty and [*df.columns] == ["s", "n"]
+    consume_stream(call(param_client.query_df_stream, sql), lambda _: pytest.fail("Got block"))
 
 
 def test_pandas_date(param_client: Client, call, table_context: Callable):

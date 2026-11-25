@@ -218,18 +218,15 @@ print(np_array)
 
 ### Pandas queries {#pandas-queries}
 
-The `query_df` method returns query results as a Pandas DataFrame instead of a ClickHouse Connect `QueryResult`.
+`query_df` returns a Pandas DataFrame and keeps column names for a recognized trailing `LIMIT 0`. Use `query_df_arrow` when Native omits column metadata for other empty queries.
 
 ```python
 import clickhouse_connect
 
 client = clickhouse_connect.get_client()
 
-# Query returns a Pandas DataFrame
 df = client.query_df("SELECT number, number * 2 AS doubled FROM system.numbers LIMIT 5")
 
-print(type(df))
-# Output: <class 'pandas.core.frame.DataFrame'>
 print(df)
 # Output:
 #    number  doubled

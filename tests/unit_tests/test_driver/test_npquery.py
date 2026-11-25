@@ -64,7 +64,7 @@ def _reference_frame(blocks, column_names):
 )
 def test_close_df_matches_series_concat(pieces):
     blocks = [[piece] for piece in pieces]
-    expected = _reference_frame(blocks, ("value",))
+    expected = _reference_frame(blocks, ("value",)) if any(len(piece) for piece in pieces) else pd.DataFrame(columns=["value"])
     source = Mock(spec=Closable)
     result = NumpyResult(block_gen=(block for block in blocks), column_names=("value",), source=source)
 
@@ -73,6 +73,10 @@ def test_close_df_matches_series_concat(pieces):
     source.close.assert_called_once_with()
     with pytest.raises(StreamClosedError):
         result.close_df()
+
+
+def test_close_df_without_metadata():
+    pd.testing.assert_frame_equal(NumpyResult().df_result, pd.DataFrame(), check_exact=True)
 
 
 def test_close_df_many_blocks():
