@@ -1,5 +1,6 @@
 import datetime
 from decimal import Decimal
+from uuid import UUID
 
 import pytest
 
@@ -88,6 +89,53 @@ def test_convert_pandas_wide_integer_keeps_missing(type_name):
     ctx = InsertContext("fake_table", ["value"], [ch_type], source)
 
     assert list(ctx._block_columns[0]) == [13, None, 79]
+
+
+@pytest.mark.parametrize("type_name", ["UUID", "LowCardinality(UUID)", "Nullable(UUID)", "LowCardinality(Nullable(UUID))"])
+@pytest.mark.parametrize("representation", ["uuid", "str", "string"])
+@pytest.mark.parametrize("position", [0, 1, 2, None], ids=["first", "middle", "last", "all_missing"])
+@pytest.mark.parametrize("missing_name", ["none", "nan", "pd.NA"])
+def test_convert_pandas_uuid_missing_values(type_name, representation, position, missing_name):
+    pd = pytest.importorskip("pandas")
+    missing = {"none": None, "nan": float("nan"), "pd.NA": pd.NA}[missing_name]
+    uuid = UUID("1d439f79-c57d-5f23-52c6-ffccca93e1a9")
+    value = uuid if representation == "uuid" else str(uuid)
+    values = [value] * 3
+    expected = [value] * 3
+    if position is None:
+        values = [missing] * 3
+        expected = [None] * 3
+    else:
+        values[position] = missing
+        expected[position] = None
+    source = pd.DataFrame({"value": pd.Series(values, dtype="string" if representation == "string" else object)})
+    original = source.copy(deep=True)
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("fake_table", ["value"], [ch_type], source)
+
+    assert list(ctx._block_columns[0]) == expected
+    dest = bytearray()
+    ch_type.write_column(ctx._block_columns[0], dest, ctx)
+    expected_dest = bytearray()
+    ch_type.write_column(expected, expected_dest, ctx)
+    assert dest == expected_dest
+    pd.testing.assert_frame_equal(source, original)
+
+
+@pytest.mark.parametrize("type_name", ["UUID", "LowCardinality(UUID)", "Nullable(UUID)", "LowCardinality(Nullable(UUID))"])
+def test_convert_pandas_uuid_float64_missing_values(type_name):
+    pd = pytest.importorskip("pandas")
+    source = pd.DataFrame({"value": pd.Series([float("nan")] * 3, dtype="float64")})
+    original = source.copy(deep=True)
+    ch_type = get_from_name(type_name)
+    ctx = InsertContext("fake_table", ["value"], [ch_type], source)
+    assert list(ctx._block_columns[0]) == [None] * 3
+    dest = bytearray()
+    ch_type.write_column(ctx._block_columns[0], dest, ctx)
+    expected = bytearray()
+    ch_type.write_column([None] * 3, expected, ctx)
+    assert dest == expected
+    pd.testing.assert_frame_equal(source, original)
 
 
 @pytest.mark.parametrize("missing", [None, float("nan"), Decimal("NaN")])

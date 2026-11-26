@@ -3,6 +3,7 @@ import random
 from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
 from io import StringIO
+from uuid import UUID
 
 import pytest
 
@@ -113,6 +114,28 @@ def test_pandas_integer_missing_defaults(param_client, call, table_context, dtyp
         call(param_client.insert_df, "test_pandas_integer_missing_defaults", source)
         rows = call(param_client.query, "SELECT value FROM test_pandas_integer_missing_defaults ORDER BY id").result_rows
         assert rows == [(13,), (None if nullable else 0,), (79,)]
+    pd.testing.assert_frame_equal(source, original)
+
+
+@pytest.mark.local_only
+@pytest.mark.parametrize("representation", ["uuid", "str", "string"])
+@pytest.mark.parametrize("missing_name", ["none", "nan", "pd.NA"])
+@pytest.mark.parametrize("all_missing", [False, True])
+def test_pandas_uuid_missing_defaults(param_client, call, table_context, test_config, representation, missing_name, all_missing):
+    if test_config.native_codec != "python":
+        pytest.skip("Non-nullable UUID missing defaults require the Python codec")
+    uuid = UUID("1d439f79-c57d-5f23-52c6-ffccca93e1a9")
+    value = uuid if representation == "uuid" else str(uuid)
+    missing = {"none": None, "nan": float("nan"), "pd.NA": pd.NA}[missing_name]
+    values = [missing] * 4 if all_missing else [missing, value, missing, value]
+    series = pd.Series(values, dtype="string" if representation == "string" else object)
+    source = pd.DataFrame({"id": [0, 1, 2, 3], "value": series, "nullable": series})
+    original = source.copy(deep=True)
+    with table_context("test_pandas_uuid_missing_defaults", ["id UInt8", "value UUID", "nullable Nullable(UUID)"]):
+        call(param_client.insert_df, "test_pandas_uuid_missing_defaults", source)
+        rows = call(param_client.query, "SELECT value, nullable FROM test_pandas_uuid_missing_defaults ORDER BY id").result_rows
+        expected = [(UUID(int=0), None)] * 4 if all_missing else [(UUID(int=0), None), (uuid, uuid)] * 2
+        assert rows == expected
     pd.testing.assert_frame_equal(source, original)
 
 
