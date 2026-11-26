@@ -103,6 +103,12 @@ def get_pool_manager_options(
     return options
 
 
+def _with_proxy_scheme(proxy: str, default_scheme: str) -> str:
+    # Only an explicit "scheme://" prefix counts. Looking for a leading "http" misread proxy hosts such as
+    # "httpproxy.corp:3128" and left them without a scheme, and it also mangled upper case schemes like "HTTP://".
+    return proxy if "://" in proxy else f"{default_scheme}://{proxy}"
+
+
 def get_pool_manager(
     keep_interval: int = DEFAULT_KEEP_INTERVAL,
     keep_count: int = DEFAULT_KEEP_COUNT,
@@ -128,12 +134,10 @@ def get_pool_manager(
     if http_proxy:
         if https_proxy:
             raise ProgrammingError("Only one of http_proxy or https_proxy should be specified")
-        if not http_proxy.startswith("http"):
-            http_proxy = f"http://{http_proxy}"
+        http_proxy = _with_proxy_scheme(http_proxy, "http")
         manager: PoolManager = ProxyManager(http_proxy, **options)
     elif https_proxy:
-        if not https_proxy.startswith("http"):
-            https_proxy = f"https://{https_proxy}"
+        https_proxy = _with_proxy_scheme(https_proxy, "https")
         manager = ProxyManager(https_proxy, **options)
     else:
         manager = PoolManager(**options)
