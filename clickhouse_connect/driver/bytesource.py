@@ -45,9 +45,9 @@ class ByteArraySource(ByteSource):
             shift += 7
         raise EOFError("Unexpected end while reading LEB128")
 
-    def read_leb128_str(self) -> str:
+    def read_leb128_str(self, *, surrogateescape: bool = False) -> str:
         sz = self.read_leb128()
-        return self.read_bytes(sz).decode(self.encoding)
+        return self.read_bytes(sz).decode(self.encoding, "surrogateescape" if surrogateescape else "strict")
 
     def read_uint64(self) -> int:
         return int.from_bytes(self.read_bytes(8), "little", signed=False)

@@ -367,7 +367,7 @@ client.query(
 | Interval*             | int                     | string            | Values are signed 64-bit counts in the interval type's unit.                                                       |
 | String                | str                     | bytes             | ClickHouse String columns have no inherent encoding, so they're also used for variable length binary data        |
 | FixedString           | bytes                   | string            | FixedStrings are fixed size byte arrays, but sometimes are treated as Python strings                              |
-| Enum[8,16]            | str                     | int               | The native format returns labels; `int` returns the underlying integer.                                            |
+| Enum[8,16] | str | int | Python Native queries preserve non-UTF-8 labels with `surrogateescape`. Variant metadata requires UTF-8. Use `int` for such labels in Pandas. |
 | Date                  | datetime.date           | int               | The integer format returns days since 1970-01-01.                                                                 |
 | Date32                | datetime.date           | int               | The integer format returns the wider signed day offset.                                                           |
 | DateTime              | datetime.datetime       | int               | The integer format returns epoch seconds.                                                                         |

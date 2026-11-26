@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from clickhouse_connect.datatypes.base import ClickHouseType, TypeDef, _TypeArgs, type_map
-from clickhouse_connect.driver.exceptions import InternalError
+from clickhouse_connect.driver.exceptions import DataError, InternalError
 from clickhouse_connect.driver.parser import parse_callable, parse_columns, parse_enum
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,11 @@ def parse_name(name: str) -> tuple[str, str, TypeDef]:
             keys, values = parse_columns(base[5:])
         base = "Tuple"
     elif base.startswith("Variant"):
+        # Escaping raw bytes in a member name can change the discriminator order.
+        try:
+            base.encode()
+        except UnicodeEncodeError:
+            raise DataError("Variant types with non-UTF-8 metadata are unsupported") from None
         keys, values = parse_columns(base[7:])
         if not values:
             raise InternalError("Variant must contain at least one type")
