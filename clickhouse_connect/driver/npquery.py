@@ -128,7 +128,10 @@ class NumpyResult(Closable):
             pieces = [piece for piece in column if len(piece) > 0]
             if pieces:
                 new_df_series.append(_concat_column(pieces))
-        self._df_result = options.pd.DataFrame(dict(zip(self.column_names, new_df_series)))
+        if new_df_series:
+            self._df_result = options.pd.DataFrame(dict(zip(self.column_names, new_df_series)))
+        else:
+            self._df_result = options.pd.DataFrame(columns=self.column_names or None)
         self.close()
         return self
 
