@@ -1092,6 +1092,140 @@ class TestBindQueryDollarInParamName:
         assert q == b"SELECT 13, $x$user_1$x$"
         assert params == {}
 
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT -- $x$\n$x$",
+            "SELECT # $x$\n$x$",
+            "SELECT // $x$\n$x$",
+            "SELECT /* $x$ /* $x$ */ $x$ */ $x$",
+            "SELECT '$x$', $x$",
+            "SELECT 'user_1\\' $x$ '' $x$', $x$",
+            'SELECT "$x$", $x$',
+            "SELECT `$x$`, $x$",
+            "SELECT \u2018$x$\u2019, $x$",
+            "SELECT $$ $x$ $$, $x$",
+            "SELECT $y$ $x$ $y$, $x$",
+        ],
+        ids=[
+            "line_comment",
+            "hash_comment",
+            "slash_comment",
+            "nested_block_comment",
+            "string",
+            "string_escapes",
+            "identifier",
+            "backticks",
+            "curly_quotes",
+            "heredoc",
+            "named_heredoc",
+        ],
+    )
+    def test_binary_marker_inside_other_token_is_text(self, query):
+        # The server opens no heredoc there, so it would read the bytes as SQL
+        q, params = bind_query(query, {"$x$": b"user_1"})
+        assert q == query.removesuffix("$x$").encode() + b"$x$user_1$x$"
+        assert params == {}
+
+    @pytest.mark.parametrize("query", ["SELECT $x$, 'user_1 $x$", "SELECT $x$, /* $x$", 'SELECT $x$, "user_1 $x$'])
+    def test_binary_marker_after_unterminated_token_is_text(self, query):
+        q, params = bind_query(query, {"$x$": b"user_1"})
+        assert q == query.replace("$x$", "$x$user_1$x$", 1).encode()
+        assert params == {}
+
+    def test_heredoc_right_after_binary_marker_hides_later_marker(self):
+        q, params = bind_query("SELECT $x$$y$ $x$ $y$, $x$", {"$x$": b"user_1"})
+        assert q == b"SELECT $x$user_1$x$$y$ $x$ $y$, $x$user_1$x$"
+        assert params == {}
+
+    @pytest.mark.parametrize(
+        "query, parameters, expected",
+        [
+            ("SELECT 'user_1'$x$", {"$x$": b"user_1"}, b"SELECT 'user_1'$x$user_1$x$"),
+            ("SELECT $x$$x$", {"$x$": b"user_1"}, b"SELECT $x$user_1$x$$x$user_1$x$"),
+            ("SELECT -$x$", {"$x$": b"user_1"}, b"SELECT -$x$user_1$x$"),
+        ],
+        ids=["string", "marker", "operator"],
+    )
+    def test_binary_marker_right_after_other_token_is_replaced(self, query, parameters, expected):
+        q, params = bind_query(query, parameters)
+        assert q == expected
+        assert params == {}
+
+    @pytest.mark.parametrize(
+        "query, parameters",
+        [
+            ("SELECT a$x$", {"$x$": b"user_1"}),
+            ("SELECT 13$x$", {"$x$": b"user_1"}),
+            ("SELECT 13, .5a$x$", {"$x$": b"user_1"}),
+            ("SELECT $y$$x$", {"$x$": b"user_1"}),
+            ("SELECT %(a)s$x$", {"a": None, "$x$": b"user_1"}),
+            ("SELECT %(a)sAS$x$", {"a": "user_1", "$x$": b"user_1"}),
+        ],
+        ids=["bareword", "number", "dot_number", "dollar", "placeholder", "word_after_placeholder"],
+    )
+    def test_binary_marker_touching_previous_token_raises(self, query, parameters):
+        # The server can read the marker and the bytes as part of the previous token
+        with pytest.raises(ProgrammingError, match="follows"):
+            bind_query(query, parameters)
+
+    @pytest.mark.parametrize(
+        "query, parameters",
+        [
+            ("SELECT $y$, $x$", {"$x$": b"user_1$y$user_2"}),
+            ("SELECT $y$, $x$", {"$x$": b"y$user_1"}),
+            ("SELECT $y$, $x$", {"$x$": b"user_1$y"}),
+            ("SELECT $$, $x$", {"$x$": b"$user_1"}),
+            ("SELECT $y$, $x$, $z$", {"$x$": b"user_1", "$z$": b"user_2$y$"}),
+            ("SELECT a$y$, $x$", {"$x$": b"user_1$y$"}),
+        ],
+        ids=["inside", "after_opening_marker", "before_closing_marker", "empty_tag", "second_key", "tag_in_bareword"],
+    )
+    def test_binary_bind_value_with_open_heredoc_tag_raises(self, query, parameters):
+        # The server would end the earlier heredoc in the value and read the rest as SQL. A tag inside a
+        # bareword counts as open too, so a lexer difference cannot hide one.
+        with pytest.raises(ProgrammingError, match="has no closing tag"):
+            bind_query(query, parameters)
+
+    @pytest.mark.parametrize(
+        "query, value",
+        [
+            ("SELECT $y$, $x$", b"user_1"),
+            ("SELECT $x$, $y$", b"user_1$y$"),
+            ("SELECT $y$ $y$, $x$", b"user_1$y$"),
+            ("SELECT '$y$', $x$", b"user_1$y$"),
+        ],
+        ids=["tag_not_in_value", "tag_after_marker", "closed_heredoc", "tag_in_string"],
+    )
+    def test_binary_bind_value_with_heredoc_tag_text_is_kept(self, query, value):
+        q, params = bind_query(query, {"$x$": value})
+        assert q == query.replace("$x$", "$x$" + value.decode() + "$x$").encode()
+        assert params == {}
+
+    @pytest.mark.parametrize(
+        "query, parameters, expected",
+        [
+            ("SELECT %(a)s, '$x$', $x$", {"a": 13, "$x$": b"user_1"}, b"SELECT 13, '$x$', $x$user_1$x$"),
+            ("SELECT '13 %% 5 $x$', %(a)s, $x$", {"a": 13, "$x$": b"user_1"}, b"SELECT '13 % 5 $x$', 13, $x$user_1$x$"),
+            ("SELECT %(user_1's)s, $x$", {"user_1's": 13, "$x$": b"user_1"}, b"SELECT 13, $x$user_1$x$"),
+            ("SELECT %(user_1--id)s, $x$", {"user_1--id": 13, "$x$": b"user_1"}, b"SELECT 13, $x$user_1$x$"),
+            ("SELECT %(a)-- s, $x$", {"a": 13, "$x$": b"user_1"}, b"SELECT 13, $x$user_1$x$"),
+        ],
+        ids=["string", "string_with_percent", "quote_in_key", "comment_start_in_key", "comment_start_in_flags"],
+    )
+    def test_binary_marker_with_client_params(self, query, parameters, expected):
+        q, params = bind_query(query, parameters)
+        assert q == expected
+        assert params == {}
+
+    @pytest.mark.parametrize("query", ["INSERT INTO t VALUES (%(a)s, $x$), (%(a)s, $x$)", "SELECT $x$ AS v -- 'user_1'"])
+    def test_binary_markers_without_comments_or_quotes_before_them_skip_sql_tokenization(self, monkeypatch, query):
+        tokenize = Mock(side_effect=AssertionError("Unexpected SQL tokenization"))
+        monkeypatch.setattr(binding, "_next_sql_token", tokenize)
+        q, params = bind_query(query, {"a": 13, "$x$": b"user_1"})
+        assert q == query.replace("%(a)s", "13").replace("$x$", "$x$user_1$x$").encode()
+        assert params == {}
+
     def test_no_placeholder_skips_sql_tokenization(self, monkeypatch):
         tokenize = Mock(side_effect=AssertionError("Unexpected SQL tokenization"))
         monkeypatch.setattr(binding, "_next_sql_token", tokenize)
