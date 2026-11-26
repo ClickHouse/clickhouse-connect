@@ -42,6 +42,7 @@ from clickhouse_connect.driver._backend.httpcommon import (
     summary_from_headers,
 )
 from clickhouse_connect.driver._backend.models import Capabilities, CommandExecution, QueryExecution, QueryRuntime
+from clickhouse_connect.driver._backend.readonly_recovery import READONLY_ERROR_CODE, rejected_client_setting
 from clickhouse_connect.driver.common import ShowClickHouseErrors, dict_copy
 from clickhouse_connect.driver.exceptions import OperationalError, ProgrammingError
 from clickhouse_connect.driver.streaming import start_streaming_response
@@ -676,6 +677,7 @@ class HttpAsyncBackend:
         attempts = 0
         auth_retried = False
         connection_timeout_retried = False
+        readonly_dropped: set[str] = set()
 
         while True:
             attempts += 1
@@ -744,6 +746,18 @@ class HttpAsyncBackend:
                     lease_released = True
                     return response
 
+                rejected = await self._readonly_rejected_setting(response, final_params, readonly_dropped)
+                if rejected is not None and (retry_body is not None or data is None or isinstance(data, (bytes, bytearray, str, dict))):
+                    # The session turned readonly after the connect-time server settings snapshot, so a
+                    # client-managed default is now a rejected change. Stop sending it and replay.
+                    readonly_dropped.add(rejected)
+                    self._drop_client_managed_setting(rejected, final_params)
+                    if retry_body is not None:
+                        data = await retry_body()
+                    response.close()
+                    logger.debug("Session is readonly, retrying without client-managed setting %s", rejected)
+                    continue
+
                 if response.status in retryable_http_statuses:
                     if not retryable or attempts > retries:
                         await self.error_handler(response, retried=True)
@@ -810,6 +824,33 @@ class HttpAsyncBackend:
                     lease.release()
                 if query_session:
                     self._active_session = None
+
+    async def _readonly_rejected_setting(
+        self, response: aiohttp.ClientResponse, final_params: dict[str, str], already_dropped: set[str]
+    ) -> str | None:
+        """Return the client-managed setting that a readonly session rejected for this response, if any."""
+        if response.status < 400 or response.headers.get(ex_header) != READONLY_ERROR_CODE:
+            return None
+        try:
+            raw_body = await response.read()
+            encoding = response.headers.get("Content-Encoding")
+            decompressed = decompress_response(raw_body, encoding) if encoding else raw_body
+            body = decompressed.decode(errors="backslashreplace")
+        except Exception:
+            return None
+        key = rejected_client_setting(response.headers.get(ex_header), body, final_params)
+        return None if key is None or key in already_dropped else key
+
+    def _drop_client_managed_setting(self, key: str, final_params: dict[str, str]) -> None:
+        """Stop sending a client-managed setting on this request and on every later one."""
+        final_params.pop(key, None)
+        self.client_settings.pop(key, None)  # shared with the client, so this persists
+        if key == "enable_http_compression":
+            self.send_comp_setting = False
+        elif key == "send_progress_in_http_headers":
+            self.send_progress = False
+        elif key == "http_headers_progress_interval_ms":
+            self.progress_interval = None
 
     async def ping(self, timeout: float | None = None) -> bool:
         if timeout is not None and not timeout > 0:
