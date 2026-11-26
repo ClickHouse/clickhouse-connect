@@ -214,6 +214,14 @@ def coerce_int(val: str | int | None) -> int:
     return int(val)
 
 
+def coerce_timeout(val: str | int | float | None) -> int | float:
+    """Coerce a timeout in seconds: whole numbers stay int, fractions stay float."""
+    if not val:
+        return 0
+    number = float(val)
+    return int(number) if number.is_integer() else number
+
+
 def coerce_bool(val: str | bool | None) -> bool:
     if not val:
         return False

@@ -28,12 +28,11 @@ _BOOL_OPTIONS = frozenset(
 )
 _SYNC_INT_OPTIONS = frozenset(
     {
-        "connect_timeout",
         "query_limit",
         "query_retries",
-        "send_receive_timeout",
     }
 )
+_SYNC_FLOAT_OPTIONS = frozenset({"connect_timeout", "send_receive_timeout"})
 _ASYNC_INT_OPTIONS = frozenset(
     {
         "query_limit",
@@ -294,8 +293,8 @@ def create_client(
       method and compresses inserts with lz4, or zstd when lz4 is not installed.  A str of 'lz4', 'zstd', 'br', or 'gzip'
       can be used to use a specific compression type
     :param query_limit: Default LIMIT on returned rows.  0 means no limit
-    :param connect_timeout: Timeout in seconds for establishing a new HTTP connection, excluding pool wait time.
-    :param send_receive_timeout: Read timeout in seconds for http connection
+    :param connect_timeout: Timeout in seconds for establishing a new HTTP connection, excluding pool wait time. May be fractional.
+    :param send_receive_timeout: Read timeout in seconds for http connection. May be fractional.
     :param client_name: client_name prepended to the HTTP User Agent header. Set this to track client queries
       in the ClickHouse system.query_log.
     :param send_progress: Deprecated, has no effect.  Previous functionality is now automatically determined
@@ -381,7 +380,7 @@ def create_client(
                         name = name[3:]
                     settings[name] = value
         _coerce_bool_options(kwargs)
-        _coerce_numeric_options(kwargs, _SYNC_INT_OPTIONS)
+        _coerce_numeric_options(kwargs, _SYNC_INT_OPTIONS, _SYNC_FLOAT_OPTIONS)
         # token auth may also arrive via generic_args (DB-API connect_args); pop both so neither is passed twice
         generic_access = kwargs.pop("access_token", None)
         generic_token = kwargs.pop("token_provider", None)
