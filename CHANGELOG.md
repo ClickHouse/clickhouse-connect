@@ -30,6 +30,7 @@ This changelog covers the `clickhouse-connect` driver. The independently version
 - On SQLAlchemy 1.4, selecting a Python string literal or bind, or a column typed `Unicode`, `UnicodeText` or `Enum`, no longer raises `TypeError: a bytes-like object is required`. SQLAlchemy 1.4 now decodes only `bytes` results, such as `FixedString`, and passes `str` results through. SQLAlchemy 2.x is unchanged.
 - A raw binary query parameter, a `$name$` key with a `bytes`, `bytearray` or `memoryview` value, is now inserted only at the `$name$` markers of the query text. Before, a client-side `%(name)s` value that contained the same `$name$` text also received the bytes, inside its quoted string, so a quote in the bytes ended that string and the rest was read as SQL. The bound value is now sent unchanged.
 - A raw binary query parameter whose value contains its own `$name$` tag now raises `ProgrammingError`. Before, the server ended the heredoc string at that tag and read the rest of the value as SQL. This also covers a value that ends with the tag without its last `$`, such as `$name`. Use a parameter name that does not occur in the value.
+- Explicit keyword arguments to `get_client`, `get_async_client`, `create_client` and `create_async_client` now take precedence over DSN query parameters with the same name, as documented. Before, `get_client(dsn="http://host/db?query_limit=5", query_limit=7)` used `query_limit=5`. With an HTTP DSN, a keyword argument set to `None` still takes the DSN value.
 
 ### Improvements
 
