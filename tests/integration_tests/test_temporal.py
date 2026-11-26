@@ -568,3 +568,47 @@ def test_datetime64_unsupported_numpy_scale_insert_df_rejected(param_client, cal
         df = pd.DataFrame({"ts": [pd.Timestamp("2026-08-21 12:34:56.123456789", tz="UTC")]})
         with pytest.raises(ProgrammingError, match=r"Cannot use DateTime64\(8, 'UTC'\) as a numpy or Pandas datatype"):
             call(param_client.insert_df, table, df)
+
+
+@pytest.mark.parametrize(
+    "read_format, t_lit, t_masked_lit, t_exp, t64_type, t64_lit, t64_exp",
+    [
+        ("int", "-000:00:13", "-000:00:13", -13, "Time64(2)", "-000:00:13.79", -1379),
+        ("string", "-000:00:13", "-000:00:13", "-000:00:13", "Time64(2)", "-000:00:13.79", "-000:00:13.79"),
+        ("time", "001:02:03", "-000:00:13", time(1, 2, 3), "Time64(6)", "001:02:03.123456", time(1, 2, 3, 123456)),
+    ],
+)
+def test_time_numpy_and_pandas_formats(
+    param_client, call, consume_stream, read_format, t_lit, t_masked_lit, t_exp, t64_type, t64_lit, t64_exp
+):
+    t_expr = f"CAST('{t_lit}' AS Time)"
+    t64_expr = f"CAST('{t64_lit}' AS {t64_type})"
+    query = (
+        "SELECT tv, tn, [tv, tn] AS ta, tuple(tv, t64n) AS tt, [tuple(t64v, t64n)] AS tat "
+        f"FROM (SELECT {t_expr} AS tv, "
+        f"if(number = 0, NULL, if(number = 0, CAST('{t_masked_lit}' AS Time), {t_expr})) AS tn, "
+        f"{t64_expr} AS t64v, "
+        f"if(number = 0, CAST(NULL AS Nullable({t64_type})), {t64_expr}) AS t64n "
+        "FROM numbers(2))"
+    )
+    settings = {"enable_time_time64_type": 1, "max_block_size": 1, "max_threads": 1}
+    formats = {"Time*": read_format}
+
+    np_res = call(param_client.query_np, query, query_formats=formats, settings=settings)
+    assert np_res[:, 0].tolist() == [t_exp, t_exp]
+    assert np_res[:, 1].tolist() == [None, t_exp]
+    assert np_res[:, 2].tolist() == [[t_exp, None], [t_exp, t_exp]]
+    assert np_res[:, 3].tolist() == [(t_exp, None), (t_exp, t64_exp)]
+    assert np_res[:, 4].tolist() == [[(t64_exp, None)], [(t64_exp, t64_exp)]]
+
+    df_res = call(param_client.query_df, query, query_formats=formats, settings=settings)
+    assert df_res["tv"].tolist() == [t_exp, t_exp]
+    assert df_res.iloc[0]["tn"] is pd.NA and df_res.iloc[1]["tn"] == t_exp
+    assert df_res["ta"].tolist() == [[t_exp, pd.NA], [t_exp, t_exp]]
+    assert df_res["tt"].tolist() == [(t_exp, pd.NA), (t_exp, t64_exp)]
+    assert df_res["tat"].tolist() == [[(t64_exp, pd.NA)], [(t64_exp, t64_exp)]]
+
+    df_blocks = []
+    consume_stream(call(param_client.query_df_stream, query, query_formats=formats, settings=settings), df_blocks.append)
+    assert len(df_blocks) > 1
+    pd.testing.assert_frame_equal(pd.concat(df_blocks, ignore_index=True), df_res)

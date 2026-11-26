@@ -194,10 +194,10 @@ class Date32(Date):
     _array_type = "l" if int_size == 2 else "i"
 
     def _read_column_binary(self, source: ByteSource, num_rows: int, ctx: QueryContext, _read_state: Any):
-        if ctx.use_numpy:
-            return driver_ctypes.numpy_conv.read_numpy_array(source, "<i4", num_rows).astype(self.np_type)
         if self.read_format(ctx) == "int":
             return source.read_array(self._array_type, num_rows)
+        if ctx.use_numpy:
+            return driver_ctypes.numpy_conv.read_numpy_array(source, "<i4", num_rows).astype(self.np_type)
         return data_conv.read_date32_col(source, num_rows)
 
 
@@ -254,6 +254,9 @@ class DateTimeBase(ClickHouseType, registered=False):
         return epoch_start_datetime
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
+        if self.read_format(ctx) == "int":
+            return column
+
         if ctx.use_extended_dtypes:
             if isinstance(column, options.np.ndarray) and options.np.issubdtype(column.dtype, options.np.datetime64):
                 return column.astype(self.pandas_dtype)
@@ -496,9 +499,6 @@ class TimeBase(ClickHouseType, registered=False):
         ticks = source.read_array(self._array_type, num_rows)
         fmt = self.read_format(ctx)
 
-        if ctx.use_numpy:
-            return options.np.array([self._ticks_to_np_timedelta(t) for t in ticks], dtype=self.np_type)
-
         if fmt == "int":
             return ticks
 
@@ -507,6 +507,9 @@ class TimeBase(ClickHouseType, registered=False):
 
         if fmt == "time":
             return [self._ticks_to_time(t) for t in ticks]
+
+        if ctx.use_numpy:
+            return options.np.array([self._ticks_to_np_timedelta(t) for t in ticks], dtype=self.np_type)
 
         return [self._ticks_to_timedelta(t) for t in ticks]
 
@@ -639,17 +642,27 @@ class TimeBase(ClickHouseType, registered=False):
                 column = [self._normalize_timedelta_value(value) for value in column]
         super().write_column_data(column, dest, ctx)
 
+    def _read_nullable_column(self, source: ByteSource, num_rows: int, ctx: QueryContext, read_state: Any) -> Sequence:
+        if self.read_format(ctx) != "time":
+            return super()._read_nullable_column(source, num_rows, ctx, read_state)
+        null_map = source.read_bytes(num_rows)
+        ticks = source.read_array(self._array_type, num_rows)
+        null_obj = self._active_null(ctx)
+        return [null_obj if is_null else self._ticks_to_time(t) for t, is_null in zip(ticks, null_map)]
+
     def _active_null(self, ctx: QueryContext):
         """Return appropriate null value based on context."""
         fmt = self.read_format(ctx)
         if ctx.use_extended_dtypes:
-            return options.pd.NA if fmt == "int" else options.pd.NaT
+            return options.pd.NA if fmt in ("int", "string", "time") else options.pd.NaT
         if ctx.use_none:
             return None
         if fmt == "int":
             return 0
         if fmt == "string":
             return "00:00:00"
+        if fmt == "time":
+            return time(0, 0)
         if ctx.use_numpy:
             return options.np.timedelta64("NaT")
 
@@ -662,6 +675,9 @@ class TimeBase(ClickHouseType, registered=False):
 
     def _finalize_column(self, column: Sequence, ctx: QueryContext) -> Sequence:
         """Finalize column data based on context requirements."""
+        if self.read_format(ctx) in ("int", "string", "time"):
+            return column
+
         if ctx.use_extended_dtypes:
             if isinstance(column, options.np.ndarray) and options.np.issubdtype(column.dtype, options.np.timedelta64):
                 return column.astype(self.pandas_dtype)
@@ -675,7 +691,7 @@ class TimeBase(ClickHouseType, registered=False):
 
     def _build_lc_column(self, index: Sequence, keys: array.array, ctx: QueryContext):
         """Build low-cardinality column from index and keys."""
-        if ctx.use_numpy:
+        if ctx.use_numpy and (not hasattr(ctx, "active_fmt") or self.read_format(ctx) not in ("int", "string", "time")):
             return options.np.array([index[k] for k in keys], dtype=self.np_type)
 
         return super()._build_lc_column(index, keys, ctx)
