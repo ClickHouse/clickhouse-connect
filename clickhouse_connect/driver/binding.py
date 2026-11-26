@@ -1189,6 +1189,10 @@ def bind_query(
                     if hint_tz is not None:
                         tz = hint_tz
                     v = _promote_datetime64(param_type, v)
+                    # The server reads an Identifier value as is and does not remove escapes.
+                    if isinstance(v, str) and param_type.strip() == "Identifier":
+                        bound_params[f"param_{k}"] = v
+                        continue
                 bound_params[f"param_{k}"] = format_bind_value(v, tz)
     else:
         query, bound_params = finalize_query(query, parameters, server_tz), {}

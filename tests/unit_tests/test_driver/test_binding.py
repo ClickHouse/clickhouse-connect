@@ -542,3 +542,16 @@ def test_sql_opaque_regions_dollar_token_boundaries(prefix, opaque):
 )
 def test_skip_block_comment_nested_markers(comment, expected):
     assert binding._skip_block_comment(comment, 0) == expected
+
+
+@pytest.mark.parametrize("name", ["plain", "a`b", "e\\f", "it's", "x\ty"])
+def test_bind_query_sends_identifier_strings_unescaped(name):
+    # The server reads an Identifier value as is, so escapes would become part of the name.
+    _, params = bind_query("SELECT 1 AS {name:Identifier}, {s:String}", {"name": name, "s": name})
+    assert params["param_name"] == name
+    assert params["param_s"] == binding.format_bind_value(name, None)
+
+
+def test_bind_query_identifier_type_ignores_surrounding_whitespace():
+    _, params = bind_query("SELECT 1 AS {name: Identifier }", {"name": "a`b"})
+    assert params == {"param_name": "a`b"}

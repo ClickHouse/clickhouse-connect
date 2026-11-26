@@ -8,7 +8,7 @@ import pytest
 
 from clickhouse_connect import common
 from clickhouse_connect.driver import Client
-from clickhouse_connect.driver.binding import DT64Param
+from clickhouse_connect.driver.binding import DT64Param, quote_identifier
 from clickhouse_connect.driver.exceptions import ProgrammingError
 
 HAS_TZSET = hasattr(time, "tzset")
@@ -407,3 +407,13 @@ def test_null_in_containers(param_client: Client, call):
         assert result[0] == {"user_1": None}
     finally:
         common.set_setting("dict_parameter_format", original)
+
+
+@pytest.mark.parametrize("name", ["plain", "a`b", "e\\f", "it's", "x\ty"])
+def test_identifier_param_is_sent_unescaped(param_client: Client, call, name):
+    # The server reads an Identifier value as is, so escapes would become part of the name.
+    alias = call(param_client.query, "SELECT 1 AS {name:Identifier}", parameters={"name": name}).column_names[0]
+    assert alias == name
+    source = f"SELECT 13 AS {quote_identifier(name)}"
+    value = call(param_client.query, f"SELECT {{name:Identifier}} FROM ({source})", parameters={"name": name}).first_row[0]
+    assert value == 13
