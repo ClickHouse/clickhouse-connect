@@ -263,6 +263,7 @@ class HttpAsyncBackend:
         self.proxy_url = proxy_url
         self.server_host_name = server_host_name
         self.token_provider = token_provider
+        self._token_refresh_pending = False
         self.autogenerate_query_id = autogenerate_query_id
         self.read_format = read_format
         self.form_encode_query_params = form_encode_query_params
@@ -388,6 +389,7 @@ class HttpAsyncBackend:
         self.headers["Authorization"] = f"Bearer {access_token}"
         if self.session:
             self.session.headers["Authorization"] = f"Bearer {access_token}"
+        self._token_refresh_pending = False
 
     async def error_handler(self, response: aiohttp.ClientResponse, retried: bool = False):
         """
@@ -669,6 +671,8 @@ class HttpAsyncBackend:
         if self.autogenerate_query_id and "query_id" not in final_params:
             final_params["query_id"] = str(uuid.uuid4())
 
+        if self.token_provider and self._token_refresh_pending:
+            self.set_access_token(await self.resolve_token())
         req_headers = dict_copy(self.headers, headers)
         if self.server_host_name:
             req_headers["Host"] = self.server_host_name
@@ -688,8 +692,7 @@ class HttpAsyncBackend:
                     )
                 self._active_session = query_session
 
-            # Snapshot+acquire under lock so close_connections() can't pass the
-            # drain check between our session read and our refcount increment.
+            # Acquire under lock so connection rotation cannot drain this session first.
             async with self.session_lock:
                 lease = self.session_lease
                 if lease is None or lease.session.closed:
@@ -704,31 +707,28 @@ class HttpAsyncBackend:
                 lease.acquire()
             lease_released = False
             try:
-                # Construct full URL (aiohttp doesn't have base_url)
-                url = self._base_url
-                request_kwargs = {"method": method, "url": url, "params": final_params, "headers": req_headers}
+                request_kwargs = {"method": method, "url": self._base_url, "params": final_params, "headers": req_headers}
                 if self.server_host_name and self.ssl_context is not None:
                     request_kwargs["ssl"] = self.ssl_context
                     request_kwargs["server_hostname"] = self.server_host_name
                 if self.proxy_url:
                     request_kwargs["proxy"] = self.proxy_url
+                replayable_form = True
                 if files:
-                    # IMPORTANT: Must set content_type on text fields to force multipart/form-data encoding
-                    # Without content_type, aiohttp uses application/x-www-form-urlencoded
+                    # Content type forces multipart for text fields.
                     form = aiohttp.FormData()
-                    for field_name, field_value in files.items():
-                        if isinstance(field_value, tuple):
-                            if field_value[0] is None:
-                                form.add_field(field_name, str(field_value[1]), content_type="text/plain")
-                            else:
-                                filename = field_value[0]
-                                file_data = field_value[1]
-                                if isinstance(file_data, (bytes, bytearray, memoryview)):
-                                    file_data = io.BytesIO(file_data)
-                                content_type = field_value[2] if len(field_value) > 2 else None
-                                form.add_field(field_name, file_data, filename=filename, content_type=content_type)
+                    for name, part in files.items():
+                        if isinstance(part, tuple) and part[0] is not None:
+                            filename, value = part[0], part[1]
+                            content_type = part[2] if len(part) > 2 else None
                         else:
-                            form.add_field(field_name, field_value, content_type="text/plain")
+                            filename = None
+                            value = str(part[1]) if isinstance(part, tuple) else part
+                            content_type = "text/plain"
+                        replayable_form = replayable_form and isinstance(value, (str, bytes, bytearray, memoryview))
+                        if filename is not None and isinstance(value, (bytes, bytearray, memoryview)):
+                            value = io.BytesIO(value)
+                        form.add_field(name, value, filename=filename, content_type=content_type)
                     request_kwargs["data"] = form
                 elif isinstance(data, (bytes, bytearray, memoryview)):
                     request_kwargs["data"] = io.BytesIO(data)
@@ -738,31 +738,31 @@ class HttpAsyncBackend:
                     request_kwargs["data"] = data
 
                 response = await session.request(**request_kwargs)
-                if 200 <= response.status < 300 and not response.headers.get(ex_header):
+                error_code = response.headers.get(ex_header)
+                if 200 <= response.status < 300 and not error_code:
                     # Caller releases lease after consuming the body.
                     response._lease_release = _one_shot(lease.release)  # type: ignore[attr-defined]
                     lease_released = True
                     return response
 
-                if response.status in retryable_http_statuses:
+                if response.status in retryable_http_statuses and error_code != auth_failed_ex_code:
                     if not retryable or attempts > retries:
                         await self.error_handler(response, retried=True)
-                    else:
-                        logger.debug("Retrying request with status code %s (attempt %s/%s)", response.status, attempts, retries + 1)
-                        await asyncio.sleep(0.1 * attempts)
-                        response.close()
-                        continue
-                if self.token_provider and not auth_retried and response.headers.get(ex_header) == auth_failed_ex_code:
-                    if retry_body is None and not (data is None or isinstance(data, (bytes, bytearray, str, dict))):
-                        await self.error_handler(response)  # non-replayable body, surface the auth error instead of retrying
-                    auth_retried = True
-                    self.set_access_token(await self.resolve_token())
-                    req_headers["Authorization"] = self.headers["Authorization"]
-                    if retry_body is not None:
-                        data = await retry_body()
-                    logger.debug("Refreshing access token after authentication failure")
+                    logger.debug("Retrying request with status code %s (attempt %s/%s)", response.status, attempts, retries + 1)
+                    await asyncio.sleep(0.1 * attempts)
                     response.close()
                     continue
+                if self.token_provider and not auth_retried and error_code == auth_failed_ex_code:
+                    if replayable_form and retryable and _request_is_read_only(data, final_params, files):
+                        auth_retried = True
+                        self.set_access_token(await self.resolve_token())
+                        req_headers["Authorization"] = self.headers["Authorization"]
+                        if retry_body is not None:
+                            data = await retry_body()
+                        logger.debug("Retrying read with refreshed token")
+                        response.close()
+                        continue
+                    self._token_refresh_pending = True
                 await self.error_handler(response)
 
             except aiohttp.ClientConnectionError as e:

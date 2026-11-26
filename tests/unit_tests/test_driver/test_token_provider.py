@@ -222,14 +222,15 @@ class TestSyncAuthRetry:
         assert provider.calls == 1  # never refreshed
         assert next(gen) == b"row"  # body untouched, not consumed by a retry
 
-    def test_replayable_body_with_retry_body_refreshes(self):
+    def test_recognized_read_with_retry_body_refreshes(self):
         provider = _TokenSequence("init", "refreshed")
         client = _build_sync_client(provider)
         _wire_sync(client, [_fake_response(500, auth_failed_ex_code), _fake_response(200)])
-        gen = (b"row" for _ in range(1))
-        resp = client._raw_request(gen, {}, retry_body=lambda: (b"row" for _ in range(1)))
+        retry_body = MagicMock(return_value=b"SELECT 1")
+        resp = client._raw_request(b"SELECT 1", {}, retry_body=retry_body)
         assert resp.status == 200
         assert provider.calls == 2
+        retry_body.assert_called_once_with()
 
     def test_no_provider_surfaces_immediately(self):
         client = _build_sync_client(_TokenSequence("init"))
