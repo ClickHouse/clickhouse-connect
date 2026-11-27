@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from email import policy
 from email.parser import BytesParser
 from types import SimpleNamespace
@@ -6,6 +7,8 @@ from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
+from aiohttp import web
+from urllib3 import PoolManager, Timeout
 from urllib3.exceptions import HTTPError
 from urllib3.response import HTTPResponse
 from yarl import URL
@@ -563,26 +566,26 @@ class TestAsyncRawFilesMerge:
         assert _plan_raw_files(make_plan(form_files=files)) is files
 
 
-def make_sync_backend(url="http://localhost:8123"):
+def make_sync_backend(url="http://localhost:8123", pool_manager=None, timeout=None):
     return HttpSyncBackend(
         url=url,
-        pool_manager=Mock(),
+        pool_manager=pool_manager or Mock(),
         owns_pool_manager=False,
         headers={},
         params={},
-        timeout=Mock(),
+        timeout=timeout or Mock(),
         server_host_name=None,
         token_provider=None,
         autogenerate_query_id=False,
     )
 
 
-def make_async_backend(url="http://localhost:8123"):
+def make_async_backend(url="http://localhost:8123", timeout=None):
     return HttpAsyncBackend(
         url=url,
         headers={},
         client_settings={},
-        timeout=Mock(),
+        timeout=timeout or Mock(),
         connector_kwargs={},
         ssl_context=None,
         proxy_url=None,
@@ -1162,3 +1165,153 @@ async def test_client_query_prefix_disables_read_retry(transport):
         with pytest.raises(OperationalError):
             await backend.execute_raw_query("SELECT 13", {}, None, RUNTIME, None)
     assert sender.call_count == 1
+
+
+INSERT_SUMMARY_HEADERS = {"X-ClickHouse-Query-Id": "query_1", "X-ClickHouse-Summary": '{"written_rows": "2"}'}
+
+
+async def start_insert_server(handler):
+    app = web.Application()
+    app.router.add_post("/", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = runner.addresses[0][1]
+    return runner, f"http://127.0.0.1:{port}"
+
+
+def make_live_backend(transport, url):
+    if transport == "sync":
+        return make_sync_backend(url, pool_manager=PoolManager(), timeout=Timeout(total=5))
+    backend = make_async_backend(url, timeout=aiohttp.ClientTimeout(total=5))
+    backend.ensure_session()
+    return backend
+
+
+async def run_insert(transport, backend, path):
+    block = b"13\n79\n"
+    if path == "raw":
+        call = backend.execute_raw_insert
+        args = ("target", None, block, "TSV", None, QueryRuntime(), None)
+    else:
+        call = backend.execute_data_insert
+        context = SimpleNamespace(compression=None, transport_settings=None, insert_exception=None)
+        retry_body = AsyncMock(return_value=block) if transport == "async" else Mock(return_value=block)
+        args = (context, QueryRuntime(), block, retry_body)
+    if transport == "async":
+        return await call(*args)
+    return await asyncio.to_thread(call, *args)
+
+
+async def close_live_backend(transport, backend):
+    if transport == "async":
+        await backend.close()
+    else:
+        backend.http.clear()
+
+
+def assert_async_connections_released(backend):
+    assert backend.session_lease._inflight == 0
+    assert not backend.session.connector._acquired
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transport, body_shape",
+    [("async", "empty"), ("async", "chunked"), ("sync", "chunked")],
+)
+@pytest.mark.parametrize("path", ["raw", "data"])
+async def test_insert_reads_response_body_and_reuses_connection(transport, body_shape, path):
+    peers = set()
+
+    async def handler(request):
+        await request.read()
+        peers.add(request.transport.get_extra_info("peername"))
+        if body_shape == "empty":
+            return web.Response(headers=INSERT_SUMMARY_HEADERS)
+        # ClickHouse answers an insert with an empty chunked body. Its end can arrive after the headers.
+        response = web.StreamResponse(headers=INSERT_SUMMARY_HEADERS)
+        response.enable_chunked_encoding()
+        await response.prepare(request)
+        await asyncio.sleep(0.02)
+        with contextlib.suppress(ConnectionResetError):
+            await response.write_eof()
+        return response
+
+    runner, url = await start_insert_server(handler)
+    backend = make_live_backend(transport, url)
+    try:
+        for _ in range(3):
+            assert await run_insert(transport, backend, path) == {"written_rows": "2", "query_id": "query_1"}
+        assert len(peers) == 1
+    finally:
+        await close_live_backend(transport, backend)
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["sync", "async"])
+@pytest.mark.parametrize("path", ["raw", "data"])
+async def test_insert_disconnect_during_response_body_raises(transport, path):
+    async def handler(request):
+        await request.read()
+        response = web.StreamResponse(headers=INSERT_SUMMARY_HEADERS)
+        response.enable_chunked_encoding()
+        await response.prepare(request)
+        await response.write(b"partial")
+        request.transport.abort()
+        return response
+
+    runner, url = await start_insert_server(handler)
+    backend = make_live_backend(transport, url)
+    try:
+        with pytest.raises(OperationalError):
+            await run_insert(transport, backend, path)
+        if transport == "async":
+            assert_async_connections_released(backend)
+    finally:
+        await close_live_backend(transport, backend)
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["raw", "data"])
+async def test_async_insert_cancelled_during_body_read_releases_connection(monkeypatch, path):
+    finish_body = asyncio.Event()
+    read_started = asyncio.Event()
+    original_read = aiohttp.ClientResponse.read
+
+    async def tracked_read(response):
+        read_started.set()
+        return await original_read(response)
+
+    async def handler(request):
+        await request.read()
+        response = web.StreamResponse(headers=INSERT_SUMMARY_HEADERS)
+        response.enable_chunked_encoding()
+        await response.prepare(request)
+        await finish_body.wait()
+        with contextlib.suppress(ConnectionResetError):
+            await response.write_eof()
+        return response
+
+    monkeypatch.setattr(aiohttp.ClientResponse, "read", tracked_read)
+    runner, url = await start_insert_server(handler)
+    backend = make_live_backend("async", url)
+    insert = asyncio.create_task(run_insert("async", backend, path))
+    read_waiter = asyncio.create_task(read_started.wait())
+    try:
+        await asyncio.wait({insert, read_waiter}, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+        assert read_started.is_set()
+        insert.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await insert
+        assert_async_connections_released(backend)
+    finally:
+        finish_body.set()
+        insert.cancel()
+        read_waiter.cancel()
+        await asyncio.gather(insert, read_waiter, return_exceptions=True)
+        await close_live_backend("async", backend)
+        await runner.cleanup()
