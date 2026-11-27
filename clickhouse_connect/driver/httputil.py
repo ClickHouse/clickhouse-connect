@@ -170,7 +170,7 @@ def get_response_data(response: HTTPResponse) -> bytes:
             pass
     if encoding == "lz4":
         lz4_decom = _lz4_decompressor()
-        return lz4_decom.decompress(response.data, len(response.data))
+        return lz4_decom.decompress(response.data)
     return response.data
 
 
