@@ -518,7 +518,10 @@ class HttpAsyncBackend:
             retryable=runtime.retryable,
         )
         try:
-            logger.debug("Context insert response code: %d", response.status)
+            # Read to the end so that an eligible keep-alive connection can go back to the pool.
+            # close() drops the connection of an unfinished response.
+            content = await self._read_body(response)
+            logger.debug("Context insert response code: %d, content: %s", response.status, content)
             return summary_from_headers(response.headers)
         finally:
             response.close()
@@ -538,7 +541,8 @@ class HttpAsyncBackend:
         plan = plan_raw_insert_request(table, column_names, insert_block, fmt, compression, runtime, transport_settings)
         response = await self.request(plan.body, plan.params, plan.headers, server_wait=False, retryable=runtime.retryable)
         try:
-            logger.debug("Raw insert response code: %d", response.status)
+            content = await self._read_body(response)
+            logger.debug("Raw insert response code: %d, content: %s", response.status, content)
             return summary_from_headers(response.headers)
         finally:
             response.close()
