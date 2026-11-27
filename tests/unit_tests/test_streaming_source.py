@@ -11,11 +11,19 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from unittest.mock import AsyncMock, Mock
 
+import aiohttp
 import pytest
+from aiohttp.base_protocol import BaseProtocol
+from clickhouse_connect.driverc.buffer import ResponseBuffer as CResponseBuffer
 
+from clickhouse_connect.datatypes.registry import get_from_name
 from clickhouse_connect.driver._backend.http_async import SessionLease, _one_shot
+from clickhouse_connect.driver.asyncclient import AsyncClient
+from clickhouse_connect.driver.buffer import ResponseBuffer as PyResponseBuffer
 from clickhouse_connect.driver.compression import _lz4_frame, _zstd_compress
-from clickhouse_connect.driver.exceptions import NotSupportedError, OperationalError
+from clickhouse_connect.driver.exceptions import NotSupportedError, OperationalError, StreamFailureError
+from clickhouse_connect.driver.insert import InsertContext
+from clickhouse_connect.driver.query import QueryContext
 from clickhouse_connect.driver.streaming import (
     ReadAheadSource,
     StreamingInsertSource,
@@ -23,7 +31,8 @@ from clickhouse_connect.driver.streaming import (
     _finalize_read_ahead_off_loop,
     _SyncStreamingInsertSource,
 )
-from tests.helpers import run_in_new_loop
+from clickhouse_connect.driver.transform import NativeTransform
+from tests.helpers import TAGGED_EXCEPTION_BODY, TAGGED_EXCEPTION_TAG, run_in_new_loop
 
 
 class MockAsyncIterator:
@@ -1608,6 +1617,190 @@ async def test_read_ahead_aclose_after_multi_chunk_stream():
     await read_source.aclose()
     assert thread.is_alive() is False
     assert src.closed is True
+
+
+def _make_aiohttp_reader(
+    loop: asyncio.AbstractEventLoop,
+    chunks: list[bytes],
+    error: BaseException | None = None,
+) -> aiohttp.StreamReader:
+    protocol = BaseProtocol(loop)
+    protocol.transport = Mock()
+    reader = aiohttp.StreamReader(protocol, 2**16, loop=loop)
+    for chunk in chunks:
+        reader.feed_data(chunk)
+    if error is not None:
+        reader.set_exception(error)
+    return reader
+
+
+def _make_native_int32_block(values: list[int]) -> bytes:
+    ctx = InsertContext(
+        table="t",
+        column_names=["x"],
+        column_types=[get_from_name("Int32")],
+        data=[values],
+        column_oriented=True,
+    )
+    return b"".join(NativeTransform().build_insert(ctx)).split(b"\n", 1)[1]
+
+
+@pytest.mark.asyncio
+async def test_payload_error_drains_buffered_chunks_in_order():
+    loop = asyncio.get_running_loop()
+    reader = _make_aiohttp_reader(loop, [b"chunk_1", b"chunk_2", b"chunk_3"])
+    response = Mock()
+    response.content = reader
+    response.headers = {}
+    response.closed = False
+
+    # Consume one chunk so the remaining chunks sit buffered when ClientPayloadError arrives.
+    first_chunk = await reader.read(len(b"chunk_1"))
+    assert first_chunk == b"chunk_1"
+    reader.set_exception(aiohttp.ClientPayloadError("Response payload is not completed"))
+
+    source = StreamingResponseSource(response, encoding=None)
+    await source.start_producer(loop)
+
+    collected: list[bytes] = []
+
+    def consume() -> Exception | None:
+        try:
+            for chunk in source.gen:
+                collected.append(chunk)
+        except Exception as ex:
+            return ex
+        return None
+
+    caught = await loop.run_in_executor(None, consume)
+
+    assert isinstance(caught, aiohttp.ClientPayloadError)
+    assert collected == [b"chunk_2", b"chunk_3"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("buffer_cls", [PyResponseBuffer, CResponseBuffer])
+async def test_payload_error_preserves_preceding_blocks_and_tagged_exception(buffer_cls):
+    loop = asyncio.get_running_loop()
+    block_1 = _make_native_int32_block([13, 79])
+    block_2 = _make_native_int32_block([130, 790])
+    reader = _make_aiohttp_reader(
+        loop,
+        [block_1, block_2, TAGGED_EXCEPTION_BODY],
+        error=aiohttp.ClientPayloadError("Response payload is not completed"),
+    )
+    response = Mock()
+    response.content = reader
+    response.headers = {}
+    response.closed = False
+
+    source = StreamingResponseSource(response, encoding=None, exception_tag=TAGGED_EXCEPTION_TAG)
+    await source.start_producer(loop)
+
+    rows: list[tuple[int, ...]] = []
+
+    def consume() -> StreamFailureError:
+        res = NativeTransform.parse_response(buffer_cls(source), QueryContext())
+        with res.row_block_stream as stream:
+            for block in stream:
+                rows.extend(block)
+        raise AssertionError("Expected StreamFailureError")
+
+    with pytest.raises(StreamFailureError) as exc_info:
+        await loop.run_in_executor(None, consume)
+
+    assert rows == [(13,), (79,), (130,), (790,)]
+    assert str(exc_info.value) == "Big bam occurred right while reading the data"
+
+
+@pytest.mark.skipif(_lz4_frame is None, reason="lz4 is not installed")
+@pytest.mark.asyncio
+async def test_payload_error_drains_lz4_compressed_tagged_exception():
+    loop = asyncio.get_running_loop()
+    compressed_tail = _lz4_frame.compress(TAGGED_EXCEPTION_BODY)
+    reader = _make_aiohttp_reader(
+        loop,
+        [compressed_tail],
+        error=aiohttp.ClientPayloadError("Response payload is not completed"),
+    )
+    response = Mock()
+    response.content = reader
+    response.headers = {}
+    response.closed = False
+
+    source = StreamingResponseSource(response, encoding="lz4", exception_tag=TAGGED_EXCEPTION_TAG)
+    await source.start_producer(loop)
+
+    def consume() -> None:
+        NativeTransform.parse_response(PyResponseBuffer(source), QueryContext())
+
+    with pytest.raises(StreamFailureError) as exc_info:
+        await loop.run_in_executor(None, consume)
+
+    assert str(exc_info.value) == "Big bam occurred right while reading the data"
+
+
+@pytest.mark.asyncio
+async def test_payload_error_fallback_read_nowait_and_mock_safety():
+    loop = asyncio.get_running_loop()
+
+    class LegacyReaderContent:
+        @staticmethod
+        async def read(n=-1):
+            raise aiohttp.ClientPayloadError("Response payload is not completed")
+
+        @staticmethod
+        def _read_nowait(n=-1):
+            assert n == -1
+            return TAGGED_EXCEPTION_BODY
+
+    fallback_resp = Mock()
+    fallback_resp.content = LegacyReaderContent()
+    fallback_resp.headers = {}
+    fallback_resp.closed = False
+
+    fallback_source = StreamingResponseSource(fallback_resp, encoding=None, exception_tag=TAGGED_EXCEPTION_TAG)
+    await fallback_source.start_producer(loop)
+
+    with pytest.raises(StreamFailureError) as exc_info:
+        await loop.run_in_executor(None, NativeTransform.parse_response, PyResponseBuffer(fallback_source), QueryContext())
+    assert str(exc_info.value) == "Big bam occurred right while reading the data"
+
+    mock_content = Mock()
+    mock_content.read = AsyncMock(side_effect=ValueError("Producer error!"))
+    mock_resp = Mock()
+    mock_resp.content = mock_content
+    mock_resp.headers = {}
+    mock_resp.closed = False
+
+    mock_source = StreamingResponseSource(mock_resp, encoding=None)
+    await mock_source.start_producer(loop)
+
+    with pytest.raises(OperationalError, match="Failed to read response data from server"):
+        await loop.run_in_executor(None, lambda: list(mock_source.gen))
+
+
+@pytest.mark.asyncio
+async def test_async_client_raw_stream_drains_buffered_chunks_on_payload_error():
+    loop = asyncio.get_running_loop()
+    reader = _make_aiohttp_reader(
+        loop,
+        [b"row_1\n", b"row_2\n"],
+        error=aiohttp.ClientPayloadError("Response payload is not completed"),
+    )
+    response = Mock(content=reader, headers={}, closed=False, close=Mock(), _lease_release=Mock())
+
+    client = AsyncClient("http", "localhost", 8123)
+    client._backend.execute_raw_stream = AsyncMock(return_value=response)
+
+    chunks: list[bytes] = []
+    stream = await client.raw_stream("SELECT 13", fmt="TabSeparated")
+    with pytest.raises(aiohttp.ClientPayloadError):
+        async with stream:
+            async for chunk in stream:
+                chunks.append(chunk)
+
+    assert chunks == [b"row_1\n", b"row_2\n"]
 
 
 if __name__ == "__main__":

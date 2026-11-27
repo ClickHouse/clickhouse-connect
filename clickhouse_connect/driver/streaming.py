@@ -4,8 +4,9 @@ import queue
 import threading
 import weakref
 import zlib
+from collections import deque
 from collections.abc import Callable, Iterable, Iterator
-from typing import cast
+from typing import Any, cast
 
 from clickhouse_connect.driver.asyncqueue import EOF_SENTINEL, AsyncSyncQueue
 from clickhouse_connect.driver.asyncqueue import Full as AsyncQueueFull
@@ -29,6 +30,42 @@ if "br" in available_compression:
     import brotli
 else:
     brotli = None
+
+
+def _drain_buffered_chunks(response: Any) -> list[bytes]:
+    """Drain already-buffered aiohttp StreamReader chunks before propagating a read error.
+
+    aiohttp.StreamReader checks _exception before reading from _buffer, which discards
+    buffered tail chunks containing rows and ClickHouse in-band __exception__ blocks.
+    Draining one buffered HTTP chunk per item preserves chunk boundaries for downstream
+    exception scanning while avoiding private timer assertions or infinite loops.
+    """
+    content = getattr(response, "content", None)
+    if content is None:
+        return []
+    buf = getattr(content, "_buffer", None)
+    read_chunk = getattr(content, "_read_nowait_chunk", None)
+    if isinstance(buf, deque) and callable(read_chunk):
+        chunks: list[bytes] = []
+        remaining = len(buf)
+        while buf and remaining > 0:
+            remaining -= 1
+            try:
+                chunk = read_chunk(-1)
+            except Exception:
+                break
+            if isinstance(chunk, (bytes, bytearray, memoryview)) and chunk:
+                chunks.append(bytes(chunk))
+        return chunks
+    read_nowait = getattr(content, "_read_nowait", None)
+    if callable(read_nowait):
+        try:
+            tail = read_nowait(-1)
+        except Exception:
+            return []
+        if isinstance(tail, (bytes, bytearray, memoryview)) and tail:
+            return [bytes(tail)]
+    return []
 
 
 class StreamingResponseSource(Closable):
@@ -120,11 +157,16 @@ class StreamingResponseSource(Closable):
                 raise
             except Exception as e:
                 logger.error("Producer error while streaming response: %s", e, exc_info=True)
+                tail_chunks = _drain_buffered_chunks(self.response)
+                if tail_chunks:
+                    data_sent = True
                 if not data_sent:
                     e = OperationalError("Failed to read response data from server")
                 self._producer_error = e
 
                 try:
+                    for tail_chunk in tail_chunks:
+                        await self.queue.async_q.put(tail_chunk)
                     await self.queue.async_q.put(e)
                 except RuntimeError:
                     pass

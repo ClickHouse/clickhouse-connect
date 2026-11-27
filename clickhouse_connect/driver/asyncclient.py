@@ -86,6 +86,7 @@ from clickhouse_connect.driver.streaming import (
     StreamingFileAdapter,
     StreamingInsertSource,
     StreamingResponseSource,
+    _drain_buffered_chunks,
     start_streaming_response,
 )
 from clickhouse_connect.driver.summary import QuerySummary
@@ -857,8 +858,13 @@ class AsyncClient(Client):
         response = await self._backend.execute_raw_stream(final_query, bind_params, external_data, runtime, transport_settings)
 
         async def byte_iterator():
-            async for chunk in response.content.iter_any():
-                yield chunk
+            try:
+                async for chunk in response.content.iter_any():
+                    yield chunk
+            except Exception:
+                for tail_chunk in _drain_buffered_chunks(response):
+                    yield tail_chunk
+                raise
 
         class _RawStreamSource(Closable):
             def close(self):
