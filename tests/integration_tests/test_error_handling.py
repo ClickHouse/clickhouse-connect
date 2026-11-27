@@ -8,6 +8,7 @@ import aiohttp
 import pytest
 import urllib3.exceptions
 
+from clickhouse_connect.driver.compression import available_compression
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
 from clickhouse_connect.driver.options import pd
 from tests.integration_tests.conftest import TestConfig
@@ -643,3 +644,30 @@ def test_truncated_response_body_raises_operational_error(param_client, call, cl
 
     expected_cause = urllib3.exceptions.ProtocolError if client_mode == "sync" else aiohttp.ClientPayloadError
     assert isinstance(excinfo.value.__cause__, expected_cause)
+
+
+def test_lz4_response_and_error_decompression(client_factory, call):
+    """Both raw results and server errors using lz4 compression return their full uncompressed bodies."""
+    if "lz4" not in available_compression:
+        pytest.skip("lz4 compression not available")
+
+    client = client_factory(compress="lz4")
+
+    raw_body = call(client.raw_query, "SELECT number FROM numbers(100000)", fmt="TabSeparated")
+    raw_lines = raw_body.splitlines()
+    assert len(raw_lines) == 100000
+    assert raw_lines[-1] == b"99999"
+
+    cmd_body = call(client.command, "SELECT number FROM numbers(100000) FORMAT TabSeparated")
+    cmd_lines = cmd_body.splitlines()
+    assert len(cmd_lines) == 100000
+    assert cmd_lines[-1] == "99999"
+
+    with pytest.raises(DatabaseError) as excinfo:
+        call(
+            client.query,
+            "SELECT throwIf(1, concat('failure at row 13 ', repeat('padding_', 20)))",
+        )
+
+    assert excinfo.value.name == "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO"
+    assert "failure at row 13" in str(excinfo.value)

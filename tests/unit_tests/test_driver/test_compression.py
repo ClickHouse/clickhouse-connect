@@ -1,10 +1,11 @@
 import importlib
 import sys
+from unittest.mock import Mock
 
 import pytest
 
 import clickhouse_connect
-from clickhouse_connect.driver import compression
+from clickhouse_connect.driver import compression, httputil
 from clickhouse_connect.driver._backend import httpcommon
 from clickhouse_connect.driver.compression import _zstd_compress, _zstd_decompress, _zstd_decompressor
 from clickhouse_connect.driver.exceptions import ProgrammingError
@@ -56,3 +57,18 @@ def test_lz4_missing_at_import(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(compression)
+
+
+@pytest.mark.parametrize("compressor_kind", ["block", "frame"])
+def test_lz4_full_response_decompression(compressor_kind):
+    original = b"row_79_value_13\n" * 500
+    if compressor_kind == "block":
+        compressed = compression.Lz4Compressor().compress_block(original)
+    else:
+        compressed = compression._require_lz4().compress(original)
+
+    assert len(compressed) < len(original)
+    assert httpcommon.decompress_response(compressed, "lz4") == original
+
+    response = Mock(headers={"content-encoding": "lz4"}, data=compressed)
+    assert httputil.get_response_data(response) == original

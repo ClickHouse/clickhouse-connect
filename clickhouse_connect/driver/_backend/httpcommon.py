@@ -193,7 +193,7 @@ def decompress_response(data: bytes, encoding: str | None) -> bytes:
 
     if encoding == "lz4":
         lz4_decom = _lz4_decompressor()
-        return lz4_decom.decompress(data, len(data))
+        return lz4_decom.decompress(data)
     if encoding == "zstd":
         return _zstd_decompress(data)
     if encoding == "br":
