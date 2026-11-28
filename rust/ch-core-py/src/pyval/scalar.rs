@@ -406,10 +406,22 @@ pub(super) fn uuid_value_ptr(
     let b: &[u8; 16] = bytes.try_into().map_err(|_| fixed_width_err("UUID"))?;
     let int_val = u128::from_le_bytes(*b).rotate_left(64);
     let value = ctx.new.call1((&ctx.cls,))?;
-    ctx.object_setattr
-        .call1((&value, intern!(py, "int"), int_val))?;
-    ctx.object_setattr
-        .call1((&value, intern!(py, "is_safe"), &ctx.unsafe_marker))?;
+    let int_obj = int_val.into_pyobject(py)?;
+    unsafe {
+        if ffi::PyObject_GenericSetAttr(
+            value.as_ptr(),
+            intern!(py, "int").as_ptr(),
+            int_obj.as_ptr(),
+        ) < 0
+            || ffi::PyObject_GenericSetAttr(
+                value.as_ptr(),
+                intern!(py, "is_safe").as_ptr(),
+                ctx.unsafe_marker.as_ptr(),
+            ) < 0
+        {
+            return Err(PyErr::fetch(py));
+        }
+    }
     Ok(value.into_ptr())
 }
 

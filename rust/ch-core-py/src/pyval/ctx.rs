@@ -158,12 +158,11 @@ pub(super) struct JsonPath<'py> {
 }
 
 /// Cached objects to build a `uuid.UUID` the way the Cython codec does:
-/// allocate via `UUID.__new__` and set the fields with `object.__setattr__`,
+/// allocate via `UUID.__new__` and set the fields with `PyObject_GenericSetAttr`,
 /// bypassing the parsing constructor and the immutability guard.
 pub(super) struct UuidCtx<'py> {
     pub(super) cls: Bound<'py, PyAny>,
     pub(super) new: Bound<'py, PyAny>,
-    pub(super) object_setattr: Bound<'py, PyAny>,
     pub(super) unsafe_marker: Bound<'py, PyAny>,
 }
 
@@ -282,16 +281,11 @@ pub(crate) fn prepare_column_ctx<'py>(
             let module = py.import("uuid")?;
             let cls = module.getattr("UUID")?;
             let new = cls.getattr("__new__")?;
-            let object_setattr = py
-                .import("builtins")?
-                .getattr("object")?
-                .getattr("__setattr__")?;
             let unsafe_marker = module.getattr("SafeUUID")?.getattr("unsafe")?;
             (
                 Some(UuidCtx {
                     cls,
                     new,
-                    object_setattr,
                     unsafe_marker,
                 }),
                 None,
